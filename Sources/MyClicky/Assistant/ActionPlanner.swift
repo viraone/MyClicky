@@ -255,9 +255,19 @@ enum ActionPlanner {
             // target — some fields (e.g. Calendar's "Create Quick Event"
             // popover) live entirely outside the normal AX window tree and
             // can never be found by traversal. Locate the empty field
-            // visually instead, click it, then retry the same paste.
-            guard await visionClick(describing: "the empty text input field that's ready for typing right now, such as a just-opened quick-entry popover or dialog field",
-                                    screenshot: screenshot, claude: claude) else { return false }
+            // visually instead, click it, then retry the same paste. A
+            // single vision call can miss even when the target is clearly
+            // there (observed live: identical description succeeded once,
+            // then twice returned no bounding box) — worth one retry before
+            // giving up, given each attempt costs a Claude round-trip and
+            // the user is speaking, not typing.
+            let fieldDescription = "the empty text input field that's ready for typing right now, such as a just-opened quick-entry popover or dialog field"
+            var recovered = false
+            for attempt in 0..<2 where !recovered {
+                if attempt > 0 { log.notice("vision fallback: retrying field location") }
+                recovered = await visionClick(describing: fieldDescription, screenshot: screenshot, claude: claude)
+            }
+            guard recovered else { return false }
             guard AXActions.type(text, in: app) else { return false }
             usleep(250_000)
             return true
