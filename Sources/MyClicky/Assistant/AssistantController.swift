@@ -43,6 +43,10 @@ final class AssistantController {
     private var dictating = false
     /// The screen rect of the last highlight ring, so "click it" knows the target.
     private var lastHighlightRect: CGRect?
+    /// Confirmations a DO plan is waiting on, keyed by id — resolved by
+    /// whichever answers first, the Mac's ConfirmActionPanel or the phone's
+    /// CONFIRM_OK/CONFIRM_NO.
+    private var pendingConfirms: [String: CheckedContinuation<Bool, Never>] = [:]
 
     func start() {
         panel.state.onSubmit = { [weak self] text in
@@ -228,6 +232,14 @@ final class AssistantController {
             } else {
                 self.handleQuestion(question)
             }
+        }
+        remote.onDo = { [weak self] utterance in
+            guard let self else { return }
+            self.showPanel()
+            self.handleDo(utterance)
+        }
+        remote.onConfirmResponse = { [weak self] id, confirmed in
+            self?.resolveConfirm(id: id, result: confirmed)
         }
         remote.greeting = { [weak self] in
             ["WHATSAPP_UNREAD \(self?.whatsappUnread.count ?? 0)"]
@@ -471,6 +483,81 @@ final class AssistantController {
         }
     }
 
+    // MARK: - DO: universal voice command (any app, not just the scripted ones)
+
+    private func handleDo(_ utterance: String) {
+        guard !busy else { return }
+        ActivityLog.recordAction("do", ["text": utterance])
+        guard let apiKey = KeychainService.anthropicAPIKey() else {
+            let message = "No Anthropic API key found in Keychain.\n\nRun this once in Terminal:\n\(KeychainService.setupCommand)"
+            panel.state.errorText = message
+            panel.state.status = .idle
+            remote.broadcast("STATUS \(message.replacingOccurrences(of: "\n", with: " "))")
+            return
+        }
+        let screen = activeScreen ?? NSScreen.main ?? NSScreen.screens[0]
+
+        busy = true
+        synthesizer.stopSpeaking(at: .immediate)
+        ring.hide()
+        panel.state.status = .thinking
+        panel.state.answer = ""
+        panel.state.errorText = nil
+
+        requestID += 1
+        let id = requestID
+        currentTask = Task {
+            defer { if id == requestID { busy = false; currentTask = nil } }
+            let callbacks = ActionPlanner.Callbacks(
+                status: { [weak self] text in
+                    guard let self, id == self.requestID else { return }
+                    self.panel.state.status = .answering
+                    self.panel.state.answer = text
+                    self.remote.broadcast("STATUS \(text.replacingOccurrences(of: "\n", with: " "))")
+                },
+                confirm: { [weak self] question in
+                    guard let self, id == self.requestID else { return false }
+                    return await self.requestConfirm(question: question, screen: screen)
+                }
+            )
+            await ActionPlanner.run(utterance: utterance, apiKey: apiKey, callbacks: callbacks) { [capture] in
+                try await capture.captureDisplayJPEG(screen: screen, maxDimension: 1600)
+            }
+            guard id == requestID else { return }
+            panel.state.status = .idle
+        }
+    }
+
+    /// Shows the confirmation on the Mac panel AND sends CONFIRM to the phone;
+    /// whichever answers first resolves it, since the person asking may not
+    /// be within reach of the Mac.
+    @MainActor
+    private func requestConfirm(question: String, screen: NSScreen) async -> Bool {
+        await withCheckedContinuation { continuation in
+            let id = UUID().uuidString
+            pendingConfirms[id] = continuation
+            let cursor = NSEvent.mouseLocation
+            confirmPanel.show(
+                title: "Confirm this action?",
+                message: question,
+                confirmLabel: "Do It",
+                icon: "checkmark.circle",
+                tint: .blue,
+                near: cursor,
+                on: screen
+            ) { [weak self] confirmed in
+                self?.resolveConfirm(id: id, result: confirmed)
+            }
+            remote.broadcast("CONFIRM \(id)\t\(question)")
+        }
+    }
+
+    private func resolveConfirm(id: String, result: Bool) {
+        guard let continuation = pendingConfirms.removeValue(forKey: id) else { return }
+        confirmPanel.hide()
+        continuation.resume(returning: result)
+    }
+
     /// Stops whatever Clicky is doing right now: cancels the in-flight
     /// request, silences speech, and returns the panel to Ready.
     private func stop() {
@@ -482,6 +569,8 @@ final class AssistantController {
         panel.state.isSpeaking = false
         ring.hide()
         googleAuth.onStatus = nil
+        for continuation in pendingConfirms.values { continuation.resume(returning: false) }
+        pendingConfirms.removeAll()
         if panel.state.status == .listening {
             // Phone-driven listening: tell the phone to drop the recording.
             remote.broadcast("STOP")

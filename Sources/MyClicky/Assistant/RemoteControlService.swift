@@ -34,6 +34,11 @@ import Network
 ///   WHATSAPP SEND_IN <chat>   – open the chat first, then as SEND
 ///   WHATSAPP PHOTO_IN <chat>\t<base64 JPEG> – open the chat, paste the photo into
 ///                    its compose box as an attachment (not sent; SEND sends it)
+///   DO <utterance> – universal voice command: Claude plans and executes it
+///                    step by step in whatever app is frontmost (or that it
+///                    opens), using only AXActions/AppDriver verbs
+///   CONFIRM_OK <id> / CONFIRM_NO <id> – the phone's answer to a CONFIRM the
+///                    Mac sent for an irreversible DO step
 ///
 /// Lines the Mac sends to the phone:
 ///   STOP                      – recording was stopped from the Mac panel; send nothing
@@ -43,6 +48,9 @@ import Network
 ///   ASK <question> – submit a question exactly as if typed in the panel
 ///   DICTATE <text> – treat text as finished dictation (clipboard, paired with
 ///                    the latest capture, + cleanup)
+///   STATUS <text>  – progress of the in-flight DO command ("Opening Mail…")
+///   CONFIRM <id>\t<question> – DO wants to run an irreversible step; answer
+///                    with CONFIRM_OK <id> or CONFIRM_NO <id>
 @MainActor
 final class RemoteControlService {
     var onShow: (() -> Void)?
@@ -57,6 +65,9 @@ final class RemoteControlService {
     var onAsk: ((String) -> Void)?
     var onDictate: ((String) -> Void)?
     var onPartial: ((String) -> Void)?
+    var onDo: ((String) -> Void)?
+    /// (id, confirmed) from CONFIRM_OK / CONFIRM_NO.
+    var onConfirmResponse: ((String, Bool) -> Void)?
     /// Lines to send to a phone as soon as it connects (current state, e.g. unread counts).
     var greeting: (() -> [String])?
 
@@ -156,6 +167,13 @@ final class RemoteControlService {
         } else if line.hasPrefix("ASK ") {
             let question = String(line.dropFirst(4)).trimmingCharacters(in: .whitespacesAndNewlines)
             if !question.isEmpty { onAsk?(question) }
+        } else if line.hasPrefix("DO ") {
+            let utterance = String(line.dropFirst(3)).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !utterance.isEmpty { onDo?(utterance) }
+        } else if line.hasPrefix("CONFIRM_OK ") {
+            onConfirmResponse?(String(line.dropFirst(11)).trimmingCharacters(in: .whitespaces), true)
+        } else if line.hasPrefix("CONFIRM_NO ") {
+            onConfirmResponse?(String(line.dropFirst(11)).trimmingCharacters(in: .whitespaces), false)
         }
     }
 }
