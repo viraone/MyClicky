@@ -572,6 +572,9 @@ final class AssistantController {
         }
         log.notice("confirm \(id, privacy: .public) resolved: \(result ? "YES" : "NO")")
         confirmPanel.hide()
+        // Whichever side answered, tell every phone so a stale prompt (e.g.
+        // this one was answered here on the Mac, not on the phone) clears.
+        remote.broadcast("CONFIRM_DONE \(id)\t\(result ? "YES" : "NO")")
         continuation.resume(returning: result)
     }
 

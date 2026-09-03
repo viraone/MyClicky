@@ -110,6 +110,11 @@ final class ClickyClient: ObservableObject {
                                 self.pendingConfirm = (id: parts[0], question: parts[1])
                                 self.speak(parts[1])
                             }
+                        } else if line.hasPrefix("CONFIRM_DONE ") {
+                            // Resolved elsewhere (e.g. answered on the Mac's own
+                            // panel) — clear a stale prompt if it's still up.
+                            let id = line.dropFirst(13).split(separator: "\t", maxSplits: 1).map(String.init).first ?? ""
+                            if self.pendingConfirm?.id == id { self.pendingConfirm = nil }
                         } else if !line.isEmpty {
                             self.onMacMessage?(line)
                         }

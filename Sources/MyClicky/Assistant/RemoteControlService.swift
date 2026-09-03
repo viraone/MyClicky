@@ -53,6 +53,9 @@ import Network
 ///   STATUS <text>  – progress of the in-flight DO command ("Opening Mail…")
 ///   CONFIRM <id>\t<question> – DO wants to run an irreversible step; answer
 ///                    with CONFIRM_OK <id> or CONFIRM_NO <id>
+///   CONFIRM_DONE <id>\tYES|NO – a CONFIRM was resolved (by the phone itself,
+///                    or by someone answering it directly on the Mac's own
+///                    panel) — clear that prompt if it's still showing
 ///   READ <text>    – Claude's description of the frontmost window, for READ
 @MainActor
 final class RemoteControlService {
