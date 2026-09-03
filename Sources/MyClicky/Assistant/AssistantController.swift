@@ -570,7 +570,7 @@ final class AssistantController {
             log.notice("confirm \(id, privacy: .public) resolved twice or unknown — ignored")
             return
         }
-        log.notice("confirm \(id, privacy: .public) resolved: \(result ? "YES" : "NO")")
+        log.notice("confirm \(id, privacy: .public) resolved: \(result ? "YES" : "NO", privacy: .public)")
         confirmPanel.hide()
         // Whichever side answered, tell every phone so a stale prompt (e.g.
         // this one was answered here on the Mac, not on the phone) clears.

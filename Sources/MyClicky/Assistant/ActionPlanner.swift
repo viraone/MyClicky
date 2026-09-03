@@ -125,6 +125,13 @@ enum ActionPlanner {
                     return
                 }
                 log.notice("irreversible step confirmed by user")
+                // Confirming just clicked a button on a DIFFERENT panel,
+                // which steals keyboard focus away from the target app — a
+                // "press"/"type" step fires a raw keyboard event to whatever
+                // currently has focus, so without this it can silently land
+                // on the wrong window instead of the app being controlled.
+                app?.activate(options: [.activateAllWindows])
+                try? await Task.sleep(nanoseconds: 300_000_000)
             }
             guard await execute(step, app: &app, screenshot: screenshot, claude: claude) else {
                 callbacks.status("Got stuck on: \(step.note ?? describe(step))")
