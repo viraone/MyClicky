@@ -186,6 +186,11 @@ enum ActionPlanner {
     @MainActor
     private static func execute(_ step: Step, app: inout NSRunningApplication?,
                                 screenshot: @escaping () async throws -> Data, claude: AnthropicService) async -> Bool {
+        // Never log step.text verbatim — it's the actual message/content
+        // being typed, which can be personal; log its length instead.
+        let target = step.app ?? step.label ?? step.key ?? step.direction
+            ?? step.text.map { "(\($0.count) chars)" } ?? ""
+        log.notice("executing: \(step.verb, privacy: .public) \(target, privacy: .public)")
         switch step.verb {
         case "open":
             guard let name = step.app, let resolved = AppDriver.ensureRunning(appNamed: name) else { return false }

@@ -112,11 +112,13 @@ enum AXActions {
     @discardableResult
     static func click(label: String, in app: NSRunningApplication? = nil) -> Bool {
         guard let app = app ?? NSWorkspace.shared.frontmostApplication,
-              let frame = AccessibilityFinder.elementFrame(in: app, roles: clickableRoles, matching: label, onScreenOnly: true)
+              let frame = AccessibilityFinder.elementFrame(in: app, roles: clickableRoles, matching: label,
+                                                            exact: preferExactMatch(for: label), onScreenOnly: true)
         else {
             log.notice("click: no match for \(label, privacy: .public)")
             return false
         }
+        log.notice("click: \(label, privacy: .public) -> (\(Int(frame.midX)), \(Int(frame.midY)))")
         MouseClicker.click(at: NSPoint(x: frame.midX, y: frame.midY))
         return true
     }
@@ -127,13 +129,23 @@ enum AXActions {
     @discardableResult
     static func focus(label: String, in app: NSRunningApplication? = nil) -> Bool {
         guard let app = app ?? NSWorkspace.shared.frontmostApplication,
-              let frame = AccessibilityFinder.elementFrame(in: app, roles: focusableRoles, matching: label, onScreenOnly: true)
+              let frame = AccessibilityFinder.elementFrame(in: app, roles: focusableRoles, matching: label,
+                                                            exact: preferExactMatch(for: label), onScreenOnly: true)
         else {
             log.notice("focus: no match for \(label, privacy: .public)")
             return false
         }
+        log.notice("focus: \(label, privacy: .public) -> (\(Int(frame.midX)), \(Int(frame.midY)))")
         MouseClicker.click(at: NSPoint(x: frame.midX, y: frame.midY))
         return true
+    }
+
+    /// A short/symbolic label ("+", "…", "OK") is far more likely to be a
+    /// false-positive substring match (e.g. "+" matching every day cell's
+    /// "+2 more" overflow indicator in Calendar) than a real distinct label
+    /// — require an exact match for those instead of "contains".
+    private static func preferExactMatch(for label: String) -> Bool {
+        label.trimmingCharacters(in: .whitespaces).count <= 2
     }
 
     /// Types into whatever is currently focused, via clipboard paste.
