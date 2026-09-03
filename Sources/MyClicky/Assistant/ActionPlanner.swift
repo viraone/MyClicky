@@ -185,6 +185,7 @@ enum ActionPlanner {
                 try? await Task.sleep(nanoseconds: 300_000_000)
             }
             guard await execute(step, app: &app, screenshot: screenshot, claude: claude) else {
+                log.notice("step failed, stopping: \(step.verb, privacy: .public)")
                 callbacks.status("Got stuck on: \(step.note ?? describe(step))")
                 return
             }
@@ -284,13 +285,18 @@ enum ActionPlanner {
     @MainActor
     private static func visionClick(describing label: String, screenshot: @escaping () async throws -> Data,
                                     claude: AnthropicService) async -> Bool {
+        log.notice("vision fallback: locating \(label, privacy: .public)")
         guard let screen = NSScreen.main else { return false }
         do {
             let image = try await screenshot()
             let question = "Locate the on-screen element labeled or described as \u{201c}\(label)\u{201d} and return its bounding box."
             let answer = try await claude.ask(question: question, jpegImage: image)
-            guard let box = answer.highlight else { return false }
+            guard let box = answer.highlight else {
+                log.notice("vision fallback: no bounding box returned for \(label, privacy: .public)")
+                return false
+            }
             let rect = screenRect(fromNormalized: box, on: screen)
+            log.notice("vision fallback: clicking (\(Int(rect.midX)), \(Int(rect.midY))) for \(label, privacy: .public)")
             MouseClicker.click(at: NSPoint(x: rect.midX, y: rect.midY))
             return true
         } catch {
