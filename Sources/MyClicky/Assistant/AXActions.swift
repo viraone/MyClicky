@@ -148,29 +148,65 @@ enum AXActions {
         label.trimmingCharacters(in: .whitespaces).count <= 2
     }
 
-    /// Types into whatever is currently focused, via clipboard paste. Returns
-    /// false without pasting if nothing editable is actually focused — a
-    /// step/shortcut that reveals a new field (a popover, a quick-entry box)
-    /// doesn't necessarily give it keyboard focus, and pasting into nothing
-    /// would otherwise silently do nothing while still "succeeding".
+    /// Types into whatever is currently focused, via clipboard paste. If
+    /// nothing editable is focused — a shortcut or click that reveals a new
+    /// field (a popover, a quick-entry box) doesn't necessarily give it
+    /// keyboard focus, e.g. Calendar's Cmd+N leaves focus on a button-group
+    /// container, not its "Create Quick Event" field — falls back to
+    /// clicking the first on-screen editable field before pasting. Returns
+    /// false only if that recovery also can't find anything to type into.
     @MainActor
     @discardableResult
     static func type(_ text: String, in app: NSRunningApplication? = nil) -> Bool {
         guard let app = app ?? NSWorkspace.shared.frontmostApplication else { return false }
-        let appElement = AXUIElementCreateApplication(app.processIdentifier)
-        guard let focused = AccessibilityFinder.attribute(appElement, kAXFocusedUIElementAttribute),
-              CFGetTypeID(focused) == AXUIElementGetTypeID() else {
-            log.notice("type: no focused element in \(app.localizedName ?? "?", privacy: .public) — skipping paste")
-            return false
-        }
-        let focusedElement = focused as! AXUIElement
-        let role = AccessibilityFinder.attribute(focusedElement, kAXRoleAttribute) as? String
-        guard let role, focusableRoles.contains(role) else {
-            log.notice("type: focused element (\(role ?? "?", privacy: .public)) isn't editable — skipping paste")
-            return false
+        if !hasEditableFocus(in: app) {
+            guard let frame = firstFocusableFrame(in: app) else {
+                log.notice("type: no focused or recoverable editable field in \(app.localizedName ?? "?", privacy: .public) — skipping paste")
+                return false
+            }
+            log.notice("type: no editable focus — clicking recovered field at (\(Int(frame.midX)), \(Int(frame.midY)))")
+            MouseClicker.click(at: NSPoint(x: frame.midX, y: frame.midY))
+            usleep(200_000)
+            guard hasEditableFocus(in: app) else {
+                log.notice("type: still no editable focus after recovery click — skipping paste")
+                return false
+            }
         }
         KeyboardTyper.paste(text)
         return true
+    }
+
+    private static func hasEditableFocus(in app: NSRunningApplication) -> Bool {
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        guard let focused = AccessibilityFinder.attribute(appElement, kAXFocusedUIElementAttribute),
+              CFGetTypeID(focused) == AXUIElementGetTypeID() else { return false }
+        let focusedElement = focused as! AXUIElement
+        guard let role = AccessibilityFinder.attribute(focusedElement, kAXRoleAttribute) as? String else { return false }
+        return focusableRoles.contains(role)
+    }
+
+    /// The first on-screen element with an editable role, regardless of
+    /// label — used only as a last-resort focus-recovery target.
+    private static func firstFocusableFrame(in app: NSRunningApplication) -> NSRect? {
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        for window in AccessibilityFinder.windows(of: appElement) {
+            let windowFrame = AccessibilityFinder.frame(of: window)
+            var visited = 0
+            var found: NSRect?
+            _ = AccessibilityFinder.search(window, budget: &visited) { element in
+                guard let role = AccessibilityFinder.attribute(element, kAXRoleAttribute) as? String,
+                      focusableRoles.contains(role),
+                      let frame = AccessibilityFinder.frame(of: element), frame.width > 0, frame.height > 0
+                else { return false }
+                if let windowFrame, !windowFrame.insetBy(dx: 2, dy: 2).contains(NSPoint(x: frame.midX, y: frame.midY)) {
+                    return false
+                }
+                found = frame
+                return true
+            }
+            if let found { return found }
+        }
+        return nil
     }
 
     /// Presses a named key (e.g. "return", "tab", "a") with optional
