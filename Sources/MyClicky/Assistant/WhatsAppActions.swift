@@ -214,49 +214,15 @@ enum WhatsAppActions {
         KeyboardTyper.press(KeyboardTyper.returnKey)
     }
 
-    /// Makes WhatsApp's chat window visible and frontmost: unhides the app,
-    /// un-minimizes a window parked in the Dock, and — if the window was
-    /// closed with the red button — asks it to reopen (like clicking its Dock
-    /// icon). Plain `activate` does none of that.
+    /// Makes WhatsApp's chat window visible and frontmost. See `AppDriver.bringForward`.
+    @MainActor
     private static func bringForward(_ app: NSRunningApplication) {
-        if app.isHidden { app.unhide() }
-        let appElement = AXUIElementCreateApplication(app.processIdentifier)
-        var windowsValue: AnyObject?
-        AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsValue)
-        let windows = windowsValue as? [AXUIElement] ?? []
-        var restored = false
-        for window in windows {
-            var minimized: AnyObject?
-            AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &minimized)
-            if (minimized as? Bool) == true {
-                AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
-                restored = true
-            }
-        }
-        if windows.isEmpty, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
-            // No window at all: a relaunch request on a running app is a "reopen".
-            NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
-            restored = true
-        }
-        let activated = app.activate(options: [.activateAllWindows])
-        log.notice("bringForward windows=\(windows.count) restored=\(restored) activated=\(activated)")
-        if restored { usleep(500_000) }
+        AppDriver.bringForward(app)
     }
 
     /// Launches WhatsApp if installed but not running.
+    @MainActor
     private static func ensureRunning() -> NSRunningApplication? {
-        if let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first {
-            return running
-        }
-        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else { return nil }
-        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
-        // Give it a moment to appear in the running list.
-        for _ in 0..<20 {
-            usleep(100_000)
-            if let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first {
-                return running
-            }
-        }
-        return nil
+        AppDriver.ensureRunning(bundleID: bundleID)
     }
 }
