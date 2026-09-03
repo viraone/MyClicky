@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_clicky._tcp</string>
+	</array>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Clicky Remote connects to the MyClicky app running on your Mac over your local network.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Clicky Remote uses the camera to snap a photo and send it to WhatsApp on your Mac.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Clicky Remote uses the microphone so you can speak questions to your Mac.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Your speech is transcribed on-device before being sent to your Mac.</string>
+	<key>UILaunchScreen</key>
+	<dict/>
+</dict>
+</plist>

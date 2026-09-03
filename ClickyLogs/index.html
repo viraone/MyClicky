@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClickyLogs — Weekly Observability</title>
+<style>
+  :root {
+    --bg: #12141c;
+    --panel: #1b1e2b;
+    --panel2: #222636;
+    --border: #2c3145;
+    --text: #e6e8f0;
+    --muted: #8b91a7;
+    --accent: #7c5cff;
+    --accent2: #b39dff;
+    --green: #3ddc97;
+    --yellow: #ffc555;
+    --red: #ff6b6b;
+    --blue: #56b3ff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
+    padding-bottom: 60px;
+  }
+  header {
+    display: flex; align-items: center; gap: 14px;
+    padding: 18px 28px;
+    background: linear-gradient(90deg, #1c1533, #12141c 70%);
+    border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 5;
+  }
+  .logo {
+    width: 38px; height: 38px; border-radius: 10px;
+    background: linear-gradient(135deg, var(--accent), #4a2fd4);
+    display: grid; place-items: center; font-size: 20px;
+  }
+  header h1 { font-size: 19px; font-weight: 700; letter-spacing: .3px; }
+  header h1 span { color: var(--accent2); }
+  .range {
+    margin-left: auto; text-align: right; color: var(--muted); font-size: 12px;
+  }
+  .range b { color: var(--text); display: block; font-size: 13px; }
+  .live {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 11px; color: var(--green); border: 1px solid #2b4a3e;
+    background: #16241f; padding: 3px 10px; border-radius: 999px; margin-left: 14px;
+  }
+  .live::before {
+    content: ""; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--green); animation: pulse 2s infinite;
+  }
+  .refresh {
+    margin-left: 16px; padding: 7px 16px; border-radius: 8px;
+    border: 1px solid var(--accent); background: #241c47; color: var(--accent2);
+    font: 600 13px -apple-system, sans-serif; cursor: pointer;
+  }
+  .refresh:hover { background: var(--accent); color: #fff; }
+  @keyframes pulse { 50% { opacity: .3; } }
+
+  main { max-width: 1180px; margin: 0 auto; padding: 24px 28px; }
+  .grid { display: grid; gap: 16px; }
+  .kpis { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); margin-bottom: 16px; }
+  .cols { grid-template-columns: 1.4fr 1fr; margin-bottom: 16px; }
+  @media (max-width: 900px) { .cols { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px 18px;
+  }
+  .card h2 {
+    font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 1px; color: var(--muted); margin-bottom: 12px;
+  }
+  .kpi .num { font-size: 30px; font-weight: 700; letter-spacing: -.5px; }
+  .kpi .lbl { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .kpi .num.accent { color: var(--accent2); }
+  .kpi .num.green { color: var(--green); }
+  .kpi .num.blue { color: var(--blue); }
+  .kpi .num.yellow { color: var(--yellow); }
+
+  svg text { font: 10px -apple-system, sans-serif; fill: var(--muted); }
+
+  .barrow { display: flex; align-items: center; gap: 10px; margin: 7px 0; }
+  .barrow .name {
+    width: 190px; font-size: 13px; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; color: var(--text);
+  }
+  .barrow .track { flex: 1; height: 10px; background: var(--panel2); border-radius: 5px; overflow: hidden; }
+  .barrow .fill { height: 100%; border-radius: 5px; background: linear-gradient(90deg, var(--accent), var(--accent2)); display: block; }
+  .barrow .val { width: 64px; text-align: right; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 10px; font-size: 11px; color: var(--muted); }
+  .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th {
+    text-align: left; color: var(--muted); font-weight: 600; font-size: 10.5px;
+    text-transform: uppercase; letter-spacing: .8px;
+    padding: 6px 10px; border-bottom: 1px solid var(--border);
+  }
+  td { padding: 7px 10px; border-bottom: 1px solid #222636; vertical-align: top; }
+  td.ts { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  td.msg { color: #c9cde0; word-break: break-word; font-family: "SF Mono", ui-monospace, monospace; font-size: 12px; }
+  .tag {
+    display: inline-block; padding: 1px 8px; border-radius: 999px;
+    font-size: 10.5px; font-weight: 600; letter-spacing: .3px;
+  }
+  .tag.ask     { background: #241c47; color: var(--accent2); }
+  .tag.dictate { background: #16302a; color: var(--green); }
+  .tag.capture { background: #17293a; color: var(--blue); }
+  .tag.click   { background: #332a15; color: var(--yellow); }
+  .tag.trash   { background: #351d21; color: var(--red); }
+  .tag.sample  { background: #232636; color: var(--muted); }
+  .tag.visit   { background: #12333a; color: #4fd6c8; }
+  td.msg a { color: #7cc7ff; text-decoration: none; }
+  td.msg a:hover { text-decoration: underline; }
+
+  .empty { color: var(--muted); font-size: 13px; padding: 14px 4px; }
+  footer { text-align: center; color: #565c72; font-size: 11px; margin-top: 26px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">🖱️</div>
+  <h1>Clicky<span>Logs</span></h1>
+  <span class="live">LOCAL · PRIVATE</span>
+  <div class="range">
+    <b id="rangeLabel">—</b>
+    <span id="generatedLabel">data updates every 5 minutes</span>
+  </div>
+  <button class="refresh" onclick="location.reload()">⟳ Refresh</button>
+</header>
+
+<main>
+  <div class="grid kpis" id="kpis"></div>
+
+  <div class="grid cols">
+    <div class="card">
+      <h2>Actions per day</h2>
+      <div id="perDayChart"></div>
+      <div class="legend" id="perDayLegend"></div>
+    </div>
+    <div class="card">
+      <h2>Activity by hour of day</h2>
+      <div id="hourChart"></div>
+    </div>
+  </div>
+
+  <div class="grid cols">
+    <div class="card">
+      <h2>Top sites you used Clicky on</h2>
+      <div id="topSites"></div>
+    </div>
+    <div class="card">
+      <h2>Top apps this week</h2>
+      <div id="topApps"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Event stream — every action this week</h2>
+    <div style="max-height:420px;overflow:auto">
+      <table>
+        <thead><tr><th style="width:150px">Time</th><th style="width:90px">Type</th><th>Detail</th></tr></thead>
+        <tbody id="eventRows"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <footer>ClickyLogs · single pane of glass for your Clicky assistant · data stays on this Mac</footer>
+</main>
+
+<script src="data.js"></script>
+<script>
+const D = window.CLICKYLOGS || { totals: {}, perDay: [], topSites: [], topApps: [], hourly: [], events: [] };
+const COLORS = { ask: "#7c5cff", dictate: "#3ddc97", capture: "#56b3ff", click: "#ffc555", trash: "#ff6b6b" };
+const TYPES = ["ask", "dictate", "capture", "click", "trash"];
+const $ = (id) => document.getElementById(id);
+
+// Header range
+if (D.rangeStart) {
+  $("rangeLabel").textContent = `${D.rangeStart} → ${D.rangeEnd}`;
+  $("generatedLabel").textContent = `generated ${D.generatedAt}`;
+}
+
+function formatMinutes(m) {
+  if (m < 60) return m + "m";
+  return Math.floor(m / 60) + "h " + (m % 60) + "m";
+}
+
+// KPI cards
+const t = D.totals || {};
+const kpis = [
+  ["accent", t.ask || 0, "Questions asked"],
+  ["green", t.dictate || 0, "Dictations"],
+  ["blue", t.capture || 0, "Screen captures"],
+  ["yellow", (t.click || 0) + (t.trash || 0), "Clicks & trash ops"],
+  ["", formatMinutes(t.activeMinutes || 0), "Active time tracked"],
+];
+$("kpis").innerHTML = kpis.map(([c, n, l]) =>
+  `<div class="card kpi"><div class="num ${c}">${n}</div><div class="lbl">${l}</div></div>`).join("");
+
+// Stacked per-day bar chart (SVG)
+(function () {
+  const days = D.perDay || [];
+  if (!days.length) { $("perDayChart").innerHTML = `<div class="empty">No events yet — use Clicky and re-run the report.</div>`; return; }
+  const W = 560, H = 190, pad = 30, bw = Math.min(52, (W - pad * 2) / days.length * 0.6);
+  const max = Math.max(1, ...days.map(d => TYPES.reduce((s, k) => s + (d[k] || 0), 0)));
+  let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%">`;
+  for (let g = 0; g <= 4; g++) {
+    const y = H - 24 - (H - 44) * g / 4;
+    svg += `<line x1="${pad}" x2="${W - 8}" y1="${y}" y2="${y}" stroke="#262a3c"/><text x="4" y="${y + 3}">${Math.round(max * g / 4)}</text>`;
+  }
+  days.forEach((d, i) => {
+    const x = pad + (W - pad * 2) * (i + 0.5) / days.length - bw / 2;
+    let y = H - 24;
+    TYPES.forEach(k => {
+      const v = d[k] || 0; if (!v) return;
+      const h = (H - 44) * v / max;
+      svg += `<rect x="${x}" y="${y - h}" width="${bw}" height="${h}" rx="2" fill="${COLORS[k]}"><title>${d.date} · ${k}: ${v}</title></rect>`;
+      y -= h;
+    });
+    svg += `<text x="${x + bw / 2}" y="${H - 8}" text-anchor="middle">${d.date.slice(5)}</text>`;
+  });
+  $("perDayChart").innerHTML = svg + "</svg>";
+  $("perDayLegend").innerHTML = TYPES.map(k => `<span><i style="background:${COLORS[k]}"></i>${k}</span>`).join("");
+})();
+
+// Activity-by-hour bars
+(function () {
+  const hours = D.hourly || [];
+  if (!hours.some(v => v > 0)) { $("hourChart").innerHTML = `<div class="empty">No activity samples yet.</div>`; return; }
+  const W = 420, H = 190, pad = 22;
+  const max = Math.max(1, ...hours);
+  const bars = hours.map((v, h) => {
+    const bw = (W - pad - 8) / 24, x = pad + h * bw, bh = (H - 44) * v / max;
+    let r = `<rect x="${x + 1}" y="${H - 24 - bh}" width="${bw - 2}" height="${Math.max(bh, v ? 2 : 0)}" rx="2" fill="url(#hg)"><title>${h}:00 — ${v} min active</title></rect>`;
+    if (h % 4 === 0) r += `<text x="${x + bw / 2}" y="${H - 8}" text-anchor="middle">${h}</text>`;
+    return r;
+  }).join("");
+  $("hourChart").innerHTML =
+    `<svg viewBox="0 0 ${W} ${H}" width="100%"><defs><linearGradient id="hg" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#4a2fd4"/><stop offset="1" stop-color="#b39dff"/></linearGradient></defs>${bars}</svg>`;
+})();
+
+// Horizontal bar lists
+function barList(el, rows, fmt) {
+  if (!rows.length) { el.innerHTML = `<div class="empty">Nothing tracked yet — data appears as you use your Mac with Clicky running.</div>`; return; }
+  const max = Math.max(...rows.map(r => r.value));
+  el.innerHTML = rows.map(r => `
+    <div class="barrow">
+      <span class="name" title="${escapeHTML(r.name)}">${escapeHTML(r.name)}</span>
+      <span class="track"><span class="fill" style="width:${Math.max(3, r.value / max * 100)}%"></span></span>
+      <span class="val">${fmt(r.value)}</span>
+    </div>`).join("");
+}
+barList($("topSites"), (D.topSites || []).map(s => ({ name: s.domain, value: s.count })), v => v + (v === 1 ? " action" : " actions"));
+barList($("topApps"), (D.topApps || []).map(a => ({ name: a.app, value: a.minutes })), formatMinutes);
+
+// Event stream
+(function () {
+  const rows = (D.events || []);
+  if (!rows.length) { $("eventRows").innerHTML = `<tr><td colspan="3" class="empty">No events logged yet.</td></tr>`; return; }
+  $("eventRows").innerHTML = rows.map(e => {
+    let body = escapeHTML(e.text || "");
+    if (e.url) {
+      body += `${body ? "<br>" : ""}<a href="${escapeHTML(e.url)}" target="_blank" rel="noopener">${escapeHTML(e.url)}</a>`;
+    }
+    return `
+    <tr>
+      <td class="ts">${e.ts}</td>
+      <td><span class="tag ${e.type}">${e.type.toUpperCase()}</span></td>
+      <td class="msg">${body}</td>
+    </tr>`;
+  }).join("");
+})();
+
+function escapeHTML(s) {
+  return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+</script>
+</body>
+</html>
