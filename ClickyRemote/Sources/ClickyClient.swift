@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import AVFoundation
 
 /// Finds the MyClicky Mac app on the local network via Bonjour
 /// (_clicky._tcp) and sends it newline-terminated text commands.
@@ -17,10 +18,17 @@ final class ClickyClient: ObservableObject {
     /// Outcome of the last WhatsApp command as reported by the Mac.
     var onWhatsAppStatus: ((_ message: String, _ ok: Bool) -> Void)?
 
+    /// Progress of an in-flight DO command, or a READ description — shown in
+    /// large text and spoken aloud by TALK mode.
+    @Published var talkMessage = ""
+    /// An irreversible DO step waiting on a yes/no answer.
+    @Published var pendingConfirm: (id: String, question: String)?
+
     private var browser: NWBrowser?
     private var connection: NWConnection?
     /// Most recent set of discovered Mac endpoints, kept for reconnects.
     private var knownEndpoints: [NWEndpoint] = []
+    private let speechSynthesizer = AVSpeechSynthesizer()
 
     func start() {
         let params = NWParameters()
@@ -88,6 +96,20 @@ final class ClickyClient: ObservableObject {
                         } else if line.hasPrefix("WHATSAPP_STATUS ") {
                             let parts = line.dropFirst(16).split(separator: "\t", maxSplits: 1).map(String.init)
                             if parts.count == 2 { self.onWhatsAppStatus?(parts[1], parts[0] == "OK") }
+                        } else if line.hasPrefix("STATUS ") {
+                            let text = String(line.dropFirst(7))
+                            self.talkMessage = text
+                            self.speak(text)
+                        } else if line.hasPrefix("READ ") {
+                            let text = String(line.dropFirst(5))
+                            self.talkMessage = text
+                            self.speak(text)
+                        } else if line.hasPrefix("CONFIRM ") {
+                            let parts = line.dropFirst(8).split(separator: "\t", maxSplits: 1).map(String.init)
+                            if parts.count == 2 {
+                                self.pendingConfirm = (id: parts[0], question: parts[1])
+                                self.speak(parts[1])
+                            }
                         } else if !line.isEmpty {
                             self.onMacMessage?(line)
                         }
@@ -122,6 +144,23 @@ final class ClickyClient: ObservableObject {
                 }
             }
         })
+    }
+
+    /// Speaks a STATUS/READ/CONFIRM message aloud for low-vision users.
+    private func speak(_ text: String) {
+        guard !text.isEmpty else { return }
+        speechSynthesizer.speak(AVSpeechUtterance(string: text))
+    }
+
+    /// TALK mode: universal voice command — the Mac plans and executes it.
+    func talk(_ utterance: String) { send("DO \(utterance)") }
+    /// "What does it say?" — the Mac replies with READ <description>.
+    func read() { send("READ") }
+    /// Answers the current CONFIRM prompt, if any.
+    func respondConfirm(_ confirmed: Bool) {
+        guard let id = pendingConfirm?.id else { return }
+        send(confirmed ? "CONFIRM_OK \(id)" : "CONFIRM_NO \(id)")
+        pendingConfirm = nil
     }
 
     func show() { send("SHOW") }

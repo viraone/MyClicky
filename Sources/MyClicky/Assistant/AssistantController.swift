@@ -241,6 +241,7 @@ final class AssistantController {
         remote.onConfirmResponse = { [weak self] id, confirmed in
             self?.resolveConfirm(id: id, result: confirmed)
         }
+        remote.onRead = { [weak self] in self?.handleReadScreen() }
         remote.greeting = { [weak self] in
             ["WHATSAPP_UNREAD \(self?.whatsappUnread.count ?? 0)"]
         }
@@ -556,6 +557,36 @@ final class AssistantController {
         guard let continuation = pendingConfirms.removeValue(forKey: id) else { return }
         confirmPanel.hide()
         continuation.resume(returning: result)
+    }
+
+    /// "What does it say?" from the phone: describes the frontmost window's
+    /// content for someone who can't see the screen, via the same Claude
+    /// vision Q&A path the assistant panel already uses.
+    private func handleReadScreen() {
+        guard !busy, let apiKey = KeychainService.anthropicAPIKey() else {
+            remote.broadcast("READ No Anthropic API key found in Keychain on your Mac.")
+            return
+        }
+        let screen = activeScreen ?? NSScreen.main ?? NSScreen.screens[0]
+        toast.show("Reading the screen for your phone…", icon: "text.viewfinder", tint: .blue)
+
+        busy = true
+        requestID += 1
+        let id = requestID
+        currentTask = Task {
+            defer { if id == requestID { busy = false; currentTask = nil } }
+            do {
+                let image = try await capture.captureDisplayJPEG(screen: screen, maxDimension: 1600)
+                let claude = AnthropicService(apiKey: apiKey)
+                let question = "Describe what's on screen right now for someone who can't see it: the frontmost app, what its window shows, and any text content that matters. Plain language, 2-4 sentences, no markdown."
+                let answer = try await claude.ask(question: question, jpegImage: image)
+                guard id == requestID else { return }
+                remote.broadcast("READ \(answer.text.replacingOccurrences(of: "\n", with: " "))")
+            } catch {
+                guard id == requestID else { return }
+                remote.broadcast("READ Couldn't read the screen: \(error.localizedDescription.replacingOccurrences(of: "\n", with: " "))")
+            }
+        }
     }
 
     /// Stops whatever Clicky is doing right now: cancels the in-flight

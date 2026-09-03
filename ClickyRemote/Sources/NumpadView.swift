@@ -13,7 +13,7 @@ struct NumpadView: View {
     /// True after tapping "1"/"3": speech goes to the Mac clipboard, not a question.
     @State private var dictateMode = false
     /// Which target the current recording is for.
-    enum RecordTarget { case ask, dictate, whatsapp }
+    enum RecordTarget { case ask, dictate, whatsapp, talk }
     @State private var recordTarget: RecordTarget = .ask
     /// Which WhatsApp chat the current dictation is for.
     @State private var whatsappChat: WhatsAppChat = .test
@@ -44,6 +44,7 @@ struct NumpadView: View {
     @State private var playlistDraft = ""
 
     enum RemoteMode: String, CaseIterable {
+        case talk = "TALK"
         case remote = "REMOTE"
         case gmail = "GMAIL"
         case spotify = "SPOTIFY"
@@ -51,6 +52,7 @@ struct NumpadView: View {
 
         var icon: String {
             switch self {
+            case .talk: "mic.fill"
             case .remote: "desktopcomputer"
             case .gmail: "envelope.fill"
             case .spotify: "music.note"
@@ -60,6 +62,7 @@ struct NumpadView: View {
 
         var accent: Color {
             switch self {
+            case .talk: Snes.talk
             case .remote: Snes.purple
             case .gmail: Snes.red
             case .spotify: Snes.spotify
@@ -69,6 +72,7 @@ struct NumpadView: View {
 
         var welcome: String {
             switch self {
+            case .talk: "Talk mode — press the button and say what you need"
             case .remote: "Tap CLICKY to open it on your Mac (tap again to hide)"
             case .gmail: "Gmail mode — buttons control Gmail on your Mac"
             case .spotify: "Spotify mode — buttons control the Spotify app on your Mac"
@@ -93,6 +97,7 @@ struct NumpadView: View {
                 .frame(maxWidth: .infinity)
                 Group {
                     switch mode {
+                    case .talk: talkPad
                     case .remote: keypad
                     case .gmail: gmailPad
                     case .spotify: spotifyPad
@@ -263,6 +268,126 @@ struct NumpadView: View {
             .animation(.spring(response: 0.25, dampingFraction: 0.7), value: selected)
         }
         .buttonStyle(.plain)
+    }
+
+    // MARK: - Talk pad (universal voice control — any app on the Mac)
+
+    /// One giant button: press to speak, Clicky plans and does it on the Mac.
+    /// Shows the Mac's STATUS stream in large text (spoken aloud too, in
+    /// ClickyClient) and turns into two huge Yes/No buttons when an
+    /// irreversible step needs confirming.
+    private var talkPad: some View {
+        VStack(spacing: 12) {
+            talkMessageView
+            Group {
+                if let confirm = client.pendingConfirm {
+                    confirmView(confirm)
+                } else {
+                    talkButton
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if client.pendingConfirm == nil {
+                whatsItSayButton
+            }
+        }
+        .padding(10)
+    }
+
+    private var talkMessageView: some View {
+        ScrollView {
+            Text(client.talkMessage.isEmpty
+                 ? "Press the button and say what you need — Clicky will do it on your Mac."
+                 : client.talkMessage)
+                .font(.system(.title2, design: .rounded).weight(.bold))
+                .dynamicTypeSize(.large ... .accessibility5)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .accessibilityLabel(client.talkMessage.isEmpty
+                                     ? "Ready. Press the button and say what you need."
+                                     : client.talkMessage)
+        }
+        .frame(maxHeight: 120)
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 14).fill(Snes.bodyDark.opacity(0.6)))
+    }
+
+    private var talkButton: some View {
+        Button(action: talkTapped) {
+            VStack(spacing: 12) {
+                Image(systemName: talkRecording ? "stop.fill" : "mic.fill")
+                    .font(.system(size: 64, weight: .black))
+                Text(talkRecording ? "STOP" : "TALK")
+                    .font(.system(.largeTitle, design: .rounded).weight(.black))
+                    .dynamicTypeSize(.large ... .accessibility5)
+            }
+            .foregroundStyle(Color.white)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(
+                Circle()
+                    .fill(talkRecording ? Snes.red : Snes.talk)
+                    .shadow(color: (talkRecording ? Snes.red : Snes.talk).opacity(0.6), radius: 18, y: 6)
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(talkRecording ? "Stop and send" : "Talk to Clicky")
+        .accessibilityHint(talkRecording ? "Double tap when you're done speaking"
+                                          : "Double tap, then say what you want your Mac to do")
+    }
+
+    private func confirmView(_ confirm: (id: String, question: String)) -> some View {
+        VStack(spacing: 16) {
+            Text(confirm.question)
+                .font(.system(.title, design: .rounded).weight(.bold))
+                .dynamicTypeSize(.large ... .accessibility5)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.white)
+                .accessibilityLabel("Clicky wants to confirm: \(confirm.question)")
+            HStack(spacing: 12) {
+                confirmButton("Yes", color: Snes.green) { respondConfirm(true) }
+                confirmButton("No", color: Snes.red) { respondConfirm(false) }
+            }
+            .frame(maxHeight: .infinity)
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 20).fill(Snes.bodyDark.opacity(0.6)))
+    }
+
+    private func confirmButton(_ title: String, color: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(.largeTitle, design: .rounded).weight(.black))
+                .dynamicTypeSize(.large ... .accessibility5)
+                .foregroundStyle(Color.white)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(RoundedRectangle(cornerRadius: 20).fill(color))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title == "Yes" ? "Yes, do it" : "No, cancel")
+    }
+
+    private var whatsItSayButton: some View {
+        Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            client.read()
+            client.talkMessage = "Asking your Mac what's on screen…"
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "text.viewfinder").font(.system(size: 20, weight: .bold))
+                Text("What does it say?")
+                    .font(.system(.headline, design: .rounded).weight(.bold))
+                    .dynamicTypeSize(.large ... .accessibility3)
+            }
+            .foregroundStyle(Color.white)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .background(RoundedRectangle(cornerRadius: 16).fill(Snes.blue))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("What does it say")
+        .accessibilityHint("Double tap to have Clicky describe what's on your Mac's screen")
+        .disabled(talkRecording)
     }
 
     // MARK: - Gmail pad (purpose-built: every button says what it does)
@@ -1029,6 +1154,24 @@ struct NumpadView: View {
     private var askRecording: Bool { recorder.isListening && recordTarget == .ask }
     private var dictateRecording: Bool { recorder.isListening && recordTarget == .dictate }
     private var whatsappRecording: Bool { recorder.isListening && recordTarget == .whatsapp }
+    private var talkRecording: Bool { recorder.isListening && recordTarget == .talk }
+
+    private func talkTapped() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        if recorder.isListening {
+            // Only the TALK button itself can stop a TALK recording.
+            guard recordTarget == .talk else { return }
+        } else {
+            recordTarget = .talk
+            dictateMode = false
+        }
+        toggleListening()
+    }
+
+    private func respondConfirm(_ confirmed: Bool) {
+        UINotificationFeedbackGenerator().notificationOccurred(confirmed ? .success : .warning)
+        client.respondConfirm(confirmed)
+    }
 
     private func tapped(_ label: String) {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -1073,9 +1216,11 @@ struct NumpadView: View {
                 let text = await recorder.stop()
                 switch recordTarget {
                 case _ where text.isEmpty:
-                    statusText = recordTarget == .whatsapp
-                        ? "Didn't catch that — tap Reply and try again"
-                        : "Didn't catch that — tap \(dictateMode ? "DICTATE" : "ASK") and try again"
+                    switch recordTarget {
+                    case .whatsapp: statusText = "Didn't catch that — tap Reply and try again"
+                    case .talk: statusText = "Didn't catch that — press TALK and try again"
+                    default: statusText = "Didn't catch that — tap \(dictateMode ? "DICTATE" : "ASK") and try again"
+                    }
                 case .whatsapp:
                     client.whatsapp("TYPE_TEXT_IN \(whatsappChat.name)\t\(text.replacingOccurrences(of: "\n", with: " "))")
                     statusText = "Typed in \(whatsappChat.label) on your Mac — tap Send if it looks right: “\(text)”"
@@ -1085,6 +1230,9 @@ struct NumpadView: View {
                 case .ask:
                     client.ask(text)
                     statusText = "Sent: “\(text)”"
+                case .talk:
+                    client.talk(text)
+                    statusText = "Sent to Clicky: “\(text)”"
                 }
             }
         } else {
@@ -1097,6 +1245,7 @@ struct NumpadView: View {
                 case .whatsapp: statusText = "Listening… speak your reply, then tap Stop"
                 case .dictate: statusText = "Listening… speak, then tap STOP to copy to your Mac"
                 case .ask: statusText = "Listening… speak, then tap STOP to ask"
+                case .talk: statusText = "Listening… say what you want Clicky to do, then tap Stop"
                 }
             } catch {
                 statusText = "Mic error: \(error.localizedDescription)"
@@ -1126,6 +1275,7 @@ enum Snes {
     static let blue = Color(red: 0.16, green: 0.30, blue: 0.72)
     static let spotify = Color(red: 0.11, green: 0.66, blue: 0.33)
     static let whatsapp = Color(red: 0.07, green: 0.55, blue: 0.40)
+    static let talk = Color(red: 0.98, green: 0.55, blue: 0.05)
 }
 
 extension Color {

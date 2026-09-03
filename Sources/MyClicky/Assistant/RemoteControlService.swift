@@ -39,6 +39,8 @@ import Network
 ///                    opens), using only AXActions/AppDriver verbs
 ///   CONFIRM_OK <id> / CONFIRM_NO <id> – the phone's answer to a CONFIRM the
 ///                    Mac sent for an irreversible DO step
+///   READ           – "what does it say?": Claude describes the frontmost
+///                    window's content; the Mac replies with READ <text>
 ///
 /// Lines the Mac sends to the phone:
 ///   STOP                      – recording was stopped from the Mac panel; send nothing
@@ -51,6 +53,7 @@ import Network
 ///   STATUS <text>  – progress of the in-flight DO command ("Opening Mail…")
 ///   CONFIRM <id>\t<question> – DO wants to run an irreversible step; answer
 ///                    with CONFIRM_OK <id> or CONFIRM_NO <id>
+///   READ <text>    – Claude's description of the frontmost window, for READ
 @MainActor
 final class RemoteControlService {
     var onShow: (() -> Void)?
@@ -68,6 +71,7 @@ final class RemoteControlService {
     var onDo: ((String) -> Void)?
     /// (id, confirmed) from CONFIRM_OK / CONFIRM_NO.
     var onConfirmResponse: ((String, Bool) -> Void)?
+    var onRead: (() -> Void)?
     /// Lines to send to a phone as soon as it connects (current state, e.g. unread counts).
     var greeting: (() -> [String])?
 
@@ -174,6 +178,8 @@ final class RemoteControlService {
             onConfirmResponse?(String(line.dropFirst(11)).trimmingCharacters(in: .whitespaces), true)
         } else if line.hasPrefix("CONFIRM_NO ") {
             onConfirmResponse?(String(line.dropFirst(11)).trimmingCharacters(in: .whitespaces), false)
+        } else if line == "READ" {
+            onRead?()
         }
     }
 }
