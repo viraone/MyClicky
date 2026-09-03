@@ -162,6 +162,7 @@ enum AXActions {
         if !hasEditableFocus(in: app) {
             guard let frame = firstFocusableFrame(in: app) else {
                 log.notice("type: no focused or recoverable editable field in \(app.localizedName ?? "?", privacy: .public) — skipping paste")
+                dumpTree(in: app)
                 return false
             }
             log.notice("type: no editable focus — clicking recovered field at (\(Int(frame.midX)), \(Int(frame.midY)))")
@@ -207,6 +208,32 @@ enum AXActions {
             if let found { return found }
         }
         return nil
+    }
+
+    /// One-shot diagnostic: logs the full AX tree (every role + any
+    /// title/value/placeholder), unfiltered, when focus recovery fails
+    /// entirely — so the actual structure can be inspected via `log show`
+    /// instead of guessed at from indirect symptoms.
+    private static func dumpTree(in app: NSRunningApplication) {
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        var budget = 0
+        func walk(_ element: AXUIElement, depth: Int) {
+            budget += 1
+            guard budget <= 300, depth <= 14 else { return }
+            let role = (AccessibilityFinder.attribute(element, kAXRoleAttribute) as? String) ?? "?"
+            let title = (AccessibilityFinder.attribute(element, kAXTitleAttribute) as? String) ?? ""
+            let value = (AccessibilityFinder.attribute(element, kAXValueAttribute) as? String) ?? ""
+            let placeholder = (AccessibilityFinder.attribute(element, kAXPlaceholderValueAttribute) as? String) ?? ""
+            let desc = (AccessibilityFinder.attribute(element, kAXDescriptionAttribute) as? String) ?? ""
+            log.notice("axdump [\(depth, privacy: .public)] \(role, privacy: .public) title=\"\(title, privacy: .public)\" value=\"\(value, privacy: .public)\" placeholder=\"\(placeholder, privacy: .public)\" desc=\"\(desc, privacy: .public)\"")
+            guard let children = AccessibilityFinder.attribute(element, kAXChildrenAttribute) as? [AXUIElement] else { return }
+            for child in children { walk(child, depth: depth + 1) }
+        }
+        log.notice("axdump: begin for \(app.localizedName ?? "?", privacy: .public)")
+        for window in AccessibilityFinder.windows(of: appElement) {
+            walk(window, depth: 0)
+        }
+        log.notice("axdump: end (\(budget, privacy: .public) nodes visited)")
     }
 
     /// Presses a named key (e.g. "return", "tab", "a") with optional
