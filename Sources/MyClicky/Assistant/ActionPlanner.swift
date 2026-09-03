@@ -92,9 +92,10 @@ enum ActionPlanner {
         var app = targetApp ?? NSWorkspace.shared.frontmostApplication
         let elements = AXActions.read(in: app)
 
-        let plan: Plan
+        var plan: Plan
         do {
-            plan = try await requestPlan(utterance: utterance, elements: elements, claude: claude, screenshot: screenshot)
+            plan = try await requestPlan(utterance: utterance, elements: elements, claude: claude,
+                                         includeScreenshot: elements.isEmpty, screenshot: screenshot)
         } catch {
             log.error("plan request failed: \(error.localizedDescription, privacy: .public)")
             callbacks.status("Couldn't work out how to do that — \(error.localizedDescription)")
@@ -104,6 +105,19 @@ enum ActionPlanner {
             log.notice("refused plan with unsupported verb(s)")
             callbacks.status("That would need an action I don't support yet — stopped for safety.")
             return
+        }
+
+        // AX found *some* elements but none worth acting on (e.g. an
+        // icon-only toolbar button with no usable label) — give Claude one
+        // more chance with an actual screenshot before giving up.
+        if isDeclined(plan), !elements.isEmpty {
+            log.notice("AX-only plan declined — retrying with a screenshot for visual grounding")
+            if let retryPlan = try? await requestPlan(utterance: utterance, elements: elements, claude: claude,
+                                                       includeScreenshot: true, screenshot: screenshot),
+               !retryPlan.steps.isEmpty, retryPlan.steps.allSatisfy({ allowedVerbs.contains($0.verb) }),
+               !isDeclined(retryPlan) {
+                plan = retryPlan
+            }
         }
 
         var executedAny = false
@@ -234,7 +248,7 @@ enum ActionPlanner {
     }
 
     private static func requestPlan(utterance: String, elements: [AXElement], claude: AnthropicService,
-                                    screenshot: @escaping () async throws -> Data) async throws -> Plan {
+                                    includeScreenshot: Bool, screenshot: @escaping () async throws -> Data) async throws -> Plan {
         let lines = elements.prefix(150).map { element -> String in
             var line = "\(element.role) \"\(element.label)\""
             if !element.value.isEmpty { line += " value=\"\(element.value)\"" }
@@ -248,12 +262,16 @@ enum ActionPlanner {
         \(lines.isEmpty ? "(none found)" : lines.joined(separator: "\n"))
         """
 
-        // AX came back thin (a canvas-drawn app, or nothing frontmost yet) —
-        // ground the plan with a screenshot instead.
-        let jpegImage = elements.isEmpty ? try? await screenshot() : nil
+        let jpegImage = includeScreenshot ? try? await screenshot() : nil
 
         let json = try await claude.requestJSON(system: systemPrompt, userText: userText, jpegImage: jpegImage)
         let data = try JSONSerialization.data(withJSONObject: json)
         return try JSONDecoder().decode(Plan.self, from: data)
+    }
+
+    /// True for a plan that's just a single declined "done" — Claude found
+    /// nothing here to act on.
+    private static func isDeclined(_ plan: Plan) -> Bool {
+        plan.steps.count == 1 && plan.steps[0].verb == "done"
     }
 }
