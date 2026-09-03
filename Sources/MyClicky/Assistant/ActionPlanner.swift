@@ -241,10 +241,16 @@ enum ActionPlanner {
         case "type":
             guard let text = step.text else { return false }
             AXActions.type(text)
+            usleep(250_000)
             return true
         case "press":
             guard let key = step.key else { return false }
             AXActions.press(key, modifiers: Set(step.modifiers ?? []))
+            // A modified press (Cmd+N, etc.) often triggers app-level UI —
+            // a new window/popover that needs time to appear and take
+            // keyboard focus before the next step can reliably act on it.
+            // click/focus already wait after acting; press/type never did.
+            usleep(step.modifiers?.isEmpty == false ? 500_000 : 200_000)
             return true
         case "scroll":
             guard let direction = step.direction.flatMap(AXActions.ScrollDirection.init(rawValue:)) else { return false }
