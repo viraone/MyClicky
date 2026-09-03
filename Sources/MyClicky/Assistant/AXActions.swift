@@ -148,10 +148,29 @@ enum AXActions {
         label.trimmingCharacters(in: .whitespaces).count <= 2
     }
 
-    /// Types into whatever is currently focused, via clipboard paste.
+    /// Types into whatever is currently focused, via clipboard paste. Returns
+    /// false without pasting if nothing editable is actually focused — a
+    /// step/shortcut that reveals a new field (a popover, a quick-entry box)
+    /// doesn't necessarily give it keyboard focus, and pasting into nothing
+    /// would otherwise silently do nothing while still "succeeding".
     @MainActor
-    static func type(_ text: String) {
+    @discardableResult
+    static func type(_ text: String, in app: NSRunningApplication? = nil) -> Bool {
+        guard let app = app ?? NSWorkspace.shared.frontmostApplication else { return false }
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        guard let focused = AccessibilityFinder.attribute(appElement, kAXFocusedUIElementAttribute),
+              CFGetTypeID(focused) == AXUIElementGetTypeID() else {
+            log.notice("type: no focused element in \(app.localizedName ?? "?", privacy: .public) — skipping paste")
+            return false
+        }
+        let focusedElement = focused as! AXUIElement
+        let role = AccessibilityFinder.attribute(focusedElement, kAXRoleAttribute) as? String
+        guard let role, focusableRoles.contains(role) else {
+            log.notice("type: focused element (\(role ?? "?", privacy: .public)) isn't editable — skipping paste")
+            return false
+        }
         KeyboardTyper.paste(text)
+        return true
     }
 
     /// Presses a named key (e.g. "return", "tab", "a") with optional

@@ -246,7 +246,7 @@ enum ActionPlanner {
             return await visionClick(describing: label, screenshot: screenshot, claude: claude)
         case "type":
             guard let text = step.text else { return false }
-            AXActions.type(text)
+            guard AXActions.type(text, in: app) else { return false }
             usleep(250_000)
             return true
         case "press":
