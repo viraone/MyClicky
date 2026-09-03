@@ -107,7 +107,7 @@ enum AccessibilityFinder {
     }
 
     /// Focused window first, then the rest.
-    private static func windows(of appElement: AXUIElement) -> [AXUIElement] {
+    static func windows(of appElement: AXUIElement) -> [AXUIElement] {
         var result: [AXUIElement] = []
         if let focused = attribute(appElement, kAXFocusedWindowAttribute) { result.append(focused as! AXUIElement) }
         for window in attribute(appElement, kAXWindowsAttribute) as? [AXUIElement] ?? [] where !result.contains(where: { CFEqual($0, window) }) {
@@ -116,7 +116,7 @@ enum AccessibilityFinder {
         return result
     }
 
-    private static func frame(of field: AXUIElement) -> NSRect? {
+    static func frame(of field: AXUIElement) -> NSRect? {
         guard let position = point(attribute(field, kAXPositionAttribute)),
               let size = size(attribute(field, kAXSizeAttribute)), size.width > 0, size.height > 0 else { return nil }
         // AX gives top-left-origin global coordinates; convert to AppKit.
@@ -125,7 +125,7 @@ enum AccessibilityFinder {
                       width: size.width, height: size.height)
     }
 
-    private static func search(_ element: AXUIElement, budget: inout Int,
+    static func search(_ element: AXUIElement, budget: inout Int,
                                matches: (AXUIElement) -> Bool) -> AXUIElement? {
         budget += 1
         if budget > 20_000 { return nil }
@@ -137,19 +137,19 @@ enum AccessibilityFinder {
         return nil
     }
 
-    private static func attribute(_ element: AXUIElement, _ name: String) -> AnyObject? {
+    static func attribute(_ element: AXUIElement, _ name: String) -> AnyObject? {
         var value: AnyObject?
         guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
         return value
     }
 
-    private static func point(_ value: AnyObject?) -> CGPoint? {
+    static func point(_ value: AnyObject?) -> CGPoint? {
         guard let value, CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
         var point = CGPoint.zero
         return AXValueGetValue(value as! AXValue, .cgPoint, &point) ? point : nil
     }
 
-    private static func size(_ value: AnyObject?) -> CGSize? {
+    static func size(_ value: AnyObject?) -> CGSize? {
         guard let value, CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
         var size = CGSize.zero
         return AXValueGetValue(value as! AXValue, .cgSize, &size) ? size : nil
