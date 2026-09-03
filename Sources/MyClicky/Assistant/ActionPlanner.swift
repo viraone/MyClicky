@@ -73,14 +73,18 @@ enum ActionPlanner {
     no extra text: {"steps": [ {"verb": "...", ...}, ... ]}
     """
 
-    /// Plans and executes `utterance` on the frontmost app. `screenshot` is
-    /// used only when the AX tree is thin (a canvas-drawn app) to ground the
-    /// plan, and again if a click/focus target can't be found by label.
+    /// Plans and executes `utterance` on `targetApp` (the frontmost app if
+    /// nil). Callers that show their own UI before calling this should pass
+    /// the app that was frontmost *before* that — otherwise, if that UI ends
+    /// up frontmost itself, the plan would read and act on it instead of the
+    /// app the user actually meant. `screenshot` is used only when the AX
+    /// tree is thin (a canvas-drawn app) to ground the plan, and again if a
+    /// click/focus target can't be found by label.
     @MainActor
-    static func run(utterance: String, apiKey: String, callbacks: Callbacks,
-                    screenshot: @escaping () async throws -> Data) async {
+    static func run(utterance: String, apiKey: String, targetApp: NSRunningApplication? = nil,
+                    callbacks: Callbacks, screenshot: @escaping () async throws -> Data) async {
         let claude = AnthropicService(apiKey: apiKey)
-        var app = NSWorkspace.shared.frontmostApplication
+        var app = targetApp ?? NSWorkspace.shared.frontmostApplication
         let elements = AXActions.read(in: app)
 
         let plan: Plan

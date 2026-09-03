@@ -235,8 +235,16 @@ final class AssistantController {
         }
         remote.onDo = { [weak self] utterance in
             guard let self else { return }
+            // Capture the real target BEFORE showing our own panel — otherwise
+            // if Clicky's panel itself is/becomes frontmost, the planner would
+            // read and act on Clicky's own UI instead of the intended app.
+            let targetApp = NSWorkspace.shared.frontmostApplication
             self.showPanel()
-            self.handleDo(utterance)
+            // DO always answers on the Ask tab; force it so the result is
+            // actually visible even if the panel was left on Capture+Dictate.
+            self.panel.state.tab = .ask
+            self.panel.state.transcript = utterance
+            self.handleDo(utterance, targetApp: targetApp)
         }
         remote.onConfirmResponse = { [weak self] id, confirmed in
             self?.resolveConfirm(id: id, result: confirmed)
@@ -486,7 +494,7 @@ final class AssistantController {
 
     // MARK: - DO: universal voice command (any app, not just the scripted ones)
 
-    private func handleDo(_ utterance: String) {
+    private func handleDo(_ utterance: String, targetApp: NSRunningApplication?) {
         guard !busy else { return }
         ActivityLog.recordAction("do", ["text": utterance])
         guard let apiKey = KeychainService.anthropicAPIKey() else {
@@ -521,7 +529,7 @@ final class AssistantController {
                     return await self.requestConfirm(question: question, screen: screen)
                 }
             )
-            await ActionPlanner.run(utterance: utterance, apiKey: apiKey, callbacks: callbacks) { [capture] in
+            await ActionPlanner.run(utterance: utterance, apiKey: apiKey, targetApp: targetApp, callbacks: callbacks) { [capture] in
                 try await capture.captureDisplayJPEG(screen: screen, maxDimension: 1600)
             }
             guard id == requestID else { return }
