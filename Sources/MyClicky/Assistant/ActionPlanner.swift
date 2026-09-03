@@ -120,11 +120,23 @@ enum ActionPlanner {
         // more chance with an actual screenshot before giving up.
         if isDeclined(plan), !elements.isEmpty {
             log.notice("AX-only plan declined — retrying with a screenshot for visual grounding")
-            if let retryPlan = try? await requestPlan(utterance: utterance, elements: elements, claude: claude,
-                                                       includeScreenshot: true, screenshot: screenshot),
-               !retryPlan.steps.isEmpty, retryPlan.steps.allSatisfy({ allowedVerbs.contains($0.verb) }),
-               !isDeclined(retryPlan) {
-                plan = retryPlan
+            do {
+                let retryPlan = try await requestPlan(utterance: utterance, elements: elements, claude: claude,
+                                                       includeScreenshot: true, screenshot: screenshot)
+                if isDeclined(retryPlan) {
+                    log.notice("screenshot retry also declined: \(retryPlan.steps.first?.note ?? "(no note)", privacy: .public)")
+                } else {
+                    log.notice("screenshot retry produced \(retryPlan.steps.count) step(s)")
+                }
+                // Use the retry's plan either way — even a second decline is
+                // more informative (it saw the actual screen) than the stale
+                // pre-screenshot note, which can misleadingly say things like
+                // "without a screenshot" right after one was in fact tried.
+                if !retryPlan.steps.isEmpty, retryPlan.steps.allSatisfy({ allowedVerbs.contains($0.verb) }) {
+                    plan = retryPlan
+                }
+            } catch {
+                log.error("screenshot retry failed: \(error.localizedDescription, privacy: .public)")
             }
         }
 

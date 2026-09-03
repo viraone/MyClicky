@@ -533,7 +533,11 @@ final class AssistantController {
                 }
             )
             await ActionPlanner.run(utterance: utterance, apiKey: apiKey, targetApp: targetApp, callbacks: callbacks) { [capture] in
-                try await capture.captureDisplayJPEG(screen: screen, maxDimension: 1600)
+                // Higher resolution/quality than the general ask flow — this
+                // screenshot exists specifically to locate small, often
+                // icon-only toolbar buttons AX couldn't label (e.g. Calendar's
+                // "+"), so clarity matters more here than for scene Q&A.
+                try await capture.captureDisplayJPEG(screen: screen, maxDimension: 2400, quality: 0.9)
             }
             guard id == requestID else { return }
             panel.state.status = .idle
