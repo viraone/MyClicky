@@ -54,7 +54,12 @@ enum ActionPlanner {
     - type: type text into whatever is currently focused. {"verb":"type","text":"..."}
     - press: press one key, optionally with modifiers. {"verb":"press","key":"return","modifiers":["cmd"]}
     - scroll: scroll the frontmost window up/down/left/right. {"verb":"scroll","direction":"down"}
-    - done: nothing more is needed.
+    - done: nothing more is needed. Also use this — as the ONLY step — when \
+      the request isn't something you can act on with these verbs (general \
+      chit-chat, a question with nothing to click/type/open, or nothing on \
+      screen relates to it). Give it a "note" explaining why in plain \
+      language, e.g. "That's not something I can click or type — try telling \
+      me what to open, click, or say."
 
     Rules:
     - Use a "label" exactly as it appears in the visible elements list when \
@@ -101,8 +106,16 @@ enum ActionPlanner {
             return
         }
 
+        var executedAny = false
         for step in plan.steps {
-            if step.verb == "done" { break }
+            if step.verb == "done" {
+                // "done" with nothing executed before it means Claude decided
+                // there was nothing here it could act on — say so instead of
+                // the misleading generic "Done." (nothing was, in fact, done).
+                let fallback = executedAny ? "Done." : "That's not something I can do — try telling me what to click, type, or open."
+                callbacks.status(step.note ?? fallback)
+                return
+            }
             callbacks.status(step.note ?? describe(step))
             if isIrreversible(step) {
                 guard await callbacks.confirm(step.note ?? describe(step)) else {
@@ -114,6 +127,7 @@ enum ActionPlanner {
                 callbacks.status("Got stuck on: \(step.note ?? describe(step))")
                 return
             }
+            executedAny = true
             log.debug("post-step elements: \(AXActions.read(in: app).count)")
         }
         callbacks.status("Done.")
