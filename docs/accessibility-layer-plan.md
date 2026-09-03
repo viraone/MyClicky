@@ -33,7 +33,21 @@ email, and book a calendar event in under 60 seconds.
 - 60-second demo video for the YC application.
 
 ## Tomorrow, first hour
-- [ ] Extract `bringForward` + finder helpers into a generic `AppDriver`
-- [ ] `AXActions.read()` — dump interactive elements of the frontmost app
-- [ ] Claude prompt that turns "reply to Mom, tell her I'll be late" into steps
-- [ ] `DO` command end-to-end on ONE new app we've never scripted (Mail.app)
+- [x] Extract `bringForward` + finder helpers into a generic `AppDriver`
+- [x] `AXActions.read()` — dump interactive elements of the frontmost app
+- [x] Claude prompt that turns "reply to Mom, tell her I'll be late" into steps
+      (`ActionPlanner.swift`)
+- [x] `DO` command end-to-end on ONE new app we've never scripted (Mail.app) —
+      verified live over the Bonjour socket: Claude planned it, `AppDriver`
+      launched/foregrounded Mail (then TextEdit) and `STATUS` streamed back.
+      Still needs an on-screen check with a real inbox (the Mac was locked
+      when this was tested) before calling the reply+send path proven.
+
+## Phase 2 status
+- [x] `RemoteControlService`/`AssistantController`: `DO`, `CONFIRM_OK`/
+      `CONFIRM_NO`, `READ` wired, with `STATUS`/`CONFIRM`/`READ` streamed back
+- [x] iOS: TALK mode in `NumpadView` (big button, Dynamic Type, VoiceOver
+      labels), STATUS/READ shown in large text + spoken via
+      `AVSpeechSynthesizer` (now in `ClickyClient`), CONFIRM as two huge
+      Yes/No buttons, "What does it say?" sends `READ`
+- [ ] Run the iOS build on-device and try the full demo flow for real
