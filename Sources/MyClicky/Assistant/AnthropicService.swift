@@ -127,6 +127,57 @@ struct AnthropicService {
         return cleaned
     }
 
+    /// Generic strict-JSON request: a caller-supplied system prompt plus user
+    /// text (and an optional image), with the same rate-limit retry behavior
+    /// as `ask`. Returns the raw JSON object parsed from Claude's reply, for
+    /// callers whose response shape isn't the fixed answer/box_2d schema.
+    func requestJSON(system: String, userText: String, jpegImage: Data? = nil,
+                     onStatus: (@Sendable @MainActor (String) -> Void)? = nil) async throws -> [String: Any] {
+        var userContent: [[String: Any]] = []
+        if let jpegImage {
+            userContent.append(["type": "image", "source": [
+                "type": "base64",
+                "media_type": "image/jpeg",
+                "data": jpegImage.base64EncodedString(),
+            ]])
+        }
+        userContent.append(["type": "text", "text": userText])
+
+        let body: [String: Any] = [
+            "model": model,
+            "max_tokens": 1024,
+            "system": system,
+            "messages": [["role": "user", "content": userContent]],
+        ]
+        let request = try makeRequest(body: body, timeout: 60)
+
+        var data = Data()
+        for attempt in 0..<3 {
+            let (respData, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw ServiceError.badResponse }
+            if http.statusCode == 200 {
+                data = respData
+                break
+            }
+            let message = Self.errorMessage(from: respData) ?? "HTTP \(http.statusCode)"
+            if (http.statusCode == 429 || http.statusCode == 529), attempt < 2 {
+                let retryAfter = (http.value(forHTTPHeaderField: "retry-after")).flatMap(TimeInterval.init)
+                let delay = min(retryAfter ?? 15, 60)
+                if let onStatus {
+                    await onStatus("Claude is rate-limited — retrying in \(Int(delay.rounded()))s…")
+                }
+                try await Task.sleep(nanoseconds: UInt64((delay + 1) * 1_000_000_000))
+                continue
+            }
+            throw ServiceError.api(message)
+        }
+        guard let payloadText = Self.answerText(from: data),
+              let json = Self.parseJSONObject(from: payloadText) else {
+            throw ServiceError.emptyAnswer
+        }
+        return json
+    }
+
     private func makeRequest(body: [String: Any], timeout: TimeInterval) throws -> URLRequest {
         var request = URLRequest(url: Self.endpoint)
         request.httpMethod = "POST"
