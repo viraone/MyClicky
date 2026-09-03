@@ -76,6 +76,11 @@ enum ActionPlanner {
       Cmd+N (new item/event/message), Cmd+F (find), Cmd+, (preferences). \
       Issue it as {"verb":"press","key":"n","modifiers":["cmd"]}. This is \
       often more reliable than clicking an unlabeled icon.
+    - Many quick-creation fields (e.g. Calendar's New Event field after \
+      Cmd+N) parse a whole natural-language description at once — type the \
+      full thing including any date/time as ONE "type" step (e.g. "call \
+      Bank of America at 3pm today") and press return, rather than tabbing \
+      between separate fields you're only guessing exist.
     - Only decline with "done" if you genuinely can't find anything \
       resembling what's needed and no standard shortcut applies, even after \
       seeing the screenshot.
@@ -206,8 +211,11 @@ enum ActionPlanner {
                                 screenshot: @escaping () async throws -> Data, claude: AnthropicService) async -> Bool {
         // Never log step.text verbatim — it's the actual message/content
         // being typed, which can be personal; log its length instead.
-        let target = step.app ?? step.label ?? step.key ?? step.direction
+        var target = step.app ?? step.label ?? step.key ?? step.direction
             ?? step.text.map { "(\($0.count) chars)" } ?? ""
+        if step.verb == "press", let modifiers = step.modifiers, !modifiers.isEmpty {
+            target = modifiers.joined(separator: "+") + "+" + target
+        }
         log.notice("executing: \(step.verb, privacy: .public) \(target, privacy: .public)")
         switch step.verb {
         case "open":
