@@ -81,6 +81,12 @@ enum ActionPlanner {
       full thing including any date/time as ONE "type" step (e.g. "call \
       Bank of America at 3pm today") and press return, rather than tabbing \
       between separate fields you're only guessing exist.
+    - A shortcut or click that reveals a new field (a popover, a quick-entry \
+      box, a dialog) does NOT necessarily put keyboard focus inside it — \
+      never "type" right after such a step. Always "focus" the field first \
+      (by its placeholder text if that's all it shows, e.g. a field showing \
+      placeholder "Movie at 7pm on Friday" — focus with that exact text), \
+      THEN type into it.
     - Only decline with "done" if you genuinely can't find anything \
       resembling what's needed and no standard shortcut applies, even after \
       seeing the screenshot.
