@@ -70,9 +70,15 @@ enum ActionPlanner {
       accessible label at all), you may still issue a click/focus step by \
       plainly describing what you see, e.g. "the + button in the top-left \
       toolbar" or "the blue circular button with a plus sign" — it will be \
-      located on screen from that description. Only decline with "done" if \
-      you genuinely can't find anything resembling what's needed, even in \
-      the screenshot.
+      located on screen from that description.
+    - Prefer a standard macOS keyboard shortcut over guessing at a button \
+      whenever one reliably does the job in ordinary Mac apps — e.g. \
+      Cmd+N (new item/event/message), Cmd+F (find), Cmd+, (preferences). \
+      Issue it as {"verb":"press","key":"n","modifiers":["cmd"]}. This is \
+      often more reliable than clicking an unlabeled icon.
+    - Only decline with "done" if you genuinely can't find anything \
+      resembling what's needed and no standard shortcut applies, even after \
+      seeing the screenshot.
     - Never invent a verb outside this list, and never combine two actions in \
       one step.
     - Set "irreversible": true on any step that sends, deletes, pays, submits, \
