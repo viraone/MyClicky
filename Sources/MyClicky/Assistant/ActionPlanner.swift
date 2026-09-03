@@ -246,6 +246,17 @@ enum ActionPlanner {
             return await visionClick(describing: label, screenshot: screenshot, claude: claude)
         case "type":
             guard let text = step.text else { return false }
+            if AXActions.type(text, in: app) {
+                usleep(250_000)
+                return true
+            }
+            // AX couldn't find (or verify focus landed on) an editable
+            // target — some fields (e.g. Calendar's "Create Quick Event"
+            // popover) live entirely outside the normal AX window tree and
+            // can never be found by traversal. Locate the empty field
+            // visually instead, click it, then retry the same paste.
+            guard await visionClick(describing: "the empty text input field that's ready for typing right now, such as a just-opened quick-entry popover or dialog field",
+                                    screenshot: screenshot, claude: claude) else { return false }
             guard AXActions.type(text, in: app) else { return false }
             usleep(250_000)
             return true
