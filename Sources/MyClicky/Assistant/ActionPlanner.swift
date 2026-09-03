@@ -118,10 +118,13 @@ enum ActionPlanner {
             }
             callbacks.status(step.note ?? describe(step))
             if isIrreversible(step) {
+                log.notice("gating irreversible step: \(step.verb, privacy: .public) \(step.label ?? step.key ?? "", privacy: .public)")
                 guard await callbacks.confirm(step.note ?? describe(step)) else {
+                    log.notice("irreversible step declined by user")
                     callbacks.status("Cancelled — nothing more was done.")
                     return
                 }
+                log.notice("irreversible step confirmed by user")
             }
             guard await execute(step, app: &app, screenshot: screenshot, claude: claude) else {
                 callbacks.status("Got stuck on: \(step.note ?? describe(step))")

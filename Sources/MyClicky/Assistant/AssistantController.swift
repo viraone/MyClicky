@@ -1,5 +1,8 @@
 import AppKit
 import AVFoundation
+import OSLog
+
+private let log = Logger(subsystem: "com.myclicky", category: "confirm")
 
 /// Orchestrates the Option+Command+C assistant:
 /// hold → listen, release → capture screen + ask Claude → speak & show answer.
@@ -544,6 +547,7 @@ final class AssistantController {
     private func requestConfirm(question: String, screen: NSScreen) async -> Bool {
         await withCheckedContinuation { continuation in
             let id = UUID().uuidString
+            log.notice("requesting confirm \(id, privacy: .public): \(question, privacy: .public)")
             pendingConfirms[id] = continuation
             let cursor = NSEvent.mouseLocation
             confirmPanel.show(
@@ -562,7 +566,11 @@ final class AssistantController {
     }
 
     private func resolveConfirm(id: String, result: Bool) {
-        guard let continuation = pendingConfirms.removeValue(forKey: id) else { return }
+        guard let continuation = pendingConfirms.removeValue(forKey: id) else {
+            log.notice("confirm \(id, privacy: .public) resolved twice or unknown — ignored")
+            return
+        }
+        log.notice("confirm \(id, privacy: .public) resolved: \(result ? "YES" : "NO")")
         confirmPanel.hide()
         continuation.resume(returning: result)
     }
