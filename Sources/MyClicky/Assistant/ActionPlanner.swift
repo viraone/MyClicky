@@ -65,6 +65,14 @@ enum ActionPlanner {
     - Use a "label" exactly as it appears in the visible elements list when \
       possible; a short standard name (e.g. "Send", "Reply") is fine if the \
       element isn't listed but you're confident it exists.
+    - If you were given a screenshot (because the elements list was thin, or \
+      missing the control you need — icon-only toolbar buttons often have no \
+      accessible label at all), you may still issue a click/focus step by \
+      plainly describing what you see, e.g. "the + button in the top-left \
+      toolbar" or "the blue circular button with a plus sign" — it will be \
+      located on screen from that description. Only decline with "done" if \
+      you genuinely can't find anything resembling what's needed, even in \
+      the screenshot.
     - Never invent a verb outside this list, and never combine two actions in \
       one step.
     - Set "irreversible": true on any step that sends, deletes, pays, submits, \
