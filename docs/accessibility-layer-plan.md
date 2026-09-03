@@ -38,10 +38,14 @@ email, and book a calendar event in under 60 seconds.
 - [x] Claude prompt that turns "reply to Mom, tell her I'll be late" into steps
       (`ActionPlanner.swift`)
 - [x] `DO` command end-to-end on ONE new app we've never scripted (Mail.app) —
-      verified live over the Bonjour socket: Claude planned it, `AppDriver`
-      launched/foregrounded Mail (then TextEdit) and `STATUS` streamed back.
-      Still needs an on-screen check with a real inbox (the Mac was locked
-      when this was tested) before calling the reply+send path proven.
+      Claude planned it, `AppDriver` launched/foregrounded Mail, `STATUS`
+      streamed back.
+- [x] `DO` end-to-end on a SECOND never-scripted app, on-device, with a real
+      send: Messages.app, "reply and say so we're meeting tonight at 10 PM my
+      time, then send it" — typed into the right conversation, confirm gated
+      it, and it actually sent (verified both on screen and in `log show`:
+      read → gating irreversible step → requesting confirm → resolved: YES →
+      confirmed by user → sent).
 
 ## Phase 2 status
 - [x] `RemoteControlService`/`AssistantController`: `DO`, `CONFIRM_OK`/
@@ -50,4 +54,19 @@ email, and book a calendar event in under 60 seconds.
       labels), STATUS/READ shown in large text + spoken via
       `AVSpeechSynthesizer` (now in `ClickyClient`), CONFIRM as two huge
       Yes/No buttons, "What does it say?" sends `READ`
-- [ ] Run the iOS build on-device and try the full demo flow for real
+- [x] Ran the iOS build on-device and tried the full demo flow for real —
+      found and fixed three real bugs along the way: DO results invisible on
+      the Mac panel unless the Ask tab was forced, Clicky's own panel
+      self-targeting when it became frontmost, and a confirmed irreversible
+      step (press return / type) misfiring into the wrong window because
+      confirming steals keyboard focus — all fixed in `ActionPlanner.swift`
+      and `AssistantController.swift`, confirmed via WhatsApp (photo, reply,
+      send) and Messages.app (reply + send) tests
+
+## What's left before the YC demo
+- [ ] Third leg of the demo: create a Calendar event via `DO` (never tried yet)
+- [ ] Vision fallback (AX-can't-find-it -> click by screenshot) exists in
+      `ActionPlanner.execute` but hasn't been exercised by a real test yet
+- [ ] "What does it say?" (`READ`) hasn't been tried on-device yet
+- [ ] String together the full demo: WhatsApp photo + Mail/Messages reply +
+      Calendar event, hands-free, under 60 seconds
