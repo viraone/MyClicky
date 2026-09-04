@@ -111,7 +111,7 @@ enum ActionPlanner {
     /// tree is thin (a canvas-drawn app) to ground the plan, and again if a
     /// click/focus target can't be found by label.
     @MainActor
-    static func run(utterance: String, apiKey: String, targetApp: NSRunningApplication? = nil,
+    static func run(utterance: String, apiKey: String, targetApp: NSRunningApplication? = nil, screen: NSScreen,
                     callbacks: Callbacks, screenshot: @escaping () async throws -> Data) async {
         let claude = AnthropicService(apiKey: apiKey)
         var app = targetApp ?? NSWorkspace.shared.frontmostApplication
@@ -184,7 +184,7 @@ enum ActionPlanner {
                 app?.activate(options: [.activateAllWindows])
                 try? await Task.sleep(nanoseconds: 300_000_000)
             }
-            guard await execute(step, app: &app, screenshot: screenshot, claude: claude) else {
+            guard await execute(step, app: &app, screen: screen, screenshot: screenshot, claude: claude) else {
                 log.notice("step failed, stopping: \(step.verb, privacy: .public)")
                 callbacks.status("Got stuck on: \(step.note ?? describe(step))")
                 return
@@ -214,7 +214,7 @@ enum ActionPlanner {
     }
 
     @MainActor
-    private static func execute(_ step: Step, app: inout NSRunningApplication?,
+    private static func execute(_ step: Step, app: inout NSRunningApplication?, screen: NSScreen,
                                 screenshot: @escaping () async throws -> Data, claude: AnthropicService) async -> Bool {
         // Never log step.text verbatim — it's the actual message/content
         // being typed, which can be personal; log its length instead.
@@ -237,14 +237,14 @@ enum ActionPlanner {
                 usleep(300_000)
                 return true
             }
-            return await visionClickRetrying(describing: label, screenshot: screenshot, claude: claude)
+            return await visionClickRetrying(describing: label, screen: screen, screenshot: screenshot, claude: claude)
         case "focus":
             guard let label = step.label else { return false }
             if AXActions.focus(label: label, in: app) {
                 usleep(250_000)
                 return true
             }
-            return await visionClickRetrying(describing: label, screenshot: screenshot, claude: claude)
+            return await visionClickRetrying(describing: label, screen: screen, screenshot: screenshot, claude: claude)
         case "type":
             guard let text = step.text else { return false }
             if AXActions.type(text, in: app) {
@@ -257,7 +257,7 @@ enum ActionPlanner {
             // can never be found by traversal. Locate the empty field
             // visually instead, click it, then retry the same paste.
             let fieldDescription = "the empty text input field that's ready for typing right now, such as a just-opened quick-entry popover or dialog field"
-            guard await visionClickRetrying(describing: fieldDescription, screenshot: screenshot, claude: claude) else { return false }
+            guard await visionClickRetrying(describing: fieldDescription, screen: screen, screenshot: screenshot, claude: claude) else { return false }
             guard AXActions.type(text, in: app) else { return false }
             usleep(250_000)
             return true
@@ -285,23 +285,26 @@ enum ActionPlanner {
     /// a row) — worth one retry given each attempt costs a Claude round-trip
     /// and the user is speaking, not typing.
     @MainActor
-    private static func visionClickRetrying(describing label: String, screenshot: @escaping () async throws -> Data,
+    private static func visionClickRetrying(describing label: String, screen: NSScreen, screenshot: @escaping () async throws -> Data,
                                             claude: AnthropicService) async -> Bool {
         for attempt in 0..<2 {
             if attempt > 0 { log.notice("vision fallback: retrying \(label, privacy: .public)") }
-            if await visionClick(describing: label, screenshot: screenshot, claude: claude) { return true }
+            if await visionClick(describing: label, screen: screen, screenshot: screenshot, claude: claude) { return true }
         }
         return false
     }
 
     /// AX couldn't find the target by label — fall back to Claude vision
     /// locating it on screen, the same path "click the save button" already
-    /// uses, and click the returned bounding box.
+    /// uses, and click the returned bounding box. `screen` MUST be the same
+    /// screen `screenshot` was captured from — mapping Claude's normalized
+    /// coordinates against a different screen's frame (e.g. independently
+    /// querying NSScreen.main on a multi-monitor setup) silently produces a
+    /// click at a nonsensical location on whatever screen that happens to be.
     @MainActor
-    private static func visionClick(describing label: String, screenshot: @escaping () async throws -> Data,
+    private static func visionClick(describing label: String, screen: NSScreen, screenshot: @escaping () async throws -> Data,
                                     claude: AnthropicService) async -> Bool {
         log.notice("vision fallback: locating \(label, privacy: .public)")
-        guard let screen = NSScreen.main else { return false }
         do {
             let image = try await screenshot()
             let dumpPath = "/tmp/myclicky-vision-\(Int(Date().timeIntervalSince1970)).jpg"

@@ -532,7 +532,7 @@ final class AssistantController {
                     return await self.requestConfirm(question: question, screen: screen)
                 }
             )
-            await ActionPlanner.run(utterance: utterance, apiKey: apiKey, targetApp: targetApp, callbacks: callbacks) { [capture] in
+            await ActionPlanner.run(utterance: utterance, apiKey: apiKey, targetApp: targetApp, screen: screen, callbacks: callbacks) { [capture] in
                 // Higher resolution/quality than the general ask flow — this
                 // screenshot exists specifically to locate small, often
                 // icon-only toolbar buttons AX couldn't label (e.g. Calendar's
