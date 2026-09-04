@@ -27,6 +27,10 @@ struct NumpadView: View {
     @State private var photoAttachedIn: WhatsAppChat?
     /// Small copy of the attached photo, shown on the Photo button as proof it went.
     @State private var attachedThumb: UIImage?
+    /// Typed-message alert state: which chat "Text" was tapped for, and the draft.
+    @State private var showingTextCompose = false
+    @State private var textComposeChat: WhatsAppChat = .test
+    @State private var textDraft = ""
 
     struct WhatsAppChat: Equatable {
         let label: String
@@ -468,6 +472,13 @@ struct NumpadView: View {
                 guard let item, let chat = photoChat else { return }
                 Task { await sendPhoto(item, to: chat) }
             }
+            .alert("Type a message", isPresented: $showingTextCompose) {
+                TextField("Message", text: $textDraft)
+                Button("Type it") { whatsappSendTypedText() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Clicky types this into \(textComposeChat.label) on your Mac — you still tap Send.")
+            }
             Spacer()
             clickyPill
             HStack(spacing: 6) {
@@ -518,6 +529,8 @@ struct NumpadView: View {
         return HStack(spacing: 8) {
             padButton(icon: chat.icon, title: chat.label,
                       hint: "Open on your Mac", tint: Snes.whatsapp) { whatsappOpenChat(chat) }
+            padButton(icon: "keyboard", title: "Text",
+                      hint: "Type — Clicky types it there", tint: Snes.whatsapp) { whatsappTextTapped(chat) }
             padButton(icon: recording ? "stop.fill" : "mic.fill",
                       title: recording ? "Stop" : "Reply",
                       hint: recording ? "Tap when you're done talking" : "Dictate — Clicky types it there",
@@ -605,6 +618,21 @@ struct NumpadView: View {
             image.draw(in: CGRect(origin: .zero, size: size))
         }
         return resized.jpegData(compressionQuality: 0.85)
+    }
+
+    private func whatsappTextTapped(_ chat: WhatsAppChat) {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        textComposeChat = chat
+        textDraft = ""
+        showingTextCompose = true
+    }
+
+    private func whatsappSendTypedText() {
+        let trimmed = textDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        photoAttachedIn = nil
+        client.whatsapp("TYPE_TEXT_IN \(textComposeChat.name)\t\(trimmed)")
+        statusText = "WhatsApp — typing into \(textComposeChat.label) on your Mac"
     }
 
     private func whatsappReplyTapped(_ chat: WhatsAppChat) {
