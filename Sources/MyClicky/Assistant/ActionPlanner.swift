@@ -304,6 +304,9 @@ enum ActionPlanner {
         guard let screen = NSScreen.main else { return false }
         do {
             let image = try await screenshot()
+            let dumpPath = "/tmp/myclicky-vision-\(Int(Date().timeIntervalSince1970)).jpg"
+            try? image.write(to: URL(fileURLWithPath: dumpPath))
+            log.notice("vision fallback: saved screenshot to \(dumpPath, privacy: .public)")
             let question = "Locate the on-screen element labeled or described as \u{201c}\(label)\u{201d} and return its bounding box."
             let answer = try await claude.ask(question: question, jpegImage: image)
             guard let box = answer.highlight else {
