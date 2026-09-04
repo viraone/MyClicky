@@ -64,9 +64,32 @@ email, and book a calendar event in under 60 seconds.
       send) and Messages.app (reply + send) tests
 
 ## What's left before the YC demo
-- [ ] Third leg of the demo: create a Calendar event via `DO` (never tried yet)
-- [ ] Vision fallback (AX-can't-find-it -> click by screenshot) exists in
-      `ActionPlanner.execute` but hasn't been exercised by a real test yet
+- [x] Third leg: create a Calendar event via `DO` — done, but NOT through the
+      generic UI path. Calendar's "Create Quick Event" popover never appears
+      in the AX window tree at all (verified by dumping all 251 nodes), is
+      transient, and couldn't be located reliably from a screenshot across
+      ~15 attempts. Now handled by `CalendarActions` via EventKit, exposed as
+      a `create_event` planner verb. Verified: "call Verizon" 4-5PM created.
+- [x] Vision fallback exercised for real — and it found three genuine bugs it
+      was masking (see below)
 - [ ] "What does it say?" (`READ`) hasn't been tried on-device yet
-- [ ] String together the full demo: WhatsApp photo + Mail/Messages reply +
+- [ ] String together the full demo: WhatsApp photo + Messages reply +
       Calendar event, hands-free, under 60 seconds
+
+## Hard-won lessons from live testing (don't regress these)
+- Synthetic input goes to whatever app is frontmost *at that instant*, not the
+  app the plan is for. Focus drifts constantly (user clicks, windows opening).
+  `Cmd+N` was landing in Chrome for several runs. Every input step now
+  reactivates the target app first.
+- Never screenshot with Clicky's own panel visible: it contains an empty
+  "Ask Clicky anything…" field, which is a perfect decoy when asking Claude to
+  find "the empty text field". The DO capture excludes our own windows.
+- Screenshot the display the *target app* is on, not `activeScreen` (which
+  follows the cursor). On two monitors these differ and you photograph the
+  wrong screen.
+- Map vision coordinates using the *same* NSScreen the screenshot came from.
+  Independently querying `NSScreen.main` silently clicks the wrong place.
+- A single Claude vision call misses intermittently even on a clearly visible
+  target — retry once before giving up.
+- Don't report "Done." unless something actually happened: `AXActions.type`
+  verifies an editable element really has focus before pasting.
