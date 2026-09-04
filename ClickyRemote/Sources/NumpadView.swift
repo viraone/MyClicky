@@ -132,6 +132,10 @@ struct NumpadView: View {
             client.start()
             permissionDenied = !(await SpeechRecorder.requestPermissions())
         }
+        .onChange(of: client.youtubeCollapsed) { _, collapsed in
+            guard mode == .youtube else { return }
+            statusText = collapsed ? "YouTube — browser minimized" : "YouTube — browser restored"
+        }
     }
 
     // MARK: - Mode tabs (cartridge selector)
@@ -1035,9 +1039,12 @@ struct NumpadView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            // Collapse the browser window itself, out of the way, without pausing playback
+            // Collapse the browser window itself, out of the way, without pausing playback.
+            // Toggles: the Mac reports back which state it landed in, so the
+            // label always matches what's actually on screen.
             HStack(spacing: 8) {
-                spotifyTile("arrow.down.right.and.arrow.up.left", "Collapse Browser") { youtubeTapped("COLLAPSE") }
+                spotifyTile(client.youtubeCollapsed ? "arrow.up.left.and.arrow.down.right" : "arrow.down.right.and.arrow.up.left",
+                            client.youtubeCollapsed ? "Expand Browser" : "Collapse Browser") { youtubeTapped("COLLAPSE") }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -1063,7 +1070,7 @@ struct NumpadView: View {
         case "MUTE": statusText = "YouTube — mute toggled"
         case "LIKE": statusText = "YouTube — liked"
         case "SUBSCRIBE": statusText = "YouTube — subscribed"
-        case "COLLAPSE": statusText = "YouTube — browser minimized"
+        case "COLLAPSE": statusText = "YouTube — toggling the browser window…"
         default: break
         }
     }

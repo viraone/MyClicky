@@ -28,8 +28,10 @@ import Network
 ///                    playlist if needed, search each song, append matches
 ///   YOUTUBE <action> – control the active YouTube tab in the browser:
 ///                    PLAYPAUSE, SKIP_FORWARD, SKIP_BACK, FULLSCREEN, MUTE,
-///                    LIKE, SUBSCRIBE, COLLAPSE (minimize the browser window
-///                    to the Dock, without bringing it forward first)
+///                    LIKE, SUBSCRIBE, COLLAPSE (toggles the browser window
+///                    between minimized in the Dock and restored — the Mac
+///                    replies with YOUTUBE_STATE so the phone's button label
+///                    can flip between "Collapse" and "Expand")
 ///   GMAIL TRASH_OPEN – trash the email open in the browser (confirm on Mac)
 ///   WHATSAPP OPEN_CHAT <name> – open the named chat in the WhatsApp desktop app
 ///   WHATSAPP TYPE_TEXT <text> – tidy the text and type it into the open chat (does not send)
@@ -50,6 +52,8 @@ import Network
 ///   STOP                      – recording was stopped from the Mac panel; send nothing
 ///   WHATSAPP_UNREAD <n>       – WhatsApp's unread badge changed (0 = cleared)
 ///   WHATSAPP_STATUS OK|FAIL\t<message> – outcome of the last WHATSAPP command
+///   YOUTUBE_STATE COLLAPSED|EXPANDED – resulting state of the last
+///                    YOUTUBE COLLAPSE toggle
 ///   CAPTURE        – start the ⌃⌥X drag-to-select region capture
 ///   ASK <question> – submit a question exactly as if typed in the panel
 ///   DICTATE <text> – treat text as finished dictation (clipboard, paired with

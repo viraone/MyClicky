@@ -149,6 +149,15 @@ final class AssistantController {
         }
         remote.onYouTube = { [weak self] action in
             guard let self else { return }
+            if action == "COLLAPSE" {
+                YouTubeActions.toggleCollapse { [weak self] message, ok, collapsed in
+                    self?.toast.show(message,
+                                     icon: ok ? "play.rectangle.fill" : "exclamationmark.triangle.fill",
+                                     tint: ok ? .red : .orange)
+                    self?.remote.broadcast("YOUTUBE_STATE \(collapsed ? "COLLAPSED" : "EXPANDED")")
+                }
+                return
+            }
             YouTubeActions.perform(action) { [weak self] message, ok in
                 self?.toast.show(message,
                                  icon: ok ? "play.rectangle.fill" : "exclamationmark.triangle.fill",

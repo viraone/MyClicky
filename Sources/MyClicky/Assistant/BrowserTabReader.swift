@@ -61,6 +61,13 @@ enum BrowserTabReader {
         ),
     ]
 
+    /// Bundle IDs of every browser this reads tabs from, for callers that
+    /// need to search across all of them directly rather than just asking
+    /// "which one has this tab in its front window" (e.g. finding a window
+    /// that's currently minimized, which stops counting as any browser's
+    /// front window).
+    static let supportedBundleIDs: [String] = browsers.map(\.bundleID)
+
     static func activeTabURL() -> String? {
         let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
         let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
