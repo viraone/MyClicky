@@ -393,6 +393,14 @@ struct AssistantPanelView: View {
                 }
                 .frame(maxHeight: 40)
                 Button {
+                    state.dictationText = ""
+                } label: {
+                    Label("Clear", systemImage: "xmark.circle")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.white.opacity(0.5))
+                Button {
                     state.onCopyAgain?()
                 } label: {
                     Label("Copy again", systemImage: "doc.on.doc")
@@ -455,6 +463,14 @@ struct AssistantPanelView: View {
                         .foregroundStyle(.white.opacity(0.6))
                         .lineLimit(1)
                     Spacer()
+                    Button {
+                        state.dictationText = ""
+                    } label: {
+                        Label("Clear", systemImage: "xmark.circle")
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.white.opacity(0.5))
                     Button {
                         state.onCopyAgain?()
                     } label: {
