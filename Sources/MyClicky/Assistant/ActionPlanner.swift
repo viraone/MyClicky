@@ -237,14 +237,14 @@ enum ActionPlanner {
                 usleep(300_000)
                 return true
             }
-            return await visionClick(describing: label, screenshot: screenshot, claude: claude)
+            return await visionClickRetrying(describing: label, screenshot: screenshot, claude: claude)
         case "focus":
             guard let label = step.label else { return false }
             if AXActions.focus(label: label, in: app) {
                 usleep(250_000)
                 return true
             }
-            return await visionClick(describing: label, screenshot: screenshot, claude: claude)
+            return await visionClickRetrying(describing: label, screenshot: screenshot, claude: claude)
         case "type":
             guard let text = step.text else { return false }
             if AXActions.type(text, in: app) {
@@ -255,19 +255,9 @@ enum ActionPlanner {
             // target — some fields (e.g. Calendar's "Create Quick Event"
             // popover) live entirely outside the normal AX window tree and
             // can never be found by traversal. Locate the empty field
-            // visually instead, click it, then retry the same paste. A
-            // single vision call can miss even when the target is clearly
-            // there (observed live: identical description succeeded once,
-            // then twice returned no bounding box) — worth one retry before
-            // giving up, given each attempt costs a Claude round-trip and
-            // the user is speaking, not typing.
+            // visually instead, click it, then retry the same paste.
             let fieldDescription = "the empty text input field that's ready for typing right now, such as a just-opened quick-entry popover or dialog field"
-            var recovered = false
-            for attempt in 0..<2 where !recovered {
-                if attempt > 0 { log.notice("vision fallback: retrying field location") }
-                recovered = await visionClick(describing: fieldDescription, screenshot: screenshot, claude: claude)
-            }
-            guard recovered else { return false }
+            guard await visionClickRetrying(describing: fieldDescription, screenshot: screenshot, claude: claude) else { return false }
             guard AXActions.type(text, in: app) else { return false }
             usleep(250_000)
             return true
@@ -287,6 +277,21 @@ enum ActionPlanner {
         default:
             return false
         }
+    }
+
+    /// Tries `visionClick` up to twice — a single vision call can miss even
+    /// when the target is clearly visible (observed live: the identical
+    /// description succeeded once, then failed with no bounding box twice in
+    /// a row) — worth one retry given each attempt costs a Claude round-trip
+    /// and the user is speaking, not typing.
+    @MainActor
+    private static func visionClickRetrying(describing label: String, screenshot: @escaping () async throws -> Data,
+                                            claude: AnthropicService) async -> Bool {
+        for attempt in 0..<2 {
+            if attempt > 0 { log.notice("vision fallback: retrying \(label, privacy: .public)") }
+            if await visionClick(describing: label, screenshot: screenshot, claude: claude) { return true }
+        }
+        return false
     }
 
     /// AX couldn't find the target by label — fall back to Claude vision
