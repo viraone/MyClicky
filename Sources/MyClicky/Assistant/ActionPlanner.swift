@@ -224,6 +224,13 @@ enum ActionPlanner {
             target = modifiers.joined(separator: "+") + "+" + target
         }
         log.notice("executing: \(step.verb, privacy: .public) \(target, privacy: .public)")
+        // Synthetic keystrokes and clicks go to whatever app is frontmost
+        // RIGHT NOW, not to the app this plan is for. Focus drifts easily
+        // mid-plan — the user clicks something, a window opens, a
+        // notification steals it — and then Cmd+N lands in a browser instead
+        // of Calendar (observed live). Anything that delivers input must
+        // confirm the intended app is actually in front first.
+        if step.verb != "open" { await ensureFrontmost(app) }
         switch step.verb {
         case "open":
             guard let name = step.app, let resolved = AppDriver.ensureRunning(appNamed: name) else { return false }
@@ -279,6 +286,16 @@ enum ActionPlanner {
         }
     }
 
+    /// Brings the app this plan is driving back to the front if focus drifted
+    /// away, so input can't land in a bystander app.
+    @MainActor
+    private static func ensureFrontmost(_ app: NSRunningApplication?) async {
+        guard let app, !app.isActive else { return }
+        log.notice("target app not frontmost — reactivating \(app.localizedName ?? "?", privacy: .public)")
+        app.activate(options: [.activateAllWindows])
+        try? await Task.sleep(nanoseconds: 350_000_000)
+    }
+
     /// Tries `visionClick` up to twice — a single vision call can miss even
     /// when the target is clearly visible (observed live: the identical
     /// description succeeded once, then failed with no bounding box twice in
@@ -307,9 +324,6 @@ enum ActionPlanner {
         log.notice("vision fallback: locating \(label, privacy: .public)")
         do {
             let image = try await screenshot()
-            let dumpPath = "/tmp/myclicky-vision-\(Int(Date().timeIntervalSince1970)).jpg"
-            try? image.write(to: URL(fileURLWithPath: dumpPath))
-            log.notice("vision fallback: saved screenshot to \(dumpPath, privacy: .public)")
             let question = "Locate the on-screen element labeled or described as \u{201c}\(label)\u{201d} and return its bounding box."
             let answer = try await claude.ask(question: question, jpegImage: image)
             guard let box = answer.highlight else {
