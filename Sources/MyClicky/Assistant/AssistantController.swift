@@ -497,6 +497,16 @@ final class AssistantController {
 
     // MARK: - DO: universal voice command (any app, not just the scripted ones)
 
+    /// The screen `app`'s frontmost window sits on, by its centre point.
+    private static func screenShowing(_ app: NSRunningApplication?) -> NSScreen? {
+        guard let app else { return nil }
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        guard let window = AccessibilityFinder.windows(of: appElement).first,
+              let frame = AccessibilityFinder.frame(of: window) else { return nil }
+        let centre = NSPoint(x: frame.midX, y: frame.midY)
+        return NSScreen.screens.first { $0.frame.contains(centre) }
+    }
+
     private func handleDo(_ utterance: String, targetApp: NSRunningApplication?) {
         guard !busy else { return }
         ActivityLog.recordAction("do", ["text": utterance])
@@ -507,7 +517,11 @@ final class AssistantController {
             remote.broadcast("STATUS \(message.replacingOccurrences(of: "\n", with: " "))")
             return
         }
-        let screen = activeScreen ?? NSScreen.main ?? NSScreen.screens[0]
+        // Drive (and screenshot) the display the target app is actually on —
+        // `activeScreen` follows the cursor, which on a multi-display setup
+        // can point at a screen the app isn't even visible on, handing the
+        // planner a picture with none of the UI it needs to act on.
+        let screen = Self.screenShowing(targetApp) ?? activeScreen ?? NSScreen.main ?? NSScreen.screens[0]
 
         busy = true
         synthesizer.stopSpeaking(at: .immediate)
@@ -537,7 +551,8 @@ final class AssistantController {
                 // screenshot exists specifically to locate small, often
                 // icon-only toolbar buttons AX couldn't label (e.g. Calendar's
                 // "+"), so clarity matters more here than for scene Q&A.
-                try await capture.captureDisplayJPEG(screen: screen, maxDimension: 2400, quality: 0.9)
+                try await capture.captureDisplayJPEG(screen: screen, maxDimension: 2400, quality: 0.9,
+                                                     excludingOwnWindows: true)
             }
             guard id == requestID else { return }
             panel.state.status = .idle

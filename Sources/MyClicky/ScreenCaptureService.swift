@@ -38,14 +38,22 @@ actor ScreenCaptureService {
 
     /// Captures the full display and returns a downscaled JPEG suitable for
     /// sending to a vision model.
-    func captureDisplayJPEG(screen: NSScreen, maxDimension: CGFloat = 1600, quality: CGFloat = 0.7) async throws -> Data {
+    /// `excludingOwnWindows` leaves Clicky's own panels out of the shot. The
+    /// assistant panel contains a big empty "Ask Clicky anything…" field, so
+    /// a screenshot including it hands the planner a perfect decoy when it's
+    /// asked to find "the empty text field to type into".
+    func captureDisplayJPEG(screen: NSScreen, maxDimension: CGFloat = 1600, quality: CGFloat = 0.7,
+                            excludingOwnWindows: Bool = false) async throws -> Data {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
               let display = content.displays.first(where: { $0.displayID == number }) else {
             throw CaptureError.noDisplay
         }
 
-        let filter = SCContentFilter(display: display, excludingWindows: [])
+        let ownWindows = excludingOwnWindows
+            ? content.windows.filter { $0.owningApplication?.processID == getpid() }
+            : []
+        let filter = SCContentFilter(display: display, excludingWindows: ownWindows)
         let scale = screen.backingScaleFactor
         let config = SCStreamConfiguration()
         config.width = Int(screen.frame.width * scale)
