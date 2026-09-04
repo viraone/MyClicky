@@ -18,6 +18,13 @@ final class SpeechRecorder: ObservableObject {
     /// a pause, so we keep what it committed and start a fresh segment.
     private var committed = ""
     private var current = ""
+    /// True once `stop()` has been called — the current segment should
+    /// finalize instead of rolling into a new one, and we stop streaming
+    /// partials to the Mac.
+    private var stopping = false
+    /// Resolved when the segment `stop()` is waiting on actually finalizes,
+    /// so `stop()` can wait for the real event instead of a fixed delay.
+    private var finalizeContinuation: CheckedContinuation<Void, Never>?
     /// Called on every transcript update (used to stream words to the Mac).
     var onPartial: ((String) -> Void)?
 
@@ -33,6 +40,7 @@ final class SpeechRecorder: ObservableObject {
         transcript = ""
         committed = ""
         current = ""
+        stopping = false
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.record, mode: .measurement, options: .duckOthers)
         try session.setActive(true, options: .notifyOthersOnDeactivation)
@@ -75,25 +83,46 @@ final class SpeechRecorder: ObservableObject {
         self.request = request
         task = recognizer?.recognitionTask(with: request) { [weak self] result, error in
             Task { @MainActor in
-                guard let self, self.isListening else { return }
+                guard let self else { return }
                 if let result {
                     self.current = result.bestTranscription.formattedString
-                    self.publish()
+                    // Once stopping, the phone is showing its final answer,
+                    // not live partials — stop pushing updates to the Mac.
+                    if !self.stopping { self.publish() }
                     if result.isFinal { self.rollSegment() }
                 } else if error != nil {
-                    self.rollSegment()
+                    self.commitCurrent()
+                    self.resolveFinalize()
                 }
             }
         }
     }
 
-    private func rollSegment() {
-        guard isListening else { return }
+    private func commitCurrent() {
         if !current.isEmpty {
             committed = (committed + " " + current).trimmingCharacters(in: .whitespaces)
             current = ""
         }
-        startSegment()
+    }
+
+    /// A segment just finalized (iOS does this after a pause, or because
+    /// `stop()` called `endAudio()`). Bank its text; while still recording,
+    /// immediately start a fresh segment so nothing is lost between them.
+    /// While stopping, this final segment IS the answer `stop()` is waiting
+    /// on — signal it instead of starting another.
+    private func rollSegment() {
+        commitCurrent()
+        if stopping {
+            resolveFinalize()
+        } else {
+            startSegment()
+        }
+    }
+
+    private func resolveFinalize() {
+        guard let pending = finalizeContinuation else { return }
+        finalizeContinuation = nil
+        pending.resume()
     }
 
     private func publish() {
@@ -101,15 +130,31 @@ final class SpeechRecorder: ObservableObject {
         onPartial?(transcript)
     }
 
-    /// Stops recording and returns the final transcript.
+    /// Stops recording and returns the final transcript. Waits for the
+    /// recognizer to actually finalize the last segment rather than a fixed
+    /// delay — on-device recognition time varies with sentence length and
+    /// device load, and a too-short fixed wait was silently dropping the
+    /// tail end of longer utterances (the finalize callback arrived after
+    /// `isListening` had already gone false and was discarded).
     func stop() async -> String {
+        stopping = true
         audioEngine?.inputNode.removeTap(onBus: 0)
         audioEngine?.stop()
         request?.endAudio()
         level = 0
-        // Give the recognizer a moment to finalize the last segment.
-        try? await Task.sleep(nanoseconds: 500_000_000)
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            finalizeContinuation = continuation
+            // Safety net only — normally `rollSegment`/the error branch
+            // resolves this well before 3s once the real result lands.
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                self.resolveFinalize()
+            }
+        }
+
         isListening = false
+        stopping = false
         task?.finish()
         audioEngine = nil
         request = nil
