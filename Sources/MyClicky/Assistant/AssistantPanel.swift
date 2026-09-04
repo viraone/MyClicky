@@ -481,6 +481,24 @@ struct AssistantPanelView: View {
                     .onTapGesture {
                         if let url = state.captureURL { NSWorkspace.shared.open(url) }
                     }
+                    .overlay(alignment: .topTrailing) {
+                        // Dismisses the preview only — the file already
+                        // saved to disk (VIRADETH_RESUME) is untouched.
+                        Button {
+                            state.captureImage = nil
+                            state.captureURL = nil
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 18, height: 18)
+                                .background(Circle().fill(Color.black.opacity(0.55)))
+                                .overlay(Circle().strokeBorder(Color.white.opacity(0.25), lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                        .padding(6)
+                        .help("Dismiss preview (file is still saved)")
+                    }
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(.green)
