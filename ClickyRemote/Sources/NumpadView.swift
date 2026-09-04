@@ -1193,20 +1193,32 @@ struct NumpadView: View {
         GeometryReader { geo in
             let gap: CGFloat = 8
             let cols: CGFloat = 4
-            // Fill the height: 6 rows; keys stretch as wide as the column allows.
-            let rowH = (geo.size.height - gap * 5) / 6
+            let topInset: CGFloat = 16
+            // Fill the height: 7 rows; keys stretch as wide as the column allows.
+            let rowH = (geo.size.height - topInset - gap * 6) / 7
             let unit = (geo.size.width - gap * (cols - 1)) / cols
             VStack(spacing: gap) {
+                HStack(spacing: gap) {
+                    key("0", label: "CLICKY  show / hide", icon: "sparkles", tint: Snes.purple,
+                        lit: true, h: rowH, w: unit * 2 + gap, small: true)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .strokeBorder(.white.opacity(0.5), lineWidth: 1)
+                        )
+                        .shadow(color: Snes.purple.opacity(0.55), radius: 8, y: 3)
+                    Spacer(minLength: 0)
+                }
                 row([key("↑"), key("↓"), key("←"), key("→")], h: rowH, gap: gap)
                 row([key("⌫"), key("="), key("/"), key("*")], h: rowH, gap: gap)
                 row([key("7"), key("8"), key("9"), key("-")], h: rowH, gap: gap)
                 // 4 5 6 / 1 2 3 with "+" spanning both rows.
                 HStack(alignment: .top, spacing: gap) {
                     VStack(spacing: gap) {
-                        row([key("4", label: askRecording ? "STOP" : "ASK",
-                                 icon: askRecording ? "stop.fill" : "questionmark.bubble.fill",
+                        row([key("4", label: "ASK TAB", icon: "questionmark.bubble.fill",
+                                 tint: Snes.purple, lit: true),
+                             key("5", label: askRecording ? "STOP" : "ASK",
+                                 icon: askRecording ? "stop.fill" : "mic.fill",
                                  tint: Snes.purple, lit: true, waveform: askRecording),
-                             key("5"),
                              key("6")], h: rowH, gap: gap)
                         row([key("1", label: "CAPTURE TAB", icon: "rectangle.on.rectangle", tint: Snes.yellow, lit: true),
                              key("2", label: "CAPTURE", icon: "camera.viewfinder", tint: Snes.blue, lit: true),
@@ -1216,13 +1228,13 @@ struct NumpadView: View {
                     }
                     key("+", h: rowH * 2 + gap, w: unit)
                 }
-                // Clicky toggle (double-wide), ".", collapse
+                // ".", collapse
                 HStack(spacing: gap) {
-                    key("0", label: "CLICKY  show / hide", icon: "sparkles", h: rowH, w: unit * 2 + gap, small: true)
                     key(".", h: rowH, w: unit)
                     key("enter", label: "COLLAPSE", icon: "chevron.down.circle", h: rowH, w: unit, small: true)
                 }
             }
+            .padding(.top, topInset)
         }
     }
 
@@ -1332,8 +1344,18 @@ struct NumpadView: View {
             client.collapse()
             statusText = "Clicky toggled — tap CLICKY again to hide or bring it back"
         case "4":
+            client.show()
+            client.tab("ASK")
+            dictateMode = false
+            statusText = "Ask — tap the mic (ASK) to speak your question"
+        case "5":
             // Ask record. Tapping while a dictation is running stops that instead.
-            if !recorder.isListening { dictateMode = false; recordTarget = .ask }
+            if !recorder.isListening {
+                dictateMode = false
+                recordTarget = .ask
+                client.show()
+                client.tab("ASK")
+            }
             toggleListening()
         case "1":
             client.show()
