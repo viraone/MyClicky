@@ -19,6 +19,10 @@ enum ActionPlanner {
         var direction: String?
         var irreversible: Bool?
         var note: String?
+        /// create_event only.
+        var title: String?
+        var start: String?
+        var end: String?
     }
 
     struct Plan: Decodable {
@@ -33,7 +37,7 @@ enum ActionPlanner {
         var confirm: (String) async -> Bool = { _ in false }
     }
 
-    private static let allowedVerbs: Set<String> = ["open", "click", "focus", "type", "press", "scroll", "done"]
+    private static let allowedVerbs: Set<String> = ["open", "click", "focus", "type", "press", "scroll", "create_event", "done"]
 
     /// Backstops the model's own "irreversible" flag: these words in a
     /// click/press target force a confirmation even if it didn't say so.
@@ -54,6 +58,13 @@ enum ActionPlanner {
     - type: type text into whatever is currently focused. {"verb":"type","text":"..."}
     - press: press one key, optionally with modifiers. {"verb":"press","key":"return","modifiers":["cmd"]}
     - scroll: scroll the frontmost window up/down/left/right. {"verb":"scroll","direction":"down"}
+    - create_event: add a calendar event directly, WITHOUT touching any app's \
+      UI. Always use this for creating calendar events — never try to drive \
+      Calendar's own window for that. \
+      {"verb":"create_event","title":"call Verizon","start":"2026-09-03T16:00:00","end":"2026-09-03T17:00:00"} \
+      "start"/"end" are local time, ISO 8601, no timezone suffix; resolve \
+      "today"/"tomorrow" against the current date given below. "end" is \
+      optional and defaults to an hour after "start".
     - done: nothing more is needed. Also use this — as the ONLY step — when \
       the request isn't something you can act on with these verbs (general \
       chit-chat, a question with nothing to click/type/open, or nothing on \
@@ -158,12 +169,13 @@ enum ActionPlanner {
         }
 
         var executedAny = false
+        var outcome: String?
         for step in plan.steps {
             if step.verb == "done" {
                 // "done" with nothing executed before it means Claude decided
                 // there was nothing here it could act on — say so instead of
                 // the misleading generic "Done." (nothing was, in fact, done).
-                let fallback = executedAny ? "Done." : "That's not something I can do — try telling me what to click, type, or open."
+                let fallback = executedAny ? (outcome ?? "Done.") : "That's not something I can do — try telling me what to click, type, or open."
                 callbacks.status(step.note ?? fallback)
                 return
             }
@@ -184,15 +196,16 @@ enum ActionPlanner {
                 app?.activate(options: [.activateAllWindows])
                 try? await Task.sleep(nanoseconds: 300_000_000)
             }
-            guard await execute(step, app: &app, screen: screen, screenshot: screenshot, claude: claude) else {
+            guard await execute(step, app: &app, screen: screen, outcome: &outcome,
+                                screenshot: screenshot, claude: claude) else {
                 log.notice("step failed, stopping: \(step.verb, privacy: .public)")
-                callbacks.status("Got stuck on: \(step.note ?? describe(step))")
+                callbacks.status(outcome ?? "Got stuck on: \(step.note ?? describe(step))")
                 return
             }
             executedAny = true
             log.debug("post-step elements: \(AXActions.read(in: app).count)")
         }
-        callbacks.status("Done.")
+        callbacks.status(outcome ?? "Done.")
     }
 
     private static func isIrreversible(_ step: Step) -> Bool {
@@ -209,12 +222,14 @@ enum ActionPlanner {
         case "type": "Typing…"
         case "press": "Pressing \(step.key ?? "a key")…"
         case "scroll": "Scrolling…"
+        case "create_event": "Adding \(step.title ?? "the event") to your calendar…"
         default: "Working…"
         }
     }
 
     @MainActor
     private static func execute(_ step: Step, app: inout NSRunningApplication?, screen: NSScreen,
+                                outcome: inout String?,
                                 screenshot: @escaping () async throws -> Data, claude: AnthropicService) async -> Bool {
         // Never log step.text verbatim — it's the actual message/content
         // being typed, which can be personal; log its length instead.
@@ -281,6 +296,16 @@ enum ActionPlanner {
             guard let direction = step.direction.flatMap(AXActions.ScrollDirection.init(rawValue:)) else { return false }
             AXActions.scroll(direction)
             return true
+        case "create_event":
+            guard let title = step.title, let start = step.start else { return false }
+            do {
+                outcome = try await CalendarActions.createEvent(title: title, start: start, end: step.end)
+                return true
+            } catch {
+                log.error("create_event failed: \(error.localizedDescription, privacy: .public)")
+                outcome = error.localizedDescription
+                return false
+            }
         default:
             return false
         }
@@ -358,8 +383,15 @@ enum ActionPlanner {
             if !element.enabled { line += " (disabled)" }
             return line
         }
+        // Without the current date, "today at 4 PM" can't be resolved to the
+        // absolute timestamp create_event needs.
+        let now = DateFormatter()
+        now.locale = Locale(identifier: "en_US_POSIX")
+        now.dateFormat = "EEEE, yyyy-MM-dd HH:mm"
         let userText = """
         User said: \u{201c}\(utterance)\u{201d}
+
+        Current local date and time: \(now.string(from: Date()))
 
         Visible interactive elements:
         \(lines.isEmpty ? "(none found)" : lines.joined(separator: "\n"))
