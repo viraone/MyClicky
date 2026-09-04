@@ -147,6 +147,14 @@ final class AssistantController {
                 SpotifyActions.perform(action, status: toast)
             }
         }
+        remote.onYouTube = { [weak self] action in
+            guard let self else { return }
+            YouTubeActions.perform(action) { [weak self] message, ok in
+                self?.toast.show(message,
+                                 icon: ok ? "play.rectangle.fill" : "exclamationmark.triangle.fill",
+                                 tint: ok ? .red : .orange)
+            }
+        }
         remote.onWhatsApp = { [weak self] action in
             guard let self else { return }
             let report: (String, Bool) -> Void = { [weak self] message, ok in

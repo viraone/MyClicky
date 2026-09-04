@@ -49,6 +49,7 @@ struct NumpadView: View {
         case gmail = "GMAIL"
         case spotify = "SPOTIFY"
         case whatsapp = "WHATSAPP"
+        case youtube = "YOUTUBE"
 
         var icon: String {
             switch self {
@@ -57,6 +58,7 @@ struct NumpadView: View {
             case .gmail: "envelope.fill"
             case .spotify: "music.note"
             case .whatsapp: "bubble.left.and.bubble.right.fill"
+            case .youtube: "play.rectangle.fill"
             }
         }
 
@@ -67,6 +69,7 @@ struct NumpadView: View {
             case .gmail: Snes.red
             case .spotify: Snes.spotify
             case .whatsapp: Snes.whatsapp
+            case .youtube: Snes.youtube
             }
         }
 
@@ -77,6 +80,7 @@ struct NumpadView: View {
             case .gmail: "Gmail mode — buttons control Gmail on your Mac"
             case .spotify: "Spotify mode — buttons control the Spotify app on your Mac"
             case .whatsapp: "WhatsApp mode — buttons control the WhatsApp app on your Mac"
+            case .youtube: "YouTube mode — buttons control the YouTube tab open in your browser"
             }
         }
     }
@@ -102,6 +106,7 @@ struct NumpadView: View {
                     case .gmail: gmailPad
                     case .spotify: spotifyPad
                     case .whatsapp: whatsappPad
+                    case .youtube: youtubePad
                     }
                 }
                 .frame(width: geo.size.width * 0.78)
@@ -957,6 +962,105 @@ struct NumpadView: View {
         }
     }
 
+    // MARK: - YouTube pad (controls the active YouTube tab in the browser)
+
+    private var youtubePad: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                Circle().fill(Snes.youtube).frame(width: 8, height: 8)
+                Text("YouTube")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                Text("in your browser")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.45))
+                Spacer()
+                Button {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    client.collapse()
+                    statusText = "Clicky toggled on your Mac — tap again to collapse / bring back"
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "sparkles").font(.system(size: 11, weight: .bold))
+                        Text("CLICKY")
+                            .font(.system(size: 11, weight: .black, design: .monospaced))
+                        Text("show / hide")
+                            .font(.system(size: 10, weight: .semibold, design: .rounded))
+                            .opacity(0.7)
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(
+                        Capsule().fill(LinearGradient(colors: [Snes.blue.lighter(0.25), Snes.blue],
+                                                      startPoint: .top, endPoint: .bottom))
+                    )
+                    .overlay(Capsule().strokeBorder(.white.opacity(0.2), lineWidth: 1))
+                    .shadow(color: Snes.blue.opacity(0.5), radius: 6, y: 2)
+                }
+                .buttonStyle(SpotifyPressStyle())
+            }
+            .padding(.horizontal, 4)
+
+            // Transport: skip back 10s · PLAY/PAUSE · skip forward 10s
+            HStack(spacing: 0) {
+                spotifyIcon("gobackward.10", size: 22) { youtubeTapped("SKIP_BACK") }
+                Spacer(minLength: 0)
+                Button { youtubeTapped("PLAYPAUSE") } label: {
+                    Image(systemName: "playpause.fill")
+                        .font(.system(size: 26, weight: .black))
+                        .foregroundStyle(.white)
+                        .frame(width: 66, height: 66)
+                        .background(Circle().fill(Snes.youtube))
+                        .shadow(color: Snes.youtube.opacity(0.55), radius: 12, y: 4)
+                }
+                .buttonStyle(SpotifyPressStyle())
+                Spacer(minLength: 0)
+                spotifyIcon("goforward.10", size: 22) { youtubeTapped("SKIP_FORWARD") }
+            }
+            .padding(.horizontal, 22)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(spotifyCard)
+
+            // Mute + Fullscreen
+            HStack(spacing: 8) {
+                spotifyTile("speaker.slash.fill", "Mute") { youtubeTapped("MUTE") }
+                spotifyTile("arrow.up.left.and.arrow.down.right", "Fullscreen") { youtubeTapped("FULLSCREEN") }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            // Like / Subscribe
+            HStack(spacing: 8) {
+                spotifyTile("hand.thumbsup.fill", "Like", accent: Snes.youtube) { youtubeTapped("LIKE") }
+                spotifyTile("bell.badge.fill", "Subscribe", accent: Snes.youtube) { youtubeTapped("SUBSCRIBE") }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 20)
+                .fill(LinearGradient(colors: [Color(red: 0.13, green: 0.13, blue: 0.14),
+                                              Color(red: 0.07, green: 0.07, blue: 0.08)],
+                                     startPoint: .top, endPoint: .bottom))
+                .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.white.opacity(0.08), lineWidth: 1))
+                .shadow(color: .black.opacity(0.35), radius: 6, y: 4)
+        )
+    }
+
+    private func youtubeTapped(_ command: String) {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        client.youtube(command)
+        switch command {
+        case "PLAYPAUSE": statusText = "YouTube — play / pause"
+        case "SKIP_FORWARD": statusText = "YouTube — skip forward 10s"
+        case "SKIP_BACK": statusText = "YouTube — skip back 10s"
+        case "FULLSCREEN": statusText = "YouTube — fullscreen toggled"
+        case "MUTE": statusText = "YouTube — mute toggled"
+        case "LIKE": statusText = "YouTube — liked"
+        case "SUBSCRIBE": statusText = "YouTube — subscribed"
+        default: break
+        }
+    }
+
     // MARK: - Header (slim status strip)
 
     private var header: some View {
@@ -1275,6 +1379,7 @@ enum Snes {
     static let blue = Color(red: 0.16, green: 0.30, blue: 0.72)
     static let spotify = Color(red: 0.11, green: 0.66, blue: 0.33)
     static let whatsapp = Color(red: 0.07, green: 0.55, blue: 0.40)
+    static let youtube = Color(red: 0.94, green: 0.13, blue: 0.13)
     static let talk = Color(red: 0.98, green: 0.55, blue: 0.05)
 }
 

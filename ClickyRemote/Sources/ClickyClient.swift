@@ -175,6 +175,7 @@ final class ClickyClient: ObservableObject {
     func capture() { send("CAPTURE") }
     func gmail(_ action: String) { send("GMAIL \(action)") }
     func spotify(_ action: String) { send("SPOTIFY \(action)") }
+    func youtube(_ action: String) { send("YOUTUBE \(action)") }
     func whatsapp(_ action: String) { send("WHATSAPP \(action)") }
     func browserReload() { send("BROWSER RELOAD") }
     func ask(_ question: String) { send("ASK \(question)") }

@@ -26,6 +26,9 @@ import Network
 ///                    playing track via Spotify's own context menu)
 ///   SPOTIFY ADD_TRACKS <playlist>\t<song>|<song>… – Web API: create the
 ///                    playlist if needed, search each song, append matches
+///   YOUTUBE <action> – control the active YouTube tab in the browser:
+///                    PLAYPAUSE, SKIP_FORWARD, SKIP_BACK, FULLSCREEN, MUTE,
+///                    LIKE, SUBSCRIBE
 ///   GMAIL TRASH_OPEN – trash the email open in the browser (confirm on Mac)
 ///   WHATSAPP OPEN_CHAT <name> – open the named chat in the WhatsApp desktop app
 ///   WHATSAPP TYPE_TEXT <text> – tidy the text and type it into the open chat (does not send)
@@ -65,6 +68,7 @@ final class RemoteControlService {
     var onTab: ((String) -> Void)?
     var onGmail: ((String) -> Void)?
     var onSpotify: ((String) -> Void)?
+    var onYouTube: ((String) -> Void)?
     var onWhatsApp: ((String) -> Void)?
     var onBrowserReload: (() -> Void)?
     var onCapture: (() -> Void)?
@@ -164,6 +168,8 @@ final class RemoteControlService {
             onGmail?(String(line.dropFirst(6)))
         } else if line.hasPrefix("SPOTIFY ") {
             onSpotify?(String(line.dropFirst(8)))
+        } else if line.hasPrefix("YOUTUBE ") {
+            onYouTube?(String(line.dropFirst(8)))
         } else if line.hasPrefix("WHATSAPP ") {
             onWhatsApp?(String(line.dropFirst(9)))
         } else if line.hasPrefix("PARTIAL ") {
