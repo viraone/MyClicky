@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 
 /// YouTube playback controls driven from the phone's YOUTUBE tab. Targets
 /// whichever running browser (Chrome/Safari/Arc/Edge/Brave) has an active
@@ -13,6 +14,17 @@ enum YouTubeActions {
     static func perform(_ action: String, status: @escaping (_ message: String, _ ok: Bool) -> Void) {
         guard let app = targetBrowser() else {
             status("No YouTube tab open in your browser.", false)
+            return
+        }
+        // Minimizing shouldn't bring the browser forward first — that would
+        // flash it to front right before it disappears into the Dock.
+        if action == "COLLAPSE" {
+            ActivityLog.recordAction("youtube-collapse")
+            if minimizeFrontWindow(of: app) {
+                status("YouTube — browser minimized", true)
+            } else {
+                status("Couldn't minimize the browser window.", false)
+            }
             return
         }
         app.activate(options: [.activateAllWindows])
@@ -68,5 +80,14 @@ enum YouTubeActions {
     /// The running browser whose active tab is a YouTube page.
     private static func targetBrowser() -> NSRunningApplication? {
         BrowserTabReader.runningBrowser(withTabMatching: { $0.contains("youtube.com") || $0.contains("youtu.be/") })
+    }
+
+    /// Minimizes the browser's frontmost window to the Dock via the
+    /// Accessibility API directly — no keystroke, so it doesn't need the
+    /// window focused or the app frontmost first.
+    private static func minimizeFrontWindow(of app: NSRunningApplication) -> Bool {
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        guard let window = AccessibilityFinder.windows(of: appElement).first else { return false }
+        return AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanTrue) == .success
     }
 }

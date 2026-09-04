@@ -28,7 +28,8 @@ import Network
 ///                    playlist if needed, search each song, append matches
 ///   YOUTUBE <action> – control the active YouTube tab in the browser:
 ///                    PLAYPAUSE, SKIP_FORWARD, SKIP_BACK, FULLSCREEN, MUTE,
-///                    LIKE, SUBSCRIBE
+///                    LIKE, SUBSCRIBE, COLLAPSE (minimize the browser window
+///                    to the Dock, without bringing it forward first)
 ///   GMAIL TRASH_OPEN – trash the email open in the browser (confirm on Mac)
 ///   WHATSAPP OPEN_CHAT <name> – open the named chat in the WhatsApp desktop app
 ///   WHATSAPP TYPE_TEXT <text> – tidy the text and type it into the open chat (does not send)

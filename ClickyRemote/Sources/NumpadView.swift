@@ -1034,6 +1034,12 @@ struct NumpadView: View {
                 spotifyTile("bell.badge.fill", "Subscribe", accent: Snes.youtube) { youtubeTapped("SUBSCRIBE") }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            // Collapse the browser window itself, out of the way, without pausing playback
+            HStack(spacing: 8) {
+                spotifyTile("arrow.down.right.and.arrow.up.left", "Collapse Browser") { youtubeTapped("COLLAPSE") }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .padding(10)
         .background(
@@ -1057,6 +1063,7 @@ struct NumpadView: View {
         case "MUTE": statusText = "YouTube — mute toggled"
         case "LIKE": statusText = "YouTube — liked"
         case "SUBSCRIBE": statusText = "YouTube — subscribed"
+        case "COLLAPSE": statusText = "YouTube — browser minimized"
         default: break
         }
     }
