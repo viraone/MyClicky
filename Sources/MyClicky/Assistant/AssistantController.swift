@@ -43,8 +43,12 @@ final class AssistantController {
         panel.state.captureURL = url
         copyPairToClipboard()
     }
-    /// True while the current listening session is dictation (⌥⌘V), not a question.
-    private var dictating = false
+    /// What the current listening session will do with what it hears.
+    private enum RecordKind { case ask, dictate, talk }
+    private var recordKind: RecordKind = .ask
+    /// The app a Talk command should act on, captured when recording starts —
+    /// Clicky's own panel is non-activating, so this stays the real target.
+    private var talkTargetApp: NSRunningApplication?
     /// The screen rect of the last highlight ring, so "click it" knows the target.
     private var lastHighlightRect: CGRect?
     /// Confirmations a DO plan is waiting on, keyed by id — resolved by
@@ -55,6 +59,9 @@ final class AssistantController {
     func start() {
         panel.state.onSubmit = { [weak self] text in
             self?.handleQuestion(text)
+        }
+        panel.state.onDo = { [weak self] text in
+            self?.handleDo(text, targetApp: NSWorkspace.shared.frontmostApplication)
         }
         panel.state.onStop = { [weak self] in self?.stop() }
         panel.state.onCopyAgain = { [weak self] in self?.copyPairToClipboard() }
@@ -68,7 +75,7 @@ final class AssistantController {
         hotkey.onHoldBegan = { [weak self] in self?.beginListening() }
         hotkey.onHoldEnded = { [weak self] in self?.endListening() }
         hotkey.start()
-        dictationHotkey.onHoldBegan = { [weak self] in self?.beginListening(dictation: true) }
+        dictationHotkey.onHoldBegan = { [weak self] in self?.beginListening(kind: .dictate) }
         dictationHotkey.onHoldEnded = { [weak self] in self?.endListening() }
         dictationHotkey.start()
 
@@ -262,9 +269,9 @@ final class AssistantController {
             // read and act on Clicky's own UI instead of the intended app.
             let targetApp = NSWorkspace.shared.frontmostApplication
             self.showPanel()
-            // DO always answers on the Ask tab; force it so the result is
-            // actually visible even if the panel was left on Capture+Dictate.
-            self.panel.state.tab = .ask
+            // DO always answers on the Talk tab; force it so the result is
+            // actually visible even if the panel was left on another tab.
+            self.panel.state.tab = .talk
             self.panel.state.transcript = utterance
             self.handleDo(utterance, targetApp: targetApp)
         }
@@ -305,15 +312,20 @@ final class AssistantController {
 
     // MARK: - Voice flow
 
-    private func beginListening(dictation: Bool = false) {
+    private func beginListening(kind: RecordKind = .ask) {
         guard !busy else { return }
-        dictating = dictation
+        recordKind = kind
+        if kind == .talk { talkTargetApp = NSWorkspace.shared.frontmostApplication }
         let cursor = NSEvent.mouseLocation
         let screen = NSScreen.screens.first(where: { NSMouseInRect(cursor, $0.frame, false) }) ?? NSScreen.main
         guard let screen else { return }
         activeScreen = screen
 
-        panel.state.tab = dictation ? .captureDictate : .ask
+        panel.state.tab = switch kind {
+        case .ask: .ask
+        case .dictate: .captureDictate
+        case .talk: .talk
+        }
         panel.state.status = .listening
         panel.state.transcript = ""
         panel.state.answer = ""
@@ -339,24 +351,29 @@ final class AssistantController {
 
     private func endListening() {
         guard panel.state.status == .listening else { return }
-        let wasDictating = dictating
-        dictating = false
+        let kind = recordKind
+        let target = talkTargetApp
+        recordKind = .ask
         Task {
             let heard = await speech.finish()
             if heard.isEmpty {
                 if panel.state.errorText == nil {
                     panel.state.status = .idle
-                    panel.state.transcript = wasDictating
+                    // Goes in errorText, not transcript: the Capture + Dictate
+                    // tab only shows transcript while actively listening, so a
+                    // message left there would be silently masked by whatever
+                    // stale dictation/answer was already on screen.
+                    panel.state.errorText = kind == .dictate
                         ? "Didn't catch that — hold ⌥⌘V and speak."
                         : "Didn't catch that — try again, or type below."
                 }
                 return
             }
             panel.state.transcript = heard
-            if wasDictating {
-                finishDictation(heard)
-            } else {
-                handleQuestion(heard)
+            switch kind {
+            case .dictate: finishDictation(heard)
+            case .ask: handleQuestion(heard)
+            case .talk: handleDo(heard, targetApp: target)
             }
         }
     }
@@ -364,25 +381,29 @@ final class AssistantController {
     // MARK: - Dictation to clipboard (⌥⌘V)
 
     /// Mic button: first click starts recording, second click stops it and
-    /// finishes the recording (no hold required) — a question on the Ask
-    /// tab, a dictation on Capture + Dictate.
+    /// finishes the recording (no hold required) — a question on the Ask tab,
+    /// a dictation on Capture + Dictate, a command to carry out on Talk.
     private func toggleRecording() {
-        let dictation = panel.state.tab == .captureDictate
+        let kind: RecordKind = switch panel.state.tab {
+        case .ask: .ask
+        case .captureDictate: .dictate
+        case .talk: .talk
+        }
         if panel.state.status == .listening {
-            if dictating == dictation {
+            if recordKind == kind {
                 endListening()
             } else {
                 // A different kind of recording is already in flight (started
-                // via the other tab's mic or a hotkey) — cancel it rather
+                // via another tab's mic or a hotkey) — cancel it rather
                 // than finalize it as the wrong kind.
                 stop()
             }
         } else if panel.state.status == .thinking {
             // Cancel any in-flight cleanup/answer and start a fresh recording.
             stop()
-            beginListening(dictation: dictation)
+            beginListening(kind: kind)
         } else {
-            beginListening(dictation: dictation)
+            beginListening(kind: kind)
         }
     }
 
@@ -514,7 +535,7 @@ final class AssistantController {
                     lastHighlightRect = rect
                     ring.show(over: rect)
                 }
-                if panel.state.readRepliesAloud { speak(answer.text) }
+                if !panel.state.textOnlyMode { speak(answer.text) }
             } catch {
                 // Stopped by the user — the panel was already reset in stop().
                 guard id == requestID, !Task.isCancelled else { return }
@@ -938,7 +959,7 @@ final class AssistantController {
     }
 
     /// Reads the current answer aloud on tap of the "Read aloud" button —
-    /// works regardless of `readRepliesAloud`, so muted users can still hear
+    /// works regardless of `textOnlyMode`, so text-only users can still hear
     /// a specific reply on demand.
     private func replayAnswer() {
         guard !panel.state.answer.isEmpty else { return }
