@@ -54,6 +54,8 @@ import Network
 ///   WHATSAPP_STATUS OK|FAIL\t<message> – outcome of the last WHATSAPP command
 ///   YOUTUBE_STATE COLLAPSED|EXPANDED – resulting state of the last
 ///                    YOUTUBE COLLAPSE toggle
+///   GMAIL_UNREAD <n>          – Gmail's unread count changed (read from its
+///                    tab title; 0 = cleared, or no Gmail tab open right now)
 ///   CAPTURE        – start the ⌃⌥X drag-to-select region capture
 ///   ASK <question> – submit a question exactly as if typed in the panel
 ///   DICTATE <text> – treat text as finished dictation (clipboard, paired with

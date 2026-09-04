@@ -162,6 +162,52 @@ enum BrowserTabReader {
         return nil
     }
 
+    /// Title of the first open tab, in any window of any running supported
+    /// browser, whose URL contains `needle` — unlike everything else here,
+    /// this doesn't require that tab to be the active one. Used to read
+    /// Gmail's tab title (which encodes the unread count, e.g.
+    /// "Inbox (4) - name@gmail.com - Gmail") without needing that tab
+    /// frontmost.
+    static func firstTabTitle(urlContains needle: String) -> String? {
+        let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
+        for (bundleID, script) in tabScanScripts(urlContains: needle) where running.contains(bundleID) {
+            if let title = run(script: script), !title.isEmpty { return title }
+        }
+        return nil
+    }
+
+    private static func tabScanScripts(urlContains needle: String) -> [(bundleID: String, script: String)] {
+        func chromiumScript(_ app: String) -> String {
+            #"""
+            tell application "\#(app)"
+                repeat with w in windows
+                    repeat with t in tabs of w
+                        if (URL of t contains "\#(needle)") then return title of t
+                    end repeat
+                end repeat
+            end tell
+            return ""
+            """#
+        }
+        let safariScript = #"""
+        tell application "Safari"
+            repeat with w in windows
+                repeat with t in tabs of w
+                    if (URL of t contains "\#(needle)") then return name of t
+                end repeat
+            end repeat
+        end tell
+        return ""
+        """#
+        return [
+            ("com.google.Chrome", chromiumScript("Google Chrome")),
+            ("com.apple.Safari", safariScript),
+            ("company.thebrowser.Browser", chromiumScript("Arc")),
+            ("com.microsoft.edgemac", chromiumScript("Microsoft Edge")),
+            ("com.brave.Browser", chromiumScript("Brave Browser")),
+        ]
+    }
+
     private static func run(script source: String) -> String? {
         var error: NSDictionary?
         guard let script = NSAppleScript(source: source) else { return nil }

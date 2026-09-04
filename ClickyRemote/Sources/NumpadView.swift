@@ -207,9 +207,14 @@ struct NumpadView: View {
                     unreadBadge(client.whatsappUnread)
                         .offset(x: 4, y: -6)
                         .transition(.scale.combined(with: .opacity))
+                } else if m == .gmail, client.gmailUnread > 0 {
+                    unreadBadge(client.gmailUnread)
+                        .offset(x: 4, y: -6)
+                        .transition(.scale.combined(with: .opacity))
                 }
             }
             .animation(.spring(response: 0.3, dampingFraction: 0.6), value: client.whatsappUnread)
+            .animation(.spring(response: 0.3, dampingFraction: 0.6), value: client.gmailUnread)
         }
     }
 

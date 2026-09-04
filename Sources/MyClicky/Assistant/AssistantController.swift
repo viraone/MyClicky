@@ -21,6 +21,7 @@ final class AssistantController {
     private let toast = ToastController()
     private let remote = RemoteControlService()
     private let whatsappUnread = WhatsAppUnreadWatcher()
+    private let gmailUnread = GmailUnreadWatcher()
 
     private var activeScreen: NSScreen?
     private var busy = false
@@ -271,12 +272,17 @@ final class AssistantController {
         }
         remote.onRead = { [weak self] in self?.handleReadScreen() }
         remote.greeting = { [weak self] in
-            ["WHATSAPP_UNREAD \(self?.whatsappUnread.count ?? 0)"]
+            ["WHATSAPP_UNREAD \(self?.whatsappUnread.count ?? 0)",
+             "GMAIL_UNREAD \(self?.gmailUnread.count ?? 0)"]
         }
         whatsappUnread.onChange = { [weak self] count in
             self?.remote.broadcast("WHATSAPP_UNREAD \(count)")
         }
         whatsappUnread.start()
+        gmailUnread.onChange = { [weak self] count in
+            self?.remote.broadcast("GMAIL_UNREAD \(count)")
+        }
+        gmailUnread.start()
         remote.start()
         ActivityLog.startSampling()
     }

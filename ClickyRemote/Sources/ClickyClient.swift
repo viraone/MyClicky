@@ -15,6 +15,8 @@ final class ClickyClient: ObservableObject {
     @Published var status: Status = .searching
     /// WhatsApp's unread count on the Mac (from its Dock badge). 0 = none.
     @Published var whatsappUnread = 0
+    /// Gmail's unread count on the Mac (from its browser tab title). 0 = none.
+    @Published var gmailUnread = 0
     /// Outcome of the last WhatsApp command as reported by the Mac.
     var onWhatsAppStatus: ((_ message: String, _ ok: Bool) -> Void)?
     /// Whether the browser window playing YouTube is currently minimized —
@@ -96,6 +98,8 @@ final class ClickyClient: ObservableObject {
                         buffer = String(buffer[buffer.index(after: newline)...])
                         if line.hasPrefix("WHATSAPP_UNREAD ") {
                             self.whatsappUnread = Int(line.dropFirst(16).trimmingCharacters(in: .whitespaces)) ?? 0
+                        } else if line.hasPrefix("GMAIL_UNREAD ") {
+                            self.gmailUnread = Int(line.dropFirst(13).trimmingCharacters(in: .whitespaces)) ?? 0
                         } else if line.hasPrefix("WHATSAPP_STATUS ") {
                             let parts = line.dropFirst(16).split(separator: "\t", maxSplits: 1).map(String.init)
                             if parts.count == 2 { self.onWhatsAppStatus?(parts[1], parts[0] == "OK") }
