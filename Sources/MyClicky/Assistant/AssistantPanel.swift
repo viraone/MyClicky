@@ -52,6 +52,12 @@ final class AssistantState: ObservableObject {
     @Published var captureURL: URL?
     /// True while Clicky is reading an answer aloud.
     @Published var isSpeaking = false
+    /// Whether Clicky reads its Ask-tab replies aloud (⌥⌘C questions land here
+    /// too). Persisted so the choice sticks between launches.
+    @Published var readRepliesAloud: Bool = UserDefaults.standard.object(forKey: AssistantState.readRepliesAloudKey) as? Bool ?? true {
+        didSet { UserDefaults.standard.set(readRepliesAloud, forKey: AssistantState.readRepliesAloudKey) }
+    }
+    private static let readRepliesAloudKey = "assistantReadRepliesAloud"
     /// True whenever a request is in flight or speech is playing — i.e. when
     /// the Stop button should be shown.
     var canStop: Bool { status == .thinking || status == .listening || isSpeaking }
@@ -59,9 +65,11 @@ final class AssistantState: ObservableObject {
     var onStop: (() -> Void)?
     /// Re-copies the current capture + dictation pair to the clipboard.
     var onCopyAgain: (() -> Void)?
-    /// Mic button on the Capture + Dictate tab: starts recording, or stops
-    /// and finishes the dictation if already recording.
-    var onToggleDictation: (() -> Void)?
+    /// Reads the current answer aloud on demand, regardless of `readRepliesAloud`.
+    var onReadAloud: (() -> Void)?
+    /// Mic button: starts recording (a question on the Ask tab, a dictation
+    /// on Capture + Dictate), or stops and finishes it if already recording.
+    var onToggleRecording: (() -> Void)?
     var onDismiss: (() -> Void)?
     var onMinimize: (() -> Void)?
     var onRestore: (() -> Void)?
@@ -560,14 +568,13 @@ struct AssistantPanelView: View {
         .padding(.top, 4)
     }
 
-    /// Mic in the bottom bar. On the Capture + Dictate tab it's a toggle:
-    /// click to start recording, click again to stop and finish the dictation.
-    /// On the Ask tab it's a passive status indicator.
+    /// Mic in the bottom bar: click to start recording, click again to stop.
+    /// On the Ask tab that records a question; on Capture + Dictate it
+    /// records a dictation. (⌥⌘C / ⌥⌘V still work as system-wide shortcuts.)
     private var micIndicator: some View {
         let listening = state.status == .listening
-        let toggleable = state.tab == .captureDictate
         return Button {
-            state.onToggleDictation?()
+            state.onToggleRecording?()
         } label: {
             Image(systemName: listening ? "waveform" : "mic")
                 .font(.system(size: 13, weight: .medium))
@@ -575,16 +582,40 @@ struct AssistantPanelView: View {
                 .symbolEffect(.pulse, isActive: listening)
                 .frame(width: 28, height: 28)
                 .background(
-                    Circle().fill(listening
-                        ? Color.red.opacity(0.2)
-                        : (toggleable ? Color.white.opacity(0.08) : .clear))
+                    Circle().fill(listening ? Color.red.opacity(0.2) : Color.white.opacity(0.08))
                 )
         }
         .buttonStyle(.plain)
-        .disabled(!toggleable)
-        .help(toggleable
-              ? (listening ? "Stop recording" : "Start dictation")
-              : "Hold ⌥⌘C to ask by voice")
+        .help(listening
+              ? "Stop recording"
+              : (state.tab == .ask ? "Ask by voice" : "Start dictation"))
+    }
+
+    /// Labeled toggle in the bottom bar: on the Ask tab, switches whether
+    /// Clicky reads its replies aloud (on by default, matching the ⌥⌘C flow).
+    private var readAloudToggle: some View {
+        Button {
+            state.readRepliesAloud.toggle()
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: state.readRepliesAloud ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                Text("Read Response")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+            }
+            .foregroundStyle(state.readRepliesAloud ? state.status.dotColor.opacity(0.9) : .white.opacity(0.4))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(
+                Capsule().fill(state.readRepliesAloud
+                    ? Color.white.opacity(0.12)
+                    : Color.white.opacity(0.03))
+            )
+        }
+        .buttonStyle(.plain)
+        .help(state.readRepliesAloud
+              ? "Reading replies aloud — click to switch to text only"
+              : "Text only — click to have Clicky read replies aloud")
     }
 
     private var bottomBar: some View {
@@ -617,6 +648,9 @@ struct AssistantPanelView: View {
                         endPoint: .trailing
                     )
                 )
+            if state.tab == .ask {
+                readAloudToggle
+            }
             micIndicator
             // While dictating on the Capture tab the mic itself is the stop
             // control, so the red Stop button (which would discard the
@@ -734,15 +768,37 @@ struct AssistantPanelView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         } else if !state.answer.isEmpty {
-            ScrollView {
-                Text(state.answer)
-                    .font(.system(size: 13.5, weight: .regular, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.94))
-                    .lineSpacing(3.5)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 4) {
+                if state.status == .answering {
+                    HStack {
+                        Spacer()
+                        replayButton
+                    }
+                }
+                ScrollView {
+                    Text(state.answer)
+                        .font(.system(size: 13.5, weight: .regular, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.94))
+                        .lineSpacing(3.5)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
         }
+    }
+
+    /// Lets the user hear the current answer again — the only way to hear it
+    /// at all when "read replies aloud" is switched off.
+    private var replayButton: some View {
+        Button {
+            state.onReadAloud?()
+        } label: {
+            Label(state.isSpeaking ? "Reading…" : "Read aloud", systemImage: state.isSpeaking ? "waveform" : "speaker.wave.2")
+                .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.cyan)
+        .help("Read this answer aloud")
     }
 
     private func submit() {

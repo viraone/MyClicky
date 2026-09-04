@@ -58,7 +58,8 @@ final class AssistantController {
         }
         panel.state.onStop = { [weak self] in self?.stop() }
         panel.state.onCopyAgain = { [weak self] in self?.copyPairToClipboard() }
-        panel.state.onToggleDictation = { [weak self] in self?.toggleDictation() }
+        panel.state.onReadAloud = { [weak self] in self?.replayAnswer() }
+        panel.state.onToggleRecording = { [weak self] in self?.toggleRecording() }
         panel.onHide = { [weak self] in self?.stop() }
         synthesizer.delegate = speechDelegate
         speechDelegate.onSpeakingChanged = { [weak self] speaking in
@@ -362,21 +363,26 @@ final class AssistantController {
 
     // MARK: - Dictation to clipboard (⌥⌘V)
 
-    /// Mic button on the Capture + Dictate tab: first click starts recording,
-    /// second click stops it and finishes the dictation (no hold required).
-    private func toggleDictation() {
+    /// Mic button: first click starts recording, second click stops it and
+    /// finishes the recording (no hold required) — a question on the Ask
+    /// tab, a dictation on Capture + Dictate.
+    private func toggleRecording() {
+        let dictation = panel.state.tab == .captureDictate
         if panel.state.status == .listening {
-            if dictating {
+            if dictating == dictation {
                 endListening()
             } else {
+                // A different kind of recording is already in flight (started
+                // via the other tab's mic or a hotkey) — cancel it rather
+                // than finalize it as the wrong kind.
                 stop()
             }
         } else if panel.state.status == .thinking {
-            // Cancel any in-flight cleanup/answer and start a fresh dictation.
+            // Cancel any in-flight cleanup/answer and start a fresh recording.
             stop()
-            beginListening(dictation: true)
+            beginListening(dictation: dictation)
         } else {
-            beginListening(dictation: true)
+            beginListening(dictation: dictation)
         }
     }
 
@@ -508,7 +514,7 @@ final class AssistantController {
                     lastHighlightRect = rect
                     ring.show(over: rect)
                 }
-                speak(answer.text)
+                if panel.state.readRepliesAloud { speak(answer.text) }
             } catch {
                 // Stopped by the user — the panel was already reset in stop().
                 guard id == requestID, !Task.isCancelled else { return }
@@ -929,6 +935,15 @@ final class AssistantController {
     private func fail(_ message: String) {
         panel.state.status = .idle
         panel.state.errorText = message
+    }
+
+    /// Reads the current answer aloud on tap of the "Read aloud" button —
+    /// works regardless of `readRepliesAloud`, so muted users can still hear
+    /// a specific reply on demand.
+    private func replayAnswer() {
+        guard !panel.state.answer.isEmpty else { return }
+        synthesizer.stopSpeaking(at: .immediate)
+        speak(panel.state.answer)
     }
 
     private func speak(_ text: String) {
