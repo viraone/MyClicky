@@ -5,3 +5,4 @@ xcuserdata/
 *.xcuserstate
 *.png
 ClickyLogs/data.js
+.swiftpm/

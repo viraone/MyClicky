@@ -19,6 +19,8 @@ final class ClickyClient: ObservableObject {
     @Published var gmailUnread = 0
     /// Outcome of the last WhatsApp command as reported by the Mac.
     var onWhatsAppStatus: ((_ message: String, _ ok: Bool) -> Void)?
+    /// Outcome of the last SAVE_PHOTO command as reported by the Mac.
+    var onSavePhotoStatus: ((_ message: String, _ ok: Bool) -> Void)?
     /// Whether the browser window playing YouTube is currently minimized —
     /// drives the Collapse/Expand label on the YouTube pad.
     @Published var youtubeCollapsed = false
@@ -103,6 +105,9 @@ final class ClickyClient: ObservableObject {
                         } else if line.hasPrefix("WHATSAPP_STATUS ") {
                             let parts = line.dropFirst(16).split(separator: "\t", maxSplits: 1).map(String.init)
                             if parts.count == 2 { self.onWhatsAppStatus?(parts[1], parts[0] == "OK") }
+                        } else if line.hasPrefix("SAVE_PHOTO_STATUS ") {
+                            let parts = line.dropFirst(18).split(separator: "\t", maxSplits: 1).map(String.init)
+                            if parts.count == 2 { self.onSavePhotoStatus?(parts[1], parts[0] == "OK") }
                         } else if line.hasPrefix("YOUTUBE_STATE ") {
                             self.youtubeCollapsed = line.dropFirst(14).trimmingCharacters(in: .whitespaces) == "COLLAPSED"
                         } else if line.hasPrefix("STATUS ") {
@@ -186,6 +191,7 @@ final class ClickyClient: ObservableObject {
     func spotify(_ action: String) { send("SPOTIFY \(action)") }
     func youtube(_ action: String) { send("YOUTUBE \(action)") }
     func whatsapp(_ action: String) { send("WHATSAPP \(action)") }
+    func savePhoto(_ base64JPEG: String) { send("SAVE_PHOTO \(base64JPEG)") }
     func browserReload() { send("BROWSER RELOAD") }
     func ask(_ question: String) { send("ASK \(question)") }
     func dictate(_ text: String) { send("DICTATE \(text)") }

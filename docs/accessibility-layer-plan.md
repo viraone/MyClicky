@@ -70,6 +70,11 @@ email, and book a calendar event in under 60 seconds.
       transient, and couldn't be located reliably from a screenshot across
       ~15 attempts. Now handled by `CalendarActions` via EventKit, exposed as
       a `create_event` planner verb. Verified: "call Verizon" 4-5PM created.
+- [x] Editing an event goes the same way, for the same reason: the event
+      inspector is another popover the AX tree can't reach. `update_event`
+      finds the event by title and/or start time on that day and changes its
+      name/time through EventKit — "rename my 4 PM event to working at
+      Safeway". Moving only the start keeps the event's existing length.
 - [x] Vision fallback exercised for real — and it found three genuine bugs it
       was masking (see below)
 - [ ] "What does it say?" (`READ`) hasn't been tried on-device yet

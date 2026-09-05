@@ -27,10 +27,10 @@ enum AssistantTab: String, CaseIterable {
     /// Region captures and dictation share one tab; both land on the clipboard together.
     /// Listed first so it's the default, leftmost tab.
     case captureDictate = "Capture + Dictate"
-    case ask = "Ask"
+    case ask = "Ask / Question Only"
     /// Voice/typed commands Clicky *acts on* (e.g. "create a calendar event
     /// at 2pm"), same plan-and-do flow as the phone's TALK button.
-    case talk = "Talk"
+    case talk = "Talk / Request"
 
     var icon: String {
         switch self {
@@ -66,6 +66,10 @@ enum PanelResizeCorner: Equatable {
     }
 }
 
+/// Which version of a screen capture — as originally grabbed, or after the
+/// user edited it in an external app like Preview — rides on the clipboard.
+enum CaptureClipboardChoice { case original, edited }
+
 @MainActor
 final class AssistantState: ObservableObject {
     @Published var status: AssistantStatus = .idle
@@ -79,6 +83,17 @@ final class AssistantState: ObservableObject {
     /// Last region capture (saved to disk; on the clipboard, paired with the dictation if any).
     @Published var captureImage: NSImage?
     @Published var captureURL: URL?
+    /// Reloaded from disk when the saved capture is edited in an external
+    /// app (e.g. Preview.app's markup arrow) after being saved — nil until
+    /// the file actually changes.
+    @Published var editedCaptureImage: NSImage?
+    /// Which version is on the clipboard once there are two to choose from.
+    /// Defaults to the edited one, since that's what the user just changed.
+    @Published var clipboardChoice: CaptureClipboardChoice = .edited
+    /// The version that should actually ride the clipboard right now.
+    var imageForClipboard: NSImage? {
+        clipboardChoice == .edited ? (editedCaptureImage ?? captureImage) : captureImage
+    }
     /// True while Clicky is reading an answer aloud.
     @Published var isSpeaking = false
     /// Whether the Ask tab shows replies as text instead of speaking them
@@ -101,6 +116,9 @@ final class AssistantState: ObservableObject {
     var onStop: (() -> Void)?
     /// Re-copies the current capture + dictation pair to the clipboard.
     var onCopyAgain: (() -> Void)?
+    /// Dismisses the capture preview (the file on disk is untouched) and
+    /// stops watching it for external edits.
+    var onDismissCapture: (() -> Void)?
     /// Reads the current answer aloud on demand, regardless of `textOnlyMode`.
     var onReadAloud: (() -> Void)?
     /// Mic button: starts recording (a question on the Ask tab, a dictation
@@ -629,38 +647,59 @@ struct AssistantPanelView: View {
     private var captureColumn: some View {
         VStack(spacing: 6) {
             if let image = state.captureImage {
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .overlay(RoundedRectangle(cornerRadius: 8)
-                        .strokeBorder(Color.white.opacity(0.2), lineWidth: 1))
-                    .onTapGesture {
-                        if let url = state.captureURL { NSWorkspace.shared.open(url) }
-                    }
-                    .overlay(alignment: .topTrailing) {
-                        // Dismisses the preview only — the file already
-                        // saved to disk (VIRADETH_RESUME) is untouched.
-                        Button {
-                            state.captureImage = nil
-                            state.captureURL = nil
-                        } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 9, weight: .bold))
-                                .foregroundStyle(.white)
-                                .frame(width: 18, height: 18)
-                                .background(Circle().fill(Color.black.opacity(0.55)))
-                                .overlay(Circle().strokeBorder(Color.white.opacity(0.25), lineWidth: 1))
+                Group {
+                    if let edited = state.editedCaptureImage {
+                        HStack(spacing: 10) {
+                            capturePreviewThumbnail(
+                                image: image, title: "Original", fileName: state.captureURL?.lastPathComponent,
+                                isSelected: state.clipboardChoice == .original,
+                                help: "The capture as originally grabbed, kept in memory — saving in Preview doesn't touch this.",
+                                onOpen: nil,
+                                onSelect: { selectClipboardChoice(.original) }
+                            )
+                            capturePreviewThumbnail(
+                                image: edited, title: "Edited", fileName: state.captureURL?.lastPathComponent,
+                                isSelected: state.clipboardChoice == .edited,
+                                help: "Reloaded from disk after your changes were saved in Preview. Click to reopen it.",
+                                onOpen: { if let url = state.captureURL { NSWorkspace.shared.open(url) } },
+                                onSelect: { selectClipboardChoice(.edited) }
+                            )
                         }
-                        .buttonStyle(.plain)
-                        .padding(6)
-                        .help("Dismiss preview (file is still saved)")
+                    } else {
+                        Image(nsImage: image)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .overlay(RoundedRectangle(cornerRadius: 8)
+                                .strokeBorder(Color.white.opacity(0.2), lineWidth: 1))
+                            .onTapGesture {
+                                if let url = state.captureURL { NSWorkspace.shared.open(url) }
+                            }
                     }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .overlay(alignment: .topTrailing) {
+                    // Dismisses the preview only — the file already
+                    // saved to disk (VIRADETH_RESUME) is untouched.
+                    Button {
+                        state.onDismissCapture?()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 18, height: 18)
+                            .background(Circle().fill(Color.black.opacity(0.55)))
+                            .overlay(Circle().strokeBorder(Color.white.opacity(0.25), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(6)
+                    .help("Dismiss preview (file is still saved)")
+                }
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(.green)
-                    Text("\(state.captureURL?.lastPathComponent ?? "Saved") — on your clipboard, click to open")
+                    Text(captureStatusText)
                         .font(.system(size: 11, design: .rounded))
                         .foregroundStyle(.white.opacity(0.6))
                         .lineLimit(1)
@@ -679,6 +718,63 @@ struct AssistantPanelView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// One thumbnail in the original/edited pair, with a checkbox beneath it
+    /// selecting which version rides the clipboard. `onOpen` is nil for the
+    /// original, which has no file of its own to reopen once Preview has
+    /// overwritten the capture on disk with the edited version.
+    private func capturePreviewThumbnail(
+        image: NSImage, title: String, fileName: String?, isSelected: Bool, help: String,
+        onOpen: (() -> Void)?, onSelect: @escaping () -> Void
+    ) -> some View {
+        VStack(spacing: 4) {
+            Image(nsImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(isSelected ? Color.cyan.opacity(0.7) : Color.white.opacity(0.2),
+                                  lineWidth: isSelected ? 2 : 1))
+                .contentShape(Rectangle())
+                .onTapGesture { onOpen?() }
+                .help(help)
+            Button(action: onSelect) {
+                HStack(spacing: 6) {
+                    Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(isSelected ? .cyan : .white.opacity(0.4))
+                    Text(title)
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.8))
+                }
+            }
+            .buttonStyle(.plain)
+            .help("Use this version for the clipboard")
+            if let fileName {
+                Text(fileName)
+                    .font(.system(size: 10, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .lineLimit(1)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Selects which version (original vs. edited) rides the clipboard, and
+    /// re-copies immediately so the choice takes effect right away.
+    private func selectClipboardChoice(_ choice: CaptureClipboardChoice) {
+        state.clipboardChoice = choice
+        state.onCopyAgain?()
+    }
+
+    private var captureStatusText: String {
+        guard state.editedCaptureImage != nil else {
+            return "\(state.captureURL?.lastPathComponent ?? "Saved") — on your clipboard, click to open"
+        }
+        let which = state.clipboardChoice == .edited ? "Edited version" : "Original"
+        return "\(which) on your clipboard — click the Edited thumbnail to reopen in Preview"
     }
 
     // Claude-style: big input field on top, mic status at top-right.

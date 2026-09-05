@@ -31,6 +31,11 @@ struct NumpadView: View {
     @State private var showingTextCompose = false
     @State private var textComposeChat: WhatsAppChat = .test
     @State private var textDraft = ""
+    /// Quick-save state: send a photo straight to the Mac's Desktop, no chat involved.
+    @State private var desktopPickerShown = false
+    @State private var desktopPick: PhotosPickerItem?
+    @State private var desktopCameraShown = false
+    @State private var savingToDesktop = false
 
     struct WhatsAppChat: Equatable {
         let label: String
@@ -46,6 +51,9 @@ struct NumpadView: View {
     @AppStorage("spotifyPlaylist") private var spotifyPlaylist = "Playlist 2027"
     @State private var editingPlaylist = false
     @State private var playlistDraft = ""
+    /// The pending single-tap Open, held back until the double-tap window
+    /// closes; a second tap cancels it and sends Quit instead.
+    @State private var youtubeOpenTap: DispatchWorkItem?
 
     enum RemoteMode: String, CaseIterable {
         case talk = "TALK"
@@ -93,7 +101,11 @@ struct NumpadView: View {
         GeometryReader { geo in
             HStack(alignment: .top, spacing: 12) {
                 VStack(spacing: 8) {
+                    // Sits below the top edge rather than flush against it,
+                    // so the status line reads as its own thing instead of
+                    // running into the mode column.
                     header
+                        .padding(.top, 40)
                     modeTabs
                         .frame(maxHeight: .infinity)
                     Text("SUPER CLICKY\nENTERTAINMENT SYSTEM")
@@ -133,6 +145,11 @@ struct NumpadView: View {
                 statusText = (ok ? "✓ " : "⚠︎ ") + message
                 if !ok { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
             }
+            client.onSavePhotoStatus = { message, ok in
+                guard mode == .whatsapp else { return }
+                statusText = (ok ? "✓ " : "⚠︎ ") + message
+                if !ok { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
+            }
             client.start()
             permissionDenied = !(await SpeechRecorder.requestPermissions())
         }
@@ -145,7 +162,16 @@ struct NumpadView: View {
     // MARK: - Mode tabs (cartridge selector)
 
     /// Entries in the scrolling mode wheel: the Refresh action plus every mode.
-    private var wheelEntries: [String] { ["REFRESH"] + RemoteMode.allCases.map(\.rawValue) }
+    /// REFRESH and REMOTE swap places so REMOTE sits at the top, within easy
+    /// thumb reach, since it's the mode used most.
+    private var wheelEntries: [String] {
+        var entries = ["REFRESH"] + RemoteMode.allCases.map(\.rawValue)
+        if let refreshIndex = entries.firstIndex(of: "REFRESH"),
+           let remoteIndex = entries.firstIndex(of: RemoteMode.remote.rawValue) {
+            entries.swapAt(refreshIndex, remoteIndex)
+        }
+        return entries
+    }
 
     private var modeTabs: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -452,6 +478,32 @@ struct NumpadView: View {
 
     private var whatsappPad: some View {
         VStack(spacing: 10) {
+            padSection(title: "DESKTOP", subtitle: "Skip WhatsApp — send a photo straight to your Mac's Desktop") {
+                HStack(spacing: 8) {
+                    padButton(icon: savingToDesktop ? "arrow.up.circle.dotted" : "photo.on.rectangle.angled",
+                              title: savingToDesktop ? "Saving…" : "Photos",
+                              hint: "Pick from Photos — saved to your Mac's Desktop",
+                              tint: Snes.whatsapp) { desktopPhotoTapped() }
+                        .disabled(savingToDesktop)
+                    padButton(icon: "camera.fill", title: "Camera",
+                              hint: "Snap a photo — saved to your Mac's Desktop", tint: Snes.whatsapp) { desktopCameraTapped() }
+                        .disabled(savingToDesktop)
+                }
+            }
+            .photosPicker(isPresented: $desktopPickerShown, selection: $desktopPick,
+                          matching: .images, photoLibrary: .shared())
+            .fullScreenCover(isPresented: $desktopCameraShown) {
+                CameraCapture { image in
+                    desktopCameraShown = false
+                    guard let image else { return }
+                    Task { await sendPhotoToDesktop(image) }
+                }
+                .ignoresSafeArea()
+            }
+            .onChange(of: desktopPick) { _, item in
+                guard let item else { return }
+                Task { await sendPhotoToDesktop(item) }
+            }
             padSection(title: "CHATS", subtitle: "Open → Reply (speak, tap again to stop) → check it → Send · Photo attaches from your library") {
                 VStack(spacing: 8) {
                     whatsappRow(.test)
@@ -618,6 +670,49 @@ struct NumpadView: View {
             image.draw(in: CGRect(origin: .zero, size: size))
         }
         return resized.jpegData(compressionQuality: 0.85)
+    }
+
+    private func desktopPhotoTapped() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        desktopPick = nil
+        desktopPickerShown = true
+    }
+
+    private func desktopCameraTapped() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        guard UIImagePickerController.isSourceTypeAvailable(.camera) else {
+            statusText = "No camera available on this device"
+            return
+        }
+        desktopCameraShown = true
+    }
+
+    /// Loads the picked photo and ships it to the Mac, which writes it
+    /// straight to the Desktop — no WhatsApp relay needed.
+    private func sendPhotoToDesktop(_ item: PhotosPickerItem) async {
+        desktopPick = nil
+        guard let data = try? await item.loadTransferable(type: Data.self),
+              let image = UIImage(data: data) else {
+            UINotificationFeedbackGenerator().notificationOccurred(.error)
+            statusText = "Couldn't read that photo — try another one"
+            return
+        }
+        await sendPhotoToDesktop(image)
+    }
+
+    /// Shared by the Photos picker and the camera.
+    private func sendPhotoToDesktop(_ image: UIImage) async {
+        savingToDesktop = true
+        statusText = "Sending photo to your Mac's Desktop…"
+        defer { savingToDesktop = false }
+        guard let jpeg = Self.jpegForSending(image) else {
+            UINotificationFeedbackGenerator().notificationOccurred(.error)
+            statusText = "Couldn't read that photo — try another one"
+            return
+        }
+        client.savePhoto(jpeg.base64EncodedString())
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        statusText = "Photo sent (\(jpeg.count / 1024) KB) — saving to Desktop…"
     }
 
     private func whatsappTextTapped(_ chat: WhatsAppChat) {
@@ -1065,6 +1160,13 @@ struct NumpadView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
+            // Volume down / up
+            HStack(spacing: 8) {
+                spotifyTile("minus", "Volume") { youtubeTapped("VOLUME_DOWN") }
+                spotifyTile("plus", "Volume") { youtubeTapped("VOLUME_UP") }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
             // Like / Subscribe
             HStack(spacing: 8) {
                 spotifyTile("hand.thumbsup.fill", "Like", accent: Snes.youtube) { youtubeTapped("LIKE") }
@@ -1072,10 +1174,13 @@ struct NumpadView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            // Collapse the browser window itself, out of the way, without pausing playback.
-            // Toggles: the Mac reports back which state it landed in, so the
+            // The browser itself, rather than what's playing in it. Open puts
+            // YouTube on screen in Safari (double-tap quits it); Collapse
+            // tucks the window into the Dock without pausing playback, and
+            // toggles — the Mac reports back which state it landed in, so the
             // label always matches what's actually on screen.
             HStack(spacing: 8) {
+                spotifyTile("safari.fill", "Open · 2× Quit", accent: Snes.youtube) { youtubeOpenTapped() }
                 spotifyTile(client.youtubeCollapsed ? "arrow.up.left.and.arrow.down.right" : "arrow.down.right.and.arrow.up.left",
                             client.youtubeCollapsed ? "Expand Browser" : "Collapse Browser") { youtubeTapped("COLLAPSE") }
             }
@@ -1092,6 +1197,29 @@ struct NumpadView: View {
         )
     }
 
+    /// Open on a single tap; a double tap toggles Safari — quitting it, or
+    /// opening it again when a previous double tap already closed it. The open
+    /// waits out the double-tap window before it fires, otherwise a double tap
+    /// would launch Safari only to quit it a moment later.
+    private func youtubeOpenTapped() {
+        if let pending = youtubeOpenTap {
+            pending.cancel()
+            youtubeOpenTap = nil
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            client.youtube("TOGGLE_APP")
+            statusText = "YouTube — quitting Safari (double-tap again to reopen it)"
+            return
+        }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        let tap = DispatchWorkItem {
+            youtubeOpenTap = nil
+            client.youtube("OPEN")
+            statusText = "YouTube — opening in Safari · double-tap this tile to quit it"
+        }
+        youtubeOpenTap = tap
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.32, execute: tap)
+    }
+
     private func youtubeTapped(_ command: String) {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         client.youtube(command)
@@ -1101,6 +1229,8 @@ struct NumpadView: View {
         case "SKIP_BACK": statusText = "YouTube — skip back 10s"
         case "FULLSCREEN": statusText = "YouTube — fullscreen toggled"
         case "MUTE": statusText = "YouTube — mute toggled"
+        case "VOLUME_UP": statusText = "YouTube — volume up"
+        case "VOLUME_DOWN": statusText = "YouTube — volume down"
         case "LIKE": statusText = "YouTube — liked"
         case "SUBSCRIBE": statusText = "YouTube — subscribed"
         case "COLLAPSE": statusText = "YouTube — toggling the browser window…"
@@ -1194,21 +1324,29 @@ struct NumpadView: View {
             let gap: CGFloat = 8
             let cols: CGFloat = 4
             let topInset: CGFloat = 16
-            // Fill the height: 7 rows; keys stretch as wide as the column allows.
-            let rowH = (geo.size.height - topInset - gap * 6) / 7
+            // The CLICKY row is the one that gets reached for most, so it
+            // stands taller than an ordinary key row.
+            let heroScale: CGFloat = 1.6
+            // Fill the height: 6 rows, the first of them `heroScale` tall;
+            // keys stretch as wide as the column allows.
+            let rowH = (geo.size.height - topInset - gap * 5) / (5 + heroScale)
+            let heroH = rowH * heroScale
             let unit = (geo.size.width - gap * (cols - 1)) / cols
             VStack(spacing: gap) {
+                // CLICKY show / hide sits in the two cells the ↑/↓ arrows used
+                // to fill (both were decorative — they fell through `tapped`
+                // doing nothing), so the pad is a row shorter and keys grow.
                 HStack(spacing: gap) {
                     key("0", label: "CLICKY  show / hide", icon: "sparkles", tint: Snes.purple,
-                        lit: true, h: rowH, w: unit * 2 + gap, small: true)
+                        lit: true, h: heroH, w: unit * 2 + gap, small: true)
                         .overlay(
                             RoundedRectangle(cornerRadius: 10)
                                 .strokeBorder(.white.opacity(0.5), lineWidth: 1)
                         )
                         .shadow(color: Snes.purple.opacity(0.55), radius: 8, y: 3)
-                    Spacer(minLength: 0)
+                    key("←").frame(height: heroH)
+                    key("→").frame(height: heroH)
                 }
-                row([key("↑"), key("↓"), key("←"), key("→")], h: rowH, gap: gap)
                 row([key("⌫"), key("="), key("/"), key("*")], h: rowH, gap: gap)
                 row([key("7"), key("8"), key("9"), key("-")], h: rowH, gap: gap)
                 // 4 5 6 / 1 2 3 with "+" spanning both rows.

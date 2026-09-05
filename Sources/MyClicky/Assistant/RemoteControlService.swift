@@ -28,10 +28,16 @@ import Network
 ///                    playlist if needed, search each song, append matches
 ///   YOUTUBE <action> – control the active YouTube tab in the browser:
 ///                    PLAYPAUSE, SKIP_FORWARD, SKIP_BACK, FULLSCREEN, MUTE,
-///                    LIKE, SUBSCRIBE, COLLAPSE (toggles the browser window
+///                    VOLUME_UP, VOLUME_DOWN, LIKE, SUBSCRIBE, COLLAPSE
+///                    (toggles the browser window
 ///                    between minimized in the Dock and restored — the Mac
 ///                    replies with YOUTUBE_STATE so the phone's button label
-///                    can flip between "Collapse" and "Expand")
+///                    can flip between "Collapse" and "Expand"),
+///                    OPEN (surface Safari's YouTube tab, even a pinned or
+///                    minimized one, else open youtube.com in Safari),
+///                    TOGGLE_APP (quit Safari, or open it again when it's
+///                    already gone — what a double tap on the phone's Open
+///                    tile sends, in both directions)
 ///   GMAIL TRASH_OPEN – trash the email open in the browser (confirm on Mac)
 ///   WHATSAPP OPEN_CHAT <name> – open the named chat in the WhatsApp desktop app
 ///   WHATSAPP TYPE_TEXT <text> – tidy the text and type it into the open chat (does not send)
@@ -40,6 +46,8 @@ import Network
 ///   WHATSAPP SEND_IN <chat>   – open the chat first, then as SEND
 ///   WHATSAPP PHOTO_IN <chat>\t<base64 JPEG> – open the chat, paste the photo into
 ///                    its compose box as an attachment (not sent; SEND sends it)
+///   SAVE_PHOTO <base64 JPEG> – write the photo straight to the Mac's Desktop,
+///                    no app relay needed
 ///   DO <utterance> – universal voice command: Claude plans and executes it
 ///                    step by step in whatever app is frontmost (or that it
 ///                    opens), using only AXActions/AppDriver verbs
@@ -52,6 +60,7 @@ import Network
 ///   STOP                      – recording was stopped from the Mac panel; send nothing
 ///   WHATSAPP_UNREAD <n>       – WhatsApp's unread badge changed (0 = cleared)
 ///   WHATSAPP_STATUS OK|FAIL\t<message> – outcome of the last WHATSAPP command
+///   SAVE_PHOTO_STATUS OK|FAIL\t<message> – outcome of the last SAVE_PHOTO command
 ///   YOUTUBE_STATE COLLAPSED|EXPANDED – resulting state of the last
 ///                    YOUTUBE COLLAPSE toggle
 ///   GMAIL_UNREAD <n>          – Gmail's unread count changed (read from its
@@ -77,6 +86,7 @@ final class RemoteControlService {
     var onSpotify: ((String) -> Void)?
     var onYouTube: ((String) -> Void)?
     var onWhatsApp: ((String) -> Void)?
+    var onSavePhoto: ((Data) -> Void)?
     var onBrowserReload: (() -> Void)?
     var onCapture: (() -> Void)?
     var onAsk: ((String) -> Void)?
@@ -179,6 +189,10 @@ final class RemoteControlService {
             onYouTube?(String(line.dropFirst(8)))
         } else if line.hasPrefix("WHATSAPP ") {
             onWhatsApp?(String(line.dropFirst(9)))
+        } else if line.hasPrefix("SAVE_PHOTO ") {
+            if let data = Data(base64Encoded: String(line.dropFirst(11)).trimmingCharacters(in: .whitespaces)) {
+                onSavePhoto?(data)
+            }
         } else if line.hasPrefix("PARTIAL ") {
             onPartial?(String(line.dropFirst(8)))
         } else if line.hasPrefix("DICTATE ") {

@@ -13,7 +13,7 @@ struct AnthropicService {
     let apiKey: String
     /// Required when the API key is identity-linked ("linked account" keys).
     var workspaceID: String? = KeychainService.anthropicWorkspaceID()
-    var model = "claude-sonnet-4-5"
+    var model = "claude-sonnet-5"
 
     private static let endpoint = URL(string: "https://api.anthropic.com/v1/messages")!
 
@@ -52,7 +52,14 @@ struct AnthropicService {
 
         let body: [String: Any] = [
             "model": model,
-            "max_tokens": 1024,
+            // Sonnet 5 thinks by default, and max_tokens caps thinking *plus*
+            // the reply — the old 1024 was sized for a non-thinking model and
+            // would now truncate the answer mid-sentence.
+            "max_tokens": 8_000,
+            // This answer gets spoken aloud the moment it lands, so latency is
+            // the thing to protect. Low effort still reasons more than Sonnet
+            // 4.5 did with no thinking at all.
+            "output_config": ["effort": "low"],
             "system": Self.systemPrompt,
             "messages": [[
                 "role": "user",
@@ -83,6 +90,7 @@ struct AnthropicService {
             }
             throw ServiceError.api(message)
         }
+        if let reason = Self.refusalReason(from: data) { throw ServiceError.refused(reason) }
         guard let payloadText = Self.answerText(from: data),
               let json = Self.parseJSONObject(from: payloadText),
               let answer = json["answer"] as? String, !answer.isEmpty else {
@@ -108,13 +116,17 @@ struct AnthropicService {
         """
         let body: [String: Any] = [
             "model": model,
-            "max_tokens": 1024,
+            "max_tokens": 4_000,
+            // Adding punctuation is mechanical; deep reasoning here would only
+            // add latency in front of a person waiting to paste.
+            "output_config": ["effort": "low"],
             "system": instruction,
             "messages": [["role": "user", "content": "<dictation>\n\(raw)\n</dictation>"]],
         ]
         let request = try makeRequest(body: body, timeout: 30)
 
         let (data, response) = try await URLSession.shared.data(for: request)
+        if let reason = Self.refusalReason(from: data) { throw ServiceError.refused(reason) }
         guard let http = response as? HTTPURLResponse, http.statusCode == 200,
               let text = Self.answerText(from: data), !text.isEmpty else {
             throw ServiceError.emptyAnswer
@@ -131,7 +143,18 @@ struct AnthropicService {
     /// text (and an optional image), with the same rate-limit retry behavior
     /// as `ask`. Returns the raw JSON object parsed from Claude's reply, for
     /// callers whose response shape isn't the fixed answer/box_2d schema.
+    /// `maxTokens`/`timeout` default to the small, quick shape the screen-reading
+    /// callers want. A bulk classification (many rows of JSON back) needs both
+    /// raised — on a thinking model a 1024-token ceiling truncates the answer
+    /// mid-object and it fails to parse.
+    /// `effort` tunes how hard the model thinks: nil leaves the API default
+    /// (high), "low"/"medium" trade depth for latency and cost on work that
+    /// doesn't need it. The default is "medium" rather than nil because these
+    /// callers sit in front of someone waiting, and the model is strong enough
+    /// below "high" that the extra depth mostly buys latency.
     func requestJSON(system: String, userText: String, jpegImage: Data? = nil,
+                     maxTokens: Int = 4_000, timeout: TimeInterval = 60,
+                     effort: String? = "medium",
                      onStatus: (@Sendable @MainActor (String) -> Void)? = nil) async throws -> [String: Any] {
         var userContent: [[String: Any]] = []
         if let jpegImage {
@@ -143,13 +166,14 @@ struct AnthropicService {
         }
         userContent.append(["type": "text", "text": userText])
 
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model": model,
-            "max_tokens": 1024,
+            "max_tokens": maxTokens,
             "system": system,
             "messages": [["role": "user", "content": userContent]],
         ]
-        let request = try makeRequest(body: body, timeout: 60)
+        if let effort { body["output_config"] = ["effort": effort] }
+        let request = try makeRequest(body: body, timeout: timeout)
 
         var data = Data()
         for attempt in 0..<3 {
@@ -171,6 +195,7 @@ struct AnthropicService {
             }
             throw ServiceError.api(message)
         }
+        if let reason = Self.refusalReason(from: data) { throw ServiceError.refused(reason) }
         guard let payloadText = Self.answerText(from: data),
               let json = Self.parseJSONObject(from: payloadText) else {
             throw ServiceError.emptyAnswer
@@ -178,12 +203,27 @@ struct AnthropicService {
         return json
     }
 
+    /// Server-side refusal fallbacks exist only on the models with elevated
+    /// safety classifiers. Sonnet 5 rejects the parameter outright — the API
+    /// answers "fallbacks: Extra inputs are not permitted" and the whole
+    /// request fails — so it can't just be sent to everything.
+    private var supportsServerSideFallback: Bool {
+        model.hasPrefix("claude-opus-5") || model.hasPrefix("claude-fable")
+    }
+
     private func makeRequest(body: [String: Any], timeout: TimeInterval) throws -> URLRequest {
+        var body = body
         var request = URLRequest(url: Self.endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        if supportsServerSideFallback {
+            // Let the server re-run a declined request on its recommended
+            // substitute rather than handing the refusal back as a dead end.
+            body["fallbacks"] = "default"
+            request.setValue("server-side-fallback-2026-07-01", forHTTPHeaderField: "anthropic-beta")
+        }
         if let workspaceID, !workspaceID.isEmpty {
             request.setValue(workspaceID, forHTTPHeaderField: "anthropic-workspace-id")
         }
@@ -223,6 +263,20 @@ struct AnthropicService {
         )
     }
 
+    /// A declined request comes back as a normal HTTP 200 with no text block
+    /// and `stop_reason: "refusal"`. Without this it surfaces as "Claude
+    /// returned an empty answer", which is both wrong and unactionable.
+    /// Sonnet 5 can refuse and has no server-side fallback to soften it, so
+    /// this is the only thing standing between a refusal and a wrong message.
+    private static func refusalReason(from data: Data) -> String? {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              json["stop_reason"] as? String == "refusal" else { return nil }
+        let details = json["stop_details"] as? [String: Any]
+        return (details?["explanation"] as? String)
+            ?? (details?["category"] as? String)
+            ?? "no reason given"
+    }
+
     private static func answerText(from data: Data) -> String? {
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let content = json["content"] as? [[String: Any]] else { return nil }
@@ -242,10 +296,12 @@ struct AnthropicService {
     enum ServiceError: LocalizedError {
         case badResponse, emptyAnswer
         case api(String)
+        case refused(String)
         var errorDescription: String? {
             switch self {
             case .badResponse: "Unexpected response from Claude."
             case .emptyAnswer: "Claude returned an empty answer."
+            case .refused(let reason): "Claude declined this one (\(reason))."
             case .api(let message): "Claude error: \(message)"
             }
         }

@@ -19,10 +19,14 @@ enum ActionPlanner {
         var direction: String?
         var irreversible: Bool?
         var note: String?
-        /// create_event only.
+        /// create_event / update_event only.
         var title: String?
         var start: String?
         var end: String?
+        /// update_event only — the changes to apply.
+        var newTitle: String?
+        var newStart: String?
+        var newEnd: String?
     }
 
     struct Plan: Decodable {
@@ -37,7 +41,7 @@ enum ActionPlanner {
         var confirm: (String) async -> Bool = { _ in false }
     }
 
-    private static let allowedVerbs: Set<String> = ["open", "click", "focus", "type", "press", "scroll", "create_event", "done"]
+    private static let allowedVerbs: Set<String> = ["open", "click", "focus", "type", "press", "scroll", "create_event", "update_event", "done"]
 
     /// Backstops the model's own "irreversible" flag: these words in a
     /// click/press target force a confirmation even if it didn't say so.
@@ -65,6 +69,16 @@ enum ActionPlanner {
       "start"/"end" are local time, ISO 8601, no timezone suffix; resolve \
       "today"/"tomorrow" against the current date given below. "end" is \
       optional and defaults to an hour after "start".
+    - update_event: change an EXISTING calendar event's name and/or time, \
+      also WITHOUT touching any app's UI. Always use this to rename or move \
+      an event — never drive Calendar's own window for that. \
+      {"verb":"update_event","title":"Event","start":"2026-09-04T16:00:00","newTitle":"working at Safeway"} \
+      "title" and "start" identify the event to change: the name it \
+      currently has, and the day/time it currently sits at. Omit "title" if \
+      the user never said one ("change my 4 PM event to…") — it will be \
+      found by time instead. "newTitle"/"newStart"/"newEnd" are the changes; \
+      send only the ones that are actually changing. Giving "newStart" \
+      alone keeps the event's current length.
     - done: nothing more is needed. Also use this — as the ONLY step — when \
       the request isn't something you can act on with these verbs (general \
       chit-chat, a question with nothing to click/type/open, or nothing on \
@@ -223,6 +237,7 @@ enum ActionPlanner {
         case "press": "Pressing \(step.key ?? "a key")…"
         case "scroll": "Scrolling…"
         case "create_event": "Adding \(step.title ?? "the event") to your calendar…"
+        case "update_event": "Updating \(step.title ?? "the event") in your calendar…"
         default: "Working…"
         }
     }
@@ -303,6 +318,18 @@ enum ActionPlanner {
                 return true
             } catch {
                 log.error("create_event failed: \(error.localizedDescription, privacy: .public)")
+                outcome = error.localizedDescription
+                return false
+            }
+        case "update_event":
+            guard let start = step.start else { return false }
+            do {
+                outcome = try await CalendarActions.updateEvent(title: step.title, start: start,
+                                                                newTitle: step.newTitle,
+                                                                newStart: step.newStart, newEnd: step.newEnd)
+                return true
+            } catch {
+                log.error("update_event failed: \(error.localizedDescription, privacy: .public)")
                 outcome = error.localizedDescription
                 return false
             }

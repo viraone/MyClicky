@@ -10,6 +10,7 @@ private let log = Logger(subsystem: "com.myclicky", category: "confirm")
 final class AssistantController {
     private let hotkey = AssistantHotkeyMonitor()
     private let dictationHotkey = AssistantHotkeyMonitor(keyCode: 9) // ⌥⌘V
+    private let driveCleanupHotkey = AssistantHotkeyMonitor(keyCode: 2) // ⌥⌘D
     private let speech = SpeechService()
     private let capture = ScreenCaptureService()
     private let panel = AssistantPanelController()
@@ -22,6 +23,11 @@ final class AssistantController {
     private let remote = RemoteControlService()
     private let whatsappUnread = WhatsAppUnreadWatcher()
     private let gmailUnread = GmailUnreadWatcher()
+    private let captureFileWatcher = CaptureFileWatcher()
+    private let driveCleanup = DriveCleanupWindowController()
+    /// The in-flight inventory/flagging pass, so Cancel and a second ⌥⌘D can
+    /// stop it rather than stacking a second scan on top.
+    private var driveCleanupTask: Task<Void, Never>?
 
     private var activeScreen: NSScreen?
     private var busy = false
@@ -41,7 +47,27 @@ final class AssistantController {
         panel.state.tab = .captureDictate
         panel.state.captureImage = image
         panel.state.captureURL = url
+        panel.state.editedCaptureImage = nil
+        panel.state.clipboardChoice = .edited
         copyPairToClipboard()
+        captureFileWatcher.start(url: url)
+    }
+
+    /// The saved capture's file changed on disk — normally because the user
+    /// clicked the preview (opening it in Preview.app), added a markup
+    /// arrow, and hit ⌘S. Reloads it as a second, "edited" version so the
+    /// panel can offer both, defaulting the clipboard to this new one.
+    private func handleCaptureEdited(_ image: NSImage) {
+        panel.state.editedCaptureImage = image
+        panel.state.clipboardChoice = .edited
+        copyPairToClipboard()
+    }
+
+    private func dismissCapture() {
+        captureFileWatcher.stop()
+        panel.state.captureImage = nil
+        panel.state.captureURL = nil
+        panel.state.editedCaptureImage = nil
     }
     /// What the current listening session will do with what it hears.
     private enum RecordKind { case ask, dictate, talk }
@@ -65,6 +91,8 @@ final class AssistantController {
         }
         panel.state.onStop = { [weak self] in self?.stop() }
         panel.state.onCopyAgain = { [weak self] in self?.copyPairToClipboard() }
+        panel.state.onDismissCapture = { [weak self] in self?.dismissCapture() }
+        captureFileWatcher.onChange = { [weak self] image in self?.handleCaptureEdited(image) }
         panel.state.onReadAloud = { [weak self] in self?.replayAnswer() }
         panel.state.onToggleRecording = { [weak self] in self?.toggleRecording() }
         panel.onHide = { [weak self] in self?.stop() }
@@ -78,6 +106,10 @@ final class AssistantController {
         dictationHotkey.onHoldBegan = { [weak self] in self?.beginListening(kind: .dictate) }
         dictationHotkey.onHoldEnded = { [weak self] in self?.endListening() }
         dictationHotkey.start()
+        // ⌥⌘D opens Drive cleanup. Fires on key-down rather than release: it's
+        // a one-shot that opens a window, not a press-and-hold like the others.
+        driveCleanupHotkey.onHoldBegan = { [weak self] in self?.beginDriveCleanup() }
+        driveCleanupHotkey.start()
 
         // Clicky Remote (iOS app) commands over the local network.
         remote.onShow = { [weak self] in self?.showPanel() }
@@ -237,6 +269,16 @@ final class AssistantController {
                         WhatsAppActions.typeMessage(final, status: report)
                     }
                 }
+            }
+        }
+        remote.onSavePhoto = { [weak self] imageData in
+            guard let self else { return }
+            self.toast.show("Saving photo to Desktop…", icon: "photo", tint: .yellow)
+            PhotoSaveActions.save(imageData) { [weak self] message, ok in
+                self?.toast.show(message,
+                                 icon: ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill",
+                                 tint: ok ? .green : .orange)
+                self?.remote.broadcast("SAVE_PHOTO_STATUS \(ok ? "OK" : "FAIL")\t\(message.replacingOccurrences(of: "\n", with: " "))")
             }
         }
         remote.onPartial = { [weak self] text in
@@ -439,7 +481,7 @@ final class AssistantController {
     /// pastes the image into image-aware apps and the text into text fields.
     private func copyPairToClipboard() {
         let text = panel.state.dictationText
-        let image = panel.state.captureImage
+        let image = panel.state.imageForClipboard
         guard image != nil || !text.isEmpty else { return }
 
         let item = NSPasteboardItem()
@@ -938,6 +980,103 @@ final class AssistantController {
                 guard id == requestID, !Task.isCancelled else { return }
                 fail(error.localizedDescription)
             }
+        }
+    }
+
+    // MARK: - Drive cleanup (⌥⌘D)
+
+    /// Inventory → flag → review → trash. The first three stages never write
+    /// anything: the only call that changes Drive is `drive.trash`, and it runs
+    /// only from `trashSelectedDriveFiles`, behind the review window's button
+    /// and its confirmation.
+    private func beginDriveCleanup() {
+        guard let apiKey = KeychainService.anthropicAPIKey() else {
+            driveCleanup.state.phase = .failed("No Anthropic API key saved — add one before running a cleanup.")
+            driveCleanup.show()
+            return
+        }
+        // A second ⌥⌘D while a scan is running just brings the window back.
+        if driveCleanupTask != nil {
+            driveCleanup.show()
+            return
+        }
+
+        let state = driveCleanup.state
+        state.phase = .scanning("Listing your Drive…")
+        state.scannedCount = 0
+        state.candidates = []
+        state.selection = []
+        state.onCancel = { [weak self] in
+            self?.driveCleanupTask?.cancel()
+            self?.driveCleanupTask = nil
+            self?.driveCleanup.close()
+        }
+        state.onTrash = { [weak self] in self?.trashSelectedDriveFiles() }
+        driveCleanup.show()
+
+        driveCleanupTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.driveCleanupTask = nil }
+            let drive = DriveService(auth: googleAuth)
+            do {
+                let files = try await drive.inventory { count in
+                    state.scannedCount = count
+                    state.phase = .scanning("Listing your Drive… \(count) files so far")
+                }
+                try Task.checkCancellation()
+                state.phase = .scanning("Looking for cleanup candidates…")
+                let plan = try await DriveCleanupPlanner.plan(
+                    files: files, drive: drive, apiKey: apiKey
+                ) { message in
+                    state.phase = .scanning(message)
+                }
+                try Task.checkCancellation()
+                state.candidates = plan.candidates
+                state.signalledCount = plan.signalledCount
+                // Claude's flags are the starting selection, not the decision —
+                // every row is visible and tickable either way.
+                state.selection = Set(plan.candidates.filter(\.flagged).map(\.id))
+                state.phase = .review
+            } catch is CancellationError {
+                return
+            } catch {
+                state.phase = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    /// The one place in the cleanup flow that writes to Drive. Trash only —
+    /// `DriveService` has no permanent-delete call to reach for.
+    private func trashSelectedDriveFiles() {
+        let state = driveCleanup.state
+        let targets = state.selectedCandidates
+        guard !targets.isEmpty else { return }
+
+        driveCleanupTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.driveCleanupTask = nil }
+            let drive = DriveService(auth: googleAuth)
+            var trashed = 0
+            var failed = 0
+            var bytes: Int64 = 0
+            for (index, candidate) in targets.enumerated() {
+                state.phase = .trashing(done: index, total: targets.count)
+                do {
+                    try await drive.trash(id: candidate.file.id)
+                    trashed += 1
+                    bytes += candidate.file.effectiveBytes
+                    ActivityLog.recordAction("drive-cleanup-trash", ["name": candidate.file.name])
+                } catch {
+                    failed += 1
+                    log.error("trashing \(candidate.file.name, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+                }
+            }
+            state.phase = .finished(trashed: trashed, failed: failed, bytes: bytes)
+            self.toast.show(
+                "Moved \(trashed) file\(trashed == 1 ? "" : "s") to Drive's trash",
+                icon: "trash",
+                tint: failed > 0 ? .orange : .green
+            )
         }
     }
 

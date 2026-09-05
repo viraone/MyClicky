@@ -176,6 +176,81 @@ enum BrowserTabReader {
         return nil
     }
 
+    /// Brings the first open tab whose URL contains `needle` to the front —
+    /// selecting it in its window, raising that window, and activating the
+    /// browser. Like `firstTabTitle`, it looks past the active tab, so a tab
+    /// sitting pinned or in the background is found instead of a second copy
+    /// being opened next to it. Pass `bundleID` to insist on one browser
+    /// rather than taking whichever running one matches first. Returns the
+    /// browser it surfaced.
+    @discardableResult
+    static func selectTab(urlContains needle: String, in bundleID: String? = nil) -> NSRunningApplication? {
+        let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
+        let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        let scripts = tabSelectScripts(urlContains: needle)
+            .filter { bundleID == nil || $0.bundleID == bundleID }
+            .sorted { a, _ in a.bundleID == frontmost }
+        for (bundleID, script) in scripts where running.contains(bundleID) {
+            guard run(script: script) == "1" else { continue }
+            let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first
+            app?.activate(options: [.activateAllWindows])
+            return app
+        }
+        return nil
+    }
+
+    /// Chromium exposes the selection as a tab index, Safari as the tab
+    /// object itself; both raise the window with `set index of w to 1`.
+    /// Each script answers "1" when it found and selected a tab.
+    private static func tabSelectScripts(urlContains needle: String) -> [(bundleID: String, script: String)] {
+        func chromiumScript(_ app: String) -> String {
+            #"""
+            tell application "\#(app)"
+                repeat with w in windows
+                    -- A window with no tabs at all (a settings or download
+                    -- window) errors out rather than looping zero times, and
+                    -- would otherwise abandon the search early.
+                    try
+                        set i to 0
+                        repeat with t in tabs of w
+                            set i to i + 1
+                            if (URL of t contains "\#(needle)") then
+                                set active tab index of w to i
+                                set index of w to 1
+                                return "1"
+                            end if
+                        end repeat
+                    end try
+                end repeat
+            end tell
+            return ""
+            """#
+        }
+        let safariScript = #"""
+        tell application "Safari"
+            repeat with w in windows
+                try
+                    repeat with t in tabs of w
+                        if (URL of t contains "\#(needle)") then
+                            set current tab of w to t
+                            set index of w to 1
+                            return "1"
+                        end if
+                    end repeat
+                end try
+            end repeat
+        end tell
+        return ""
+        """#
+        return [
+            ("com.google.Chrome", chromiumScript("Google Chrome")),
+            ("com.apple.Safari", safariScript),
+            ("company.thebrowser.Browser", chromiumScript("Arc")),
+            ("com.microsoft.edgemac", chromiumScript("Microsoft Edge")),
+            ("com.brave.Browser", chromiumScript("Brave Browser")),
+        ]
+    }
+
     private static func tabScanScripts(urlContains needle: String) -> [(bundleID: String, script: String)] {
         func chromiumScript(_ app: String) -> String {
             #"""
