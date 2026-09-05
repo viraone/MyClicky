@@ -77,9 +77,14 @@ final class DriveCleanupWindowController {
     }
 
     private func handleClosed() {
-        if let closeObserver { NotificationCenter.default.removeObserver(closeObserver) }
-        closeObserver = nil
-        window = nil
+        // Deliberately keeps the window and its observer alive.
+        //
+        // This fires from NSWindow.willCloseNotification, which arrives while
+        // SwiftUI is still dispatching the close button's gesture. Releasing
+        // the window here frees the hosting controller and the view that owns
+        // that button, and the app segfaults inside _ButtonGesture. The window
+        // is reused by `show()` instead — it's one window, and keeping it
+        // costs nothing next to crashing.
         onClose?()
     }
 }
