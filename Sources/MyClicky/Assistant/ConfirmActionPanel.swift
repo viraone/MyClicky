@@ -25,15 +25,8 @@ final class ConfirmActionPanelController {
             icon: icon,
             tint: tint,
             onDecision: { [weak self] confirmed in
-                // Tear the panel down on the NEXT runloop turn, not inside the
-                // button's own action. `hide()` drops the last reference to
-                // the panel and the hosting view whose gesture is still being
-                // dispatched — SwiftUI then messages a freed object and the
-                // app dies with an objc SIGABRT in _ButtonGesture. Observed.
-                DispatchQueue.main.async {
-                    self?.hide()
-                    onDecision(confirmed)
-                }
+                self?.hide()
+                onDecision(confirmed)
             }
         )
         let hosting = NSHostingController(rootView: view)
@@ -65,9 +58,17 @@ final class ConfirmActionPanelController {
         self.panel = panel
     }
 
+    /// Hides the panel WITHOUT releasing it.
+    ///
+    /// This runs inside a SwiftUI button's action, while SwiftUI is still
+    /// dispatching that gesture and flushing batched updates. Releasing the
+    /// panel — and with it the hosting controller and the view that owns the
+    /// button — leaves SwiftUI messaging freed memory, and the app dies with
+    /// an objc fatal in `_ButtonGesture`. Deferring the release by a runloop
+    /// turn only narrowed the window; it still crashed. So the panel stays
+    /// alive until `show()` replaces it, which happens nowhere near a gesture.
     func hide() {
         panel?.orderOut(nil)
-        panel = nil
     }
 }
 

@@ -35,6 +35,8 @@ final class ClickyClient: ObservableObject {
     private var connection: NWConnection?
     /// Most recent set of discovered Mac endpoints, kept for reconnects.
     private var knownEndpoints: [NWEndpoint] = []
+    private var heartbeat: Task<Void, Never>?
+    private var waitingTimeout: Task<Void, Never>?
     private let speechSynthesizer = AVSpeechSynthesizer()
 
     func start() {
@@ -52,8 +54,16 @@ final class ClickyClient: ObservableObject {
         }
         browser.stateUpdateHandler = { [weak self] state in
             Task { @MainActor in
+                guard let self else { return }
                 if case .failed(let error) = state {
-                    self?.status = .failed(error.localizedDescription)
+                    self.status = .failed(error.localizedDescription)
+                    // A failed browser never delivers another result. Leaving
+                    // it failed strands the remote until the app is force
+                    // quit — so tear it down and start discovery again.
+                    self.browser?.cancel()
+                    self.browser = nil
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    self.start()
                 }
             }
         }
@@ -64,17 +74,36 @@ final class ClickyClient: ObservableObject {
     private func connect(to endpoint: NWEndpoint) {
         let params = NWParameters.tcp
         params.includePeerToPeer = true
+        // Notice a dead peer rather than waiting for a write to fail.
+        if let tcp = params.defaultProtocolStack.internetProtocol as? NWProtocolTCP.Options {
+            tcp.enableKeepalive = true
+            tcp.keepaliveIdle = 5
+            tcp.keepaliveInterval = 3
+            tcp.keepaliveCount = 2
+        }
         let connection = NWConnection(to: endpoint, using: params)
         connection.stateUpdateHandler = { [weak self] state in
             Task { @MainActor in
                 guard let self else { return }
                 switch state {
                 case .ready:
+                    self.waitingTimeout?.cancel()
+                    self.waitingTimeout = nil
                     self.status = .connected
+                    self.startHeartbeat()
                 case .failed, .cancelled:
                     self.connection = nil
                     self.status = .searching
                     self.scheduleReconnect()
+                case .waiting:
+                    // `.waiting` is normal and usually brief — it's where a
+                    // connection sits while Bonjour resolves and the interface
+                    // comes up. Cancelling on sight (which this used to do)
+                    // kills every attempt before it can reach .ready and the
+                    // remote never connects at all. It only means trouble if
+                    // it *stays* waiting, so give it a grace period.
+                    self.status = .searching
+                    self.scheduleWaitingTimeout()
                 default:
                     break
                 }
@@ -145,11 +174,80 @@ final class ClickyClient: ObservableObject {
 
     /// Retries the most recently discovered endpoint after a short delay
     /// (e.g. when the Mac app was restarted).
-    private func scheduleReconnect() {
+    /// Gives a `.waiting` connection a few seconds to sort itself out before
+    /// treating the peer as gone. Only armed once per wait, so repeated
+    /// `.waiting` callbacks can't keep pushing the deadline out forever.
+    private func scheduleWaitingTimeout() {
+        guard waitingTimeout == nil else { return }
+        waitingTimeout = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            guard let self, !Task.isCancelled else { return }
+            self.waitingTimeout = nil
+            self.connection?.cancel()
+            self.connection = nil
+            self.scheduleReconnect()
+        }
+    }
+
+    /// Re-establishes everything after the app comes back to the foreground.
+    ///
+    /// iOS suspends the app when the phone is put down, and tears the socket
+    /// down with it — but `start()` only ever ran once at launch, and the
+    /// suspended app's timers don't run either, so nothing noticed. The remote
+    /// woke up still showing "Mac linked" and swallowed the first TALK press.
+    /// A full reset costs about a second and is worth it on a remote control.
+    func resume() {
+        heartbeat?.cancel()
+        heartbeat = nil
+        waitingTimeout?.cancel()
+        waitingTimeout = nil
+        connection?.cancel()
+        connection = nil
+        browser?.cancel()
+        browser = nil
+        status = .searching
+        start()
+    }
+
+    /// Pokes the Mac every few seconds so a dead socket surfaces on its own.
+    ///
+    /// Without this the connection sits in `.ready` long after the Mac app has
+    /// gone, and the phone keeps showing "Mac linked". The failure only
+    /// surfaces when something is actually sent — so the first TALK press
+    /// after a Mac restart is swallowed, and only the second one works. The
+    /// Mac ignores lines it doesn't recognise, so this costs nothing there.
+    private func startHeartbeat() {
+        heartbeat?.cancel()
+        heartbeat = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                guard let self, self.connection != nil else { return }
+                self.send("PING")
+            }
+        }
+    }
+
+    /// Keeps trying until it's back, rather than once.
+    ///
+    /// The single attempt this replaces gave up whenever no endpoint had been
+    /// discovered yet — which is exactly the situation right after the Mac app
+    /// restarts, the case it existed for. The remote then looked alive but was
+    /// deaf until REFRESH was tapped by hand.
+    private func scheduleReconnect(attempt: Int = 0) {
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
-            guard connection == nil, let endpoint = knownEndpoints.first else { return }
-            connect(to: endpoint)
+            let seconds = min(8.0, 0.5 * pow(2.0, Double(attempt)))
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            guard connection == nil else { return }
+            if let endpoint = knownEndpoints.first {
+                connect(to: endpoint)
+            } else if attempt < 10 {
+                scheduleReconnect(attempt: attempt + 1)
+            } else {
+                // Nothing found for a while — the browser itself may be stale.
+                browser?.cancel()
+                browser = nil
+                start()
+            }
         }
     }
 

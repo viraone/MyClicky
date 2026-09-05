@@ -85,7 +85,19 @@ final class SpeechRecorder: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 if let result {
-                    self.current = result.bestTranscription.formattedString
+                    let updated = result.bestTranscription.formattedString
+                    // On-device recognition does not reliably report isFinal
+                    // after a pause — it sometimes restarts its own
+                    // transcription instead, and the next result is a fresh
+                    // phrase rather than a longer version of the last one.
+                    // Relying on isFinal alone silently loses everything said
+                    // before the pause (observed: a three-part command
+                    // arrived as only its last part). So bank the old text
+                    // whenever the new text stops extending it.
+                    if !self.current.isEmpty, Self.isRestart(from: self.current, to: updated) {
+                        self.commitCurrent()
+                    }
+                    self.current = updated
                     // Once stopping, the phone is showing its final answer,
                     // not live partials — stop pushing updates to the Mac.
                     if !self.stopping { self.publish() }
@@ -96,6 +108,29 @@ final class SpeechRecorder: ObservableObject {
                 }
             }
         }
+    }
+
+    /// Whether the recognizer threw away what it had and started a new phrase,
+    /// as opposed to revising the one it was already working on.
+    ///
+    /// Compares which words survive, not a common prefix. The recognizer
+    /// rewrites words anywhere in the phrase — "David Babu" became "David
+    /// Bapu" and back again — and one changed word near the front destroys a
+    /// prefix comparison while leaving nearly every word untouched. That read
+    /// as a restart and banked the same sentence three times. A revision keeps
+    /// most of its words; a genuine restart keeps almost none.
+    private static func isRestart(from previous: String, to updated: String) -> Bool {
+        let old = words(previous)
+        guard !old.isEmpty else { return false }
+        let new = Set(words(updated))
+        let kept = old.filter(new.contains).count
+        return kept * 5 < old.count * 2      // fewer than 40% survived
+    }
+
+    private static func words(_ text: String) -> [String] {
+        text.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
     }
 
     private func commitCurrent() {

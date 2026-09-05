@@ -8,7 +8,9 @@ import CoreGraphics
 final class HotkeyMonitor {
     var onTrigger: (() -> Void)?
 
-    private var tap: CFMachPort?
+    // Read from the CGEventTap callback, which does not arrive on the main
+    // actor — see the note in startEventTap.
+    nonisolated(unsafe) private var tap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var globalMonitor: Any?
     private var localMonitor: Any?
@@ -26,6 +28,9 @@ final class HotkeyMonitor {
             if let runLoopSource {
                 CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
             }
+            // Balances the passRetained in startEventTap, after the source is
+            // off the run loop so no callback can still be in flight.
+            Unmanaged.passUnretained(self).release()
         }
         tap = nil
         runLoopSource = nil
@@ -39,7 +44,9 @@ final class HotkeyMonitor {
 
     private func startEventTap() -> Bool {
         let mask: CGEventMask = 1 << CGEventType.keyDown.rawValue
-        let refcon = Unmanaged.passUnretained(self).toOpaque()
+        // Retained: the tap outlives any Swift reference and dereferences this
+        // pointer on every key event. `stop()` balances it.
+        let refcon = Unmanaged.passRetained(self).toOpaque()
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
@@ -48,9 +55,12 @@ final class HotkeyMonitor {
             callback: { _, type, event, refcon in
                 guard let refcon else { return Unmanaged.passUnretained(event) }
                 let monitor = Unmanaged<HotkeyMonitor>.fromOpaque(refcon).takeUnretainedValue()
-                return MainActor.assumeIsolated {
-                    monitor.handleTap(type: type, event: event)
-                }
+                // No `MainActor.assumeIsolated` here: this callback is not
+                // guaranteed to run on the main actor, and asserting it does
+                // traps the whole app with SIGTRAP. Same fix as
+                // AssistantHotkeyMonitor — `handleTap` is nonisolated, and
+                // only `onTrigger` hops to main.
+                return monitor.handleTap(type: type, event: event)
             },
             userInfo: refcon
         ) else {
@@ -64,7 +74,7 @@ final class HotkeyMonitor {
         return true
     }
 
-    private func handleTap(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+    nonisolated private func handleTap(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         switch type {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
@@ -79,7 +89,9 @@ final class HotkeyMonitor {
             else {
                 return Unmanaged.passUnretained(event)
             }
-            onTrigger?()
+            DispatchQueue.main.async { [self] in
+                MainActor.assumeIsolated { onTrigger?() }
+            }
             return nil // swallow the chord
         default:
             return Unmanaged.passUnretained(event)

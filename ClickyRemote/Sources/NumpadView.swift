@@ -6,6 +6,7 @@ import PhotosUI
 /// Key "0" toggles Clicky on the Mac (show / collapse); "4" records a question;
 /// "1" opens Capture + Dictate, "2" starts a region capture, "3" records dictation.
 struct NumpadView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var client = ClickyClient()
     @StateObject private var recorder = SpeechRecorder()
     @State private var statusText = "Tap CLICKY to open it on your Mac (tap again to hide)"
@@ -163,6 +164,14 @@ struct NumpadView: View {
             }
             client.start()
             permissionDenied = !(await SpeechRecorder.requestPermissions())
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // Coming back from suspension is the one moment the connection is
+            // reliably stale, and the one moment nothing used to check — iOS
+            // tears the socket down while the app sleeps and the app wakes up
+            // still believing it's linked.
+            guard phase == .active else { return }
+            client.resume()
         }
         .onChange(of: client.talkMessage) { _, message in
             // Talking from another pad would otherwise be a black hole: the

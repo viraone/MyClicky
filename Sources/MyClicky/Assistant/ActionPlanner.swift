@@ -54,9 +54,15 @@ enum ActionPlanner {
         /// Resolves the recipient, confirms, and sends. Owned by the
         /// controller so the planner needs to know nothing about Gmail,
         /// Messages, contacts or confirmation panels.
-        var sendCopied: (_ app: String, _ recipient: String, _ body: String) async -> Bool = { _, _, _ in false }
+        ///
+        /// Returns nil on success, or the reason it didn't happen. A reason
+        /// travels back so it can be shown instead of the planner's generic
+        /// "Got stuck on…" — "No contact named David Baboo" is the difference
+        /// between knowing what to say next and guessing.
+        var sendCopied: (_ app: String, _ recipient: String, _ body: String) async -> String? = { _, _, _ in "not wired up" }
         /// Brings a named conversation on screen without sending anything.
-        var openConversation: (_ app: String, _ name: String) async -> Bool = { _, _ in false }
+        /// Same convention: nil is success.
+        var openConversation: (_ app: String, _ name: String) async -> String? = { _, _ in "not wired up" }
     }
 
     private static let allowedVerbs: Set<String> = ["open", "click", "focus", "type", "press", "scroll", "create_event", "update_event", "copy_paragraph", "copy_range", "send_copied", "open_conversation", "done"]
@@ -389,14 +395,22 @@ enum ActionPlanner {
             }
         case "open_conversation":
             guard let name = step.to, !name.isEmpty else { return false }
-            return await callbacks.openConversation(step.app ?? "Messages", name)
+            if let reason = await callbacks.openConversation(step.app ?? "Messages", name) {
+                outcome = reason
+                return false
+            }
+            return true
         case "send_copied":
             guard let target = step.app, let recipient = step.to else { return false }
             guard let body = callbacks.lastCopied(), !body.isEmpty else {
-                callbacks.status("Nothing copied yet — copy something first, then say who to send it to.")
+                outcome = "Nothing copied yet — copy something first, then say who to send it to."
                 return false
             }
-            return await callbacks.sendCopied(target, recipient, body)
+            if let reason = await callbacks.sendCopied(target, recipient, body) {
+                outcome = reason
+                return false
+            }
+            return true
         case "create_event":
             guard let title = step.title, let start = step.start else { return false }
             do {

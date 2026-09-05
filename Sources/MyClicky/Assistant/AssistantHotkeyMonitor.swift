@@ -12,10 +12,14 @@ final class AssistantHotkeyMonitor {
     var onHoldBegan: (() -> Void)?
     var onHoldEnded: (() -> Void)?
 
-    private var tap: CFMachPort?
+    // Touched from the CGEventTap callback, which does NOT arrive on the main
+    // actor, so these can't be actor-isolated. The tap's run-loop source
+    // serialises delivery, and start/stop only run at launch, so the access
+    // is single-threaded in practice.
+    nonisolated(unsafe) private var tap: CFMachPort?
+    nonisolated(unsafe) private var holding = false
     private var runLoopSource: CFRunLoopSource?
     private var fallbackMonitors: [Any] = []
-    private var holding = false
 
     /// The letter key completing the ⌥⌘ chord (default 8 = "C").
     private let keyCode: Int64
@@ -36,6 +40,9 @@ final class AssistantHotkeyMonitor {
             if let runLoopSource {
                 CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
             }
+            // Balances the passRetained in startEventTap, and only once the
+            // source is off the run loop so no callback can still be in flight.
+            Unmanaged.passUnretained(self).release()
         }
         tap = nil
         runLoopSource = nil
@@ -51,7 +58,12 @@ final class AssistantHotkeyMonitor {
             (1 << CGEventType.keyUp.rawValue) |
             (1 << CGEventType.flagsChanged.rawValue)
 
-        let refcon = Unmanaged.passUnretained(self).toOpaque()
+        // Retained, not unretained: the tap outlives any Swift reference to
+        // this monitor, and the callback dereferences this pointer on every
+        // key event in the system. An unretained pointer to a freed monitor
+        // segfaults inside the callback (observed: EXC_BAD_ACCESS in
+        // swift_getObjectType from processEventTapData). `stop()` balances it.
+        let refcon = Unmanaged.passRetained(self).toOpaque()
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
@@ -60,10 +72,13 @@ final class AssistantHotkeyMonitor {
             callback: { _, type, event, refcon in
                 guard let refcon else { return Unmanaged.passUnretained(event) }
                 let monitor = Unmanaged<AssistantHotkeyMonitor>.fromOpaque(refcon).takeUnretainedValue()
-                // The tap runs on the main run loop, so this is main-thread safe.
-                return MainActor.assumeIsolated {
-                    monitor.handleTap(type: type, event: event)
-                }
+                // No `MainActor.assumeIsolated` here. This callback is not
+                // guaranteed to arrive on the main actor, and asserting that
+                // it does traps the whole app with SIGTRAP on every keystroke
+                // the assumption doesn't hold for (observed three times).
+                // `handleTap` is nonisolated; only the user-facing callbacks
+                // hop to main.
+                return monitor.handleTap(type: type, event: event)
             },
             userInfo: refcon
         ) else {
@@ -78,7 +93,7 @@ final class AssistantHotkeyMonitor {
         return true
     }
 
-    private func handleTap(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+    nonisolated private func handleTap(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         switch type {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
@@ -91,7 +106,7 @@ final class AssistantHotkeyMonitor {
             }
             if !holding {
                 holding = true
-                onHoldBegan?()
+                fireOnMain(began: true)
             }
             return nil // swallow, including auto-repeats
 
@@ -114,7 +129,19 @@ final class AssistantHotkeyMonitor {
         }
     }
 
-    private func chordIsSatisfied(_ flags: CGEventFlags) -> Bool {
+    /// Hops a hold callback onto the main actor, where the rest of the app
+    /// lives. The tap itself must stay off it. The callback is picked inside
+    /// the hop, not outside — reading a main-actor property from the sending
+    /// closure is exactly the isolation violation this is avoiding.
+    nonisolated private func fireOnMain(began: Bool) {
+        DispatchQueue.main.async { [self] in
+            MainActor.assumeIsolated {
+                (began ? onHoldBegan : onHoldEnded)?()
+            }
+        }
+    }
+
+    nonisolated private func chordIsSatisfied(_ flags: CGEventFlags) -> Bool {
         flags.contains(.maskAlternate) && flags.contains(.maskCommand)
             && !flags.contains(.maskControl) && !flags.contains(.maskShift)
     }
@@ -159,8 +186,8 @@ final class AssistantHotkeyMonitor {
         }
     }
 
-    private func endHold() {
+    nonisolated private func endHold() {
         holding = false
-        onHoldEnded?()
+        fireOnMain(began: false)
     }
 }

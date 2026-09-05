@@ -16,22 +16,41 @@ enum MacContactsService {
         var display: String { name.isEmpty ? number : "\(name) — \(number)" }
     }
 
-    /// Asks once; afterwards macOS remembers the answer.
-    static func requestAccess() async -> Bool {
-        let store = CNContactStore()
+    /// Reports whether Contacts is readable right now, and triggers the
+    /// system prompt when it has never been asked — but never waits for it.
+    ///
+    /// `CNContactStore.requestAccess` is a completion-handler bridge that
+    /// ignores cancellation, so awaiting it can suspend forever: if TCC
+    /// decides not to show the prompt (this app is rebuilt and reinstalled
+    /// constantly, and TCC keys off the code signature) the continuation is
+    /// simply never resumed. Racing it against a timeout doesn't help either
+    /// — a task group waits for every child before it returns, cancelled or
+    /// not. So the prompt is kicked off and the caller is told to try again,
+    /// which costs one repeated sentence instead of a wedged assistant.
+    static func requestAccess() -> AccessResult {
         switch CNContactStore.authorizationStatus(for: .contacts) {
-        case .authorized, .limited: return true
-        case .denied, .restricted: return false
+        case .authorized, .limited: return .granted
+        case .denied, .restricted: return .denied
         default:
-            return (try? await store.requestAccess(for: .contacts)) ?? false
+            CNContactStore().requestAccess(for: .contacts) { _, _ in }
+            return .noAnswer
         }
     }
 
+    enum AccessResult { case granted, denied, noAnswer }
+
     enum LookupError: LocalizedError {
         case denied
+        case noAnswer
         var errorDescription: String? {
-            "MyClicky needs Contacts access to look up a number — "
-            + "System Settings ▸ Privacy & Security ▸ Contacts."
+            switch self {
+            case .denied:
+                "MyClicky needs Contacts access to look up a number — turn it on in "
+                + "System Settings ▸ Privacy & Security ▸ Contacts, then try again."
+            case .noAnswer:
+                "Approve the Contacts prompt on screen (or switch MyClicky on under "
+                + "System Settings ▸ Privacy & Security ▸ Contacts), then say that again."
+            }
         }
     }
 
@@ -44,7 +63,11 @@ enum MacContactsService {
         if looksLikePhoneNumber(trimmed) {
             return [Match(name: "", number: trimmed)]
         }
-        guard await requestAccess() else { throw LookupError.denied }
+        switch requestAccess() {
+        case .granted: break
+        case .denied: throw LookupError.denied
+        case .noAnswer: throw LookupError.noAnswer
+        }
 
         let store = CNContactStore()
         let keys = [CNContactGivenNameKey, CNContactFamilyNameKey,
@@ -68,13 +91,20 @@ enum MacContactsService {
         }
         // A mobile number is what a text should go to; a landline or fax
         // silently fails to deliver, so put mobiles first.
-        return matches.sorted { a, _ in
-            contacts.contains { contact in
-                contact.phoneNumbers.contains { phone in
-                    phone.value.stringValue == a.number
-                        && (phone.label == CNLabelPhoneNumberiPhone || phone.label == CNLabelPhoneNumberMobile)
-                }
-            }
+        //
+        // Mobile-ness is precomputed and the comparator reads it. The previous
+        // version ignored its second argument, which is not a strict weak
+        // ordering — Swift's sort is free to misbehave on one, and it also
+        // re-scanned every contact on every comparison.
+        let mobiles: Set<String> = Set(contacts.flatMap { contact in
+            contact.phoneNumbers
+                .filter { $0.label == CNLabelPhoneNumberiPhone || $0.label == CNLabelPhoneNumberMobile }
+                .map(\.value.stringValue)
+        })
+        return matches.sorted { a, b in
+            let aMobile = mobiles.contains(a.number)
+            let bMobile = mobiles.contains(b.number)
+            return aMobile != bMobile ? aMobile : false
         }
     }
 
