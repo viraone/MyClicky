@@ -25,6 +25,12 @@ final class AssistantController {
     private let gmailUnread = GmailUnreadWatcher()
     private let captureFileWatcher = CaptureFileWatcher()
     private let driveCleanup = DriveCleanupWindowController()
+    /// The passage a copy verb last put on the clipboard — what "that" means
+    /// in "text that to Noah". Kept apart from `NSPasteboard.general` on
+    /// purpose: the system clipboard is shared with every app on the Mac and
+    /// with Clicky's own paste-based typing, so it can change out from under
+    /// a sentence that's still being spoken.
+    private var lastCopiedText: String?
     /// The in-flight inventory/flagging pass, so Cancel and a second ⌥⌘D can
     /// stop it rather than stacking a second scan on top.
     private var driveCleanupTask: Task<Void, Never>?
@@ -620,6 +626,7 @@ final class AssistantController {
         ring.hide()
         panel.state.status = .thinking
         panel.state.answer = ""
+        panel.state.copiedPreview = nil
         panel.state.errorText = nil
 
         requestID += 1
@@ -636,6 +643,20 @@ final class AssistantController {
                 confirm: { [weak self] question in
                     guard let self, id == self.requestID else { return false }
                     return await self.requestConfirm(question: question, screen: screen)
+                },
+                remember: { [weak self] text in
+                    guard let self else { return }
+                    self.lastCopiedText = text
+                    self.showCopiedText(text)
+                },
+                lastCopied: { [weak self] in self?.lastCopiedText },
+                sendCopied: { [weak self] app, recipient, body in
+                    guard let self, id == self.requestID else { return false }
+                    return await self.sendCopied(app: app, recipient: recipient, body: body, screen: screen)
+                },
+                openConversation: { [weak self] app, name in
+                    guard let self, id == self.requestID else { return false }
+                    return await self.openConversation(app: app, named: name)
                 }
             )
             await ActionPlanner.run(utterance: utterance, apiKey: apiKey, targetApp: targetApp, screen: screen, callbacks: callbacks) { [capture] in
@@ -983,7 +1004,175 @@ final class AssistantController {
         }
     }
 
-    // MARK: - Drive cleanup (⌥⌘D)
+    // MARK: - Copy by voice, then send it somewhere
+
+    /// Shows the passage that was just copied, in the panel's existing answer
+    /// area. Never spoken: a paragraph of code read aloud is useless, and the
+    /// point of showing it is to be checked by eye before it goes anywhere.
+    private func showCopiedText(_ text: String) {
+        panel.state.status = .answering
+        panel.state.copiedPreview = text
+        // A copied passage is for reading, and the default panel height only
+        // has room for the status line above it.
+        panel.growIfNeeded()
+    }
+
+    /// Brings a named conversation on screen — the spoken alternative to
+    /// reaching for the mouse when the thread you want isn't the one open.
+    /// Sends nothing: it exists so the thread is visible *before* the
+    /// separate "text that" step puts anything into it.
+    private func openConversation(app: String, named name: String) async -> Bool {
+        guard app.lowercased().contains("message") else {
+            panel.state.answer = "I can only open conversations in Messages."
+            return false
+        }
+        let matches: [MacContactsService.Match]
+        do {
+            matches = try await MacContactsService.numbers(for: name)
+        } catch {
+            panel.state.answer = error.localizedDescription
+            return false
+        }
+        // Same rule as Gmail: one match proceeds, several ask, none says so.
+        // Never a guess — opening the wrong thread is how the next "text
+        // that" goes to the wrong person.
+        guard let only = matches.first, matches.count == 1 else {
+            if matches.isEmpty {
+                panel.state.answer = "No contact named “\(name)” with a phone number. "
+                                   + "Try their full name, or say the number itself."
+            } else {
+                let list = matches.prefix(6).map { "• \($0.display)" }.joined(separator: "\n")
+                panel.state.answer = "\(matches.count) numbers match “\(name)”:\n\(list)\n\n"
+                                   + "Say the full name or the number you want."
+            }
+            return false
+        }
+        guard await MessagesActions.openConversation(number: only.number) else {
+            panel.state.answer = "Couldn't get \(only.display) open in Messages."
+            return false
+        }
+        ActivityLog.recordAction("messages-open-conversation")
+        panel.state.answer = "Opened \(only.display) in Messages — say “text that” to send what you copied."
+        return true
+    }
+
+    /// Resolves the recipient, shows what's about to be sent, and sends it.
+    ///
+    /// Deliberately does not open the app: opening Messages or Gmail stays a
+    /// separate spoken step, so the app is on screen and visible before
+    /// anything is put into it.
+    private func sendCopied(app: String, recipient: String, body: String, screen: NSScreen) async -> Bool {
+        switch app.lowercased() {
+        case let name where name.contains("message"):
+            return await sendViaMessages(recipient: recipient, body: body, screen: screen)
+        case let name where name.contains("mail") || name.contains("gmail"):
+            return await sendViaGmail(recipient: recipient, body: body, screen: screen)
+        case let name where name.contains("whatsapp"):
+            return await sendViaWhatsApp(recipient: recipient, body: body, screen: screen)
+        default:
+            panel.state.answer = "I don't know how to send through \(app)."
+            return false
+        }
+    }
+
+    /// An open conversation IS the recipient — no contact lookup, because
+    /// there's nothing to disambiguate. Only a Messages window sitting on the
+    /// conversation list needs a name resolved, and that isn't supported yet.
+    private func sendViaMessages(recipient: String, body: String, screen: NSScreen) async -> Bool {
+        guard MessagesActions.running() != nil else {
+            panel.state.answer = "Messages isn't open. Open it first, then say that again."
+            return false
+        }
+        guard let open = MessagesActions.openConversation() else {
+            panel.state.answer = "No conversation is open in Messages. Say “open \(recipient)'s "
+                               + "conversation” first, then say that again."
+            return false
+        }
+        // Refuse rather than warn when the spoken name and the open thread
+        // disagree. A confirm dialog is weakest exactly here: you asked for
+        // Dino Dad, you expect Dino Dad, and a dialog naming a phone number
+        // reads as noise to click past. A refusal can't be clicked past, and
+        // a wrong send can't be taken back.
+        guard MessagesActions.spokenNameMatches(recipient, conversation: open) else {
+            panel.state.answer = "You said “\(recipient)”, but the conversation that's open is \(open). "
+                               + "Say “open \(recipient)'s conversation” first — or say “text that” "
+                               + "to send to the one that's already open."
+            ActivityLog.recordAction("messages-name-mismatch")
+            return false
+        }
+        guard await confirmSend(to: open, via: "Messages", body: body, screen: screen) else {
+            panel.state.answer = "Cancelled — nothing was sent."
+            return false
+        }
+        var ok = false
+        MessagesActions.sendToOpenConversation(body) { [weak self] message, success in
+            ok = success
+            self?.panel.state.answer = message
+        }
+        return ok
+    }
+
+    /// Gmail resolves the name against real contacts. One match proceeds,
+    /// several stop and ask, none says so plainly — never a guess, because
+    /// the wrong Ben is not a recoverable mistake.
+    private func sendViaGmail(recipient: String, body: String, screen: NSScreen) async -> Bool {
+        let contacts = ContactsService(auth: googleAuth)
+        let matches: [ContactsService.Match]
+        do {
+            matches = try await contacts.search(recipient)
+        } catch {
+            panel.state.answer = "Couldn't look up \(recipient): \(error.localizedDescription)"
+            return false
+        }
+        guard let only = matches.first, matches.count == 1 else {
+            if matches.isEmpty {
+                panel.state.answer = "No contact matching “\(recipient)”. Try their full name or email address."
+            } else {
+                let list = matches.prefix(6).map { "• \($0.display)" }.joined(separator: "\n")
+                panel.state.answer = "\(matches.count) contacts match “\(recipient)”:\n\(list)\n\n"
+                                   + "Say the full name or the email address."
+            }
+            return false
+        }
+        guard await confirmSend(to: only.display, via: "Gmail", body: body, screen: screen) else {
+            panel.state.answer = "Cancelled — nothing was sent."
+            return false
+        }
+        GmailActions.composeTo(only.email, body: body)
+        panel.state.answer = "Drafted to \(only.display) in Gmail — press Send when it looks right."
+        return true
+    }
+
+    private func sendViaWhatsApp(recipient: String, body: String, screen: NSScreen) async -> Bool {
+        guard await confirmSend(to: recipient, via: "WhatsApp", body: body, screen: screen) else {
+            panel.state.answer = "Cancelled — nothing was sent."
+            return false
+        }
+        // Typed but not sent: WhatsApp's own Send stays a human click, which
+        // matches how the rest of the WhatsApp pad already behaves.
+        WhatsAppActions.openChat(named: recipient, status: { [weak self] message, ok in
+            guard !ok else { return }
+            self?.panel.state.answer = message
+        }, then: { [weak self] in
+            WhatsAppActions.typeMessage(body) { message, _ in
+                self?.panel.state.answer = message
+            }
+        })
+        return true
+    }
+
+    /// The preview. Shows who it resolved to and the opening of what's about
+    /// to be sent, so "that" is never ambiguous at the moment it matters.
+    private func confirmSend(to recipient: String, via app: String,
+                             body: String, screen: NSScreen) async -> Bool {
+        let preview = body.count > 220 ? String(body.prefix(220)) + "…" : body
+        return await requestConfirm(
+            question: "Send to \(recipient) in \(app)?\n\n\(preview)",
+            screen: screen
+        )
+    }
+
+    // MARK: - Drive cleanup (⌥⌘D)    // MARK: - Drive cleanup (⌥⌘D)
 
     /// Inventory → flag → review → trash. The first three stages never write
     /// anything: the only call that changes Drive is `drive.trash`, and it runs
@@ -1006,10 +1195,12 @@ final class AssistantController {
         state.scannedCount = 0
         state.candidates = []
         state.selection = []
-        state.onCancel = { [weak self] in
+        state.onCancel = { [weak self] in self?.driveCleanup.close() }
+        // Closing the window by any route stops the scan — the Cancel button,
+        // the red close button and ⌘W all land here.
+        driveCleanup.onClose = { [weak self] in
             self?.driveCleanupTask?.cancel()
             self?.driveCleanupTask = nil
-            self?.driveCleanup.close()
         }
         state.onTrash = { [weak self] in self?.trashSelectedDriveFiles() }
         driveCleanup.show()

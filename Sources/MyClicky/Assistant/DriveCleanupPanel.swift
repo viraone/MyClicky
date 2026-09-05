@@ -41,7 +41,13 @@ final class DriveCleanupState: ObservableObject {
 @MainActor
 final class DriveCleanupWindowController {
     private var window: NSWindow?
+    private var closeObserver: NSObjectProtocol?
     let state = DriveCleanupState()
+    /// Fired when the window goes away by any route — including the red close
+    /// button and ⌘W, which bypass the Cancel button entirely. Without this a
+    /// scan closed mid-flight keeps running invisibly, still calling Claude
+    /// and still spending money on a window nobody is looking at.
+    var onClose: (() -> Void)?
 
     func show() {
         if let window {
@@ -56,14 +62,25 @@ final class DriveCleanupWindowController {
         window.setContentSize(NSSize(width: 820, height: 580))
         window.center()
         window.isReleasedWhenClosed = false
+        closeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification, object: window, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.handleClosed() }
+        }
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         self.window = window
     }
 
     func close() {
-        window?.close()
+        window?.close()   // fires willClose, so handleClosed does the teardown
+    }
+
+    private func handleClosed() {
+        if let closeObserver { NotificationCenter.default.removeObserver(closeObserver) }
+        closeObserver = nil
         window = nil
+        onClose?()
     }
 }
 

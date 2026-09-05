@@ -75,6 +75,12 @@ final class AssistantState: ObservableObject {
     @Published var status: AssistantStatus = .idle
     @Published var transcript = ""
     @Published var answer = ""
+    /// A passage copied off the screen by voice. Deliberately NOT `answer`:
+    /// the planner writes a running commentary there and finishes every plan
+    /// with "Done.", which would wipe the text the moment it appeared. This
+    /// sits underneath and survives, monospaced, because indentation in code
+    /// is meaning rather than decoration.
+    @Published var copiedPreview: String?
     @Published var errorText: String?
     @Published var collapsed = false
     @Published var tab: AssistantTab = .captureDictate
@@ -203,6 +209,15 @@ final class AssistantPanelController {
     /// Stretches the panel taller (or back to normal) in place, growing
     /// upward so the bottom edge — closest to wherever the user is
     /// working — doesn't shift. Keeps whatever width the user last set.
+    /// Grows the panel if it isn't already tall. Used when something arrives
+    /// that has to be read rather than glanced at — a copied passage lands in
+    /// a panel sized for one line of status and is otherwise clipped away
+    /// entirely, header showing and nothing beneath it.
+    func growIfNeeded() {
+        guard !state.isTall else { return }
+        toggleTall()
+    }
+
     func toggleTall() {
         guard let panel, !state.collapsed else { return }
         state.isTall.toggle()
@@ -1046,7 +1061,32 @@ struct AssistantPanelView: View {
                 } else {
                     speakingPlaceholder
                 }
+                copiedPreviewView
             }
+        } else {
+            copiedPreviewView
+        }
+    }
+
+    /// The passage a voice copy just put on the clipboard, shown so it can be
+    /// checked by eye before it's sent anywhere.
+    @ViewBuilder
+    private var copiedPreviewView: some View {
+        if let copied = state.copiedPreview, !copied.isEmpty {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("COPIED — on your clipboard")
+                    .font(.system(size: 9, weight: .heavy, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.45))
+                ScrollView([.vertical, .horizontal]) {
+                    Text(copied)
+                        .font(.system(size: 11.5, weight: .regular, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.92))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 150)
+            }
+            .padding(.top, 6)
         }
     }
 

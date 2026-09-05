@@ -120,6 +120,26 @@ enum GmailActions {
         navigate(to: composeURL)
     }
 
+    /// Opens a compose window already addressed, with the body filled in.
+    /// Gmail accepts both in the compose URL, which avoids driving its UI
+    /// field by field — and leaves the draft on screen unsent, so Send stays
+    /// a deliberate human click.
+    static func composeTo(_ address: String, body: String, subject: String = "") {
+        ActivityLog.recordAction("gmail-compose-to")
+        var components = URLComponents(string: "https://mail.google.com/mail/u/0/")!
+        components.queryItems = [
+            .init(name: "view", value: "cm"),
+            .init(name: "fs", value: "1"),
+            .init(name: "to", value: address),
+            .init(name: "su", value: subject),
+            .init(name: "body", value: body),
+        ]
+        components.percentEncodedQuery = components.percentEncodedQuery?
+            .replacingOccurrences(of: "+", with: "%2B")
+        guard let url = components.url else { return }
+        if let target = URL(string: url.absoluteString) { NSWorkspace.shared.open(target) }
+    }
+
     /// Returns to the inbox list.
     static func openInbox() {
         ActivityLog.recordAction("gmail-inbox")

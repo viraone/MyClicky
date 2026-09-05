@@ -125,6 +125,17 @@ struct NumpadView: View {
                     case .youtube: youtubePad
                     }
                 }
+                // Talk rides along in the corner of every other pad, so you can
+                // speak a command without first hunting for the right mode.
+                // `safeAreaInset` rather than an overlay: it reserves its own
+                // space instead of sitting on top of a key or tile and
+                // swallowing taps meant for what's underneath.
+                .safeAreaInset(edge: .trailing, alignment: .bottom, spacing: 6) {
+                    // The trailing padding is what holds it off the right
+                    // edge — raise it to move Talk further left, lower it to
+                    // push it back toward the corner.
+                    if mode != .talk { cornerTalkButton.padding(.trailing, 44) }
+                }
                 .frame(width: geo.size.width * 0.78)
             }
         }
@@ -152,6 +163,12 @@ struct NumpadView: View {
             }
             client.start()
             permissionDenied = !(await SpeechRecorder.requestPermissions())
+        }
+        .onChange(of: client.talkMessage) { _, message in
+            // Talking from another pad would otherwise be a black hole: the
+            // reply lands on the Talk pad, which isn't on screen.
+            guard mode != .talk, !message.isEmpty else { return }
+            statusText = message
         }
         .onChange(of: client.youtubeCollapsed) { _, collapsed in
             guard mode == .youtube else { return }
@@ -373,6 +390,32 @@ struct NumpadView: View {
                     .fill(talkRecording ? Snes.red : Snes.talk)
                     .shadow(color: (talkRecording ? Snes.red : Snes.talk).opacity(0.6), radius: 18, y: 6)
             )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(talkRecording ? "Stop and send" : "Talk to Clicky")
+        .accessibilityHint(talkRecording ? "Double tap when you're done speaking"
+                                          : "Double tap, then say what you want your Mac to do")
+    }
+
+    /// The Talk pad's button, shrunk to a corner badge for the other pads.
+    /// Same handler, so recording started here behaves identically — including
+    /// only this button being able to stop it.
+    private var cornerTalkButton: some View {
+        Button(action: talkTapped) {
+            VStack(spacing: 1) {
+                Image(systemName: talkRecording ? "stop.fill" : "mic.fill")
+                    .font(.system(size: 20, weight: .black))
+                Text(talkRecording ? "STOP" : "TALK")
+                    .font(.system(size: 9, weight: .black, design: .rounded))
+            }
+            .foregroundStyle(.white)
+            .frame(width: 58, height: 58)
+            .background(
+                Circle()
+                    .fill(talkRecording ? Snes.red : Snes.talk)
+                    .shadow(color: (talkRecording ? Snes.red : Snes.talk).opacity(0.55), radius: 10, y: 3)
+            )
+            .overlay(Circle().strokeBorder(.white.opacity(0.25), lineWidth: 1))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(talkRecording ? "Stop and send" : "Talk to Clicky")

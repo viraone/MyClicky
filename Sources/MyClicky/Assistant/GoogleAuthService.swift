@@ -10,9 +10,15 @@ import Network
 final class GoogleAuthService {
     static let driveScope = "https://www.googleapis.com/auth/drive"
     static let gmailScope = "https://www.googleapis.com/auth/gmail.modify"
+    /// Read-only contacts, for turning a spoken "email that to Ben" into a
+    /// real address. Both lists matter: people you've emailed but never saved
+    /// live in "other contacts", not "my contacts", and that's most of them.
+    static let contactsScope = "https://www.googleapis.com/auth/contacts.readonly"
+    static let otherContactsScope = "https://www.googleapis.com/auth/contacts.other.readonly"
     /// All scopes MyClicky asks for. When this list changes, the stored
     /// refresh token is discarded so the user re-consents with the new scopes.
-    static let scopeString = [driveScope, gmailScope].joined(separator: " ")
+    static let scopeString = [driveScope, gmailScope, contactsScope, otherContactsScope]
+        .joined(separator: " ")
 
     private var accessToken: String?
     private var accessTokenExpiry: Date?

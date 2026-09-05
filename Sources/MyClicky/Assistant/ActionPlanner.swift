@@ -27,6 +27,13 @@ enum ActionPlanner {
         var newTitle: String?
         var newStart: String?
         var newEnd: String?
+        /// copy_paragraph: the spoken words the passage starts with.
+        var anchor: String?
+        /// copy_range: the spoken words bounding the passage at each end.
+        var fromText: String?
+        var toText: String?
+        /// send_copied: who it goes to, named the way the user said it.
+        var to: String?
     }
 
     struct Plan: Decodable {
@@ -39,9 +46,20 @@ enum ActionPlanner {
         var status: (String) -> Void = { _ in }
         /// Ask the user to confirm before an irreversible step; true = proceed.
         var confirm: (String) async -> Bool = { _ in false }
+        /// Copy verbs hand their result here; `send_copied` reads it back.
+        /// Held by the controller rather than this planner so a copy in one
+        /// utterance is still there for a send in the next one.
+        var remember: (String) -> Void = { _ in }
+        var lastCopied: () -> String? = { nil }
+        /// Resolves the recipient, confirms, and sends. Owned by the
+        /// controller so the planner needs to know nothing about Gmail,
+        /// Messages, contacts or confirmation panels.
+        var sendCopied: (_ app: String, _ recipient: String, _ body: String) async -> Bool = { _, _, _ in false }
+        /// Brings a named conversation on screen without sending anything.
+        var openConversation: (_ app: String, _ name: String) async -> Bool = { _, _ in false }
     }
 
-    private static let allowedVerbs: Set<String> = ["open", "click", "focus", "type", "press", "scroll", "create_event", "update_event", "done"]
+    private static let allowedVerbs: Set<String> = ["open", "click", "focus", "type", "press", "scroll", "create_event", "update_event", "copy_paragraph", "copy_range", "send_copied", "open_conversation", "done"]
 
     /// Backstops the model's own "irreversible" flag: these words in a
     /// click/press target force a confirmation even if it didn't say so.
@@ -79,6 +97,31 @@ enum ActionPlanner {
       found by time instead. "newTitle"/"newStart"/"newEnd" are the changes; \
       send only the ones that are actually changing. Giving "newStart" \
       alone keeps the event's current length.
+    - copy_paragraph: copy the paragraph or block of text on screen that \
+      begins with the words the user said. Do NOT try to select it with \
+      clicks or drags — this verb reads the text itself. \
+      {"verb":"copy_paragraph","anchor":"func handle tap"}
+    - copy_range: copy the passage bounded by two spoken landmarks, including \
+      both. Same as above: never select it by hand. \
+      {"verb":"copy_range","fromText":"import foundation","toText":"return nil"}
+      For both copy verbs, put the user's words in verbatim, mangled as they \
+      are — they get matched against the real text later, and "fixing" them \
+      makes that harder, not easier.
+    - send_copied: send whatever was last copied to a person, in a named app. \
+      {"verb":"send_copied","app":"Messages","to":"Noah"} \
+      "app" is Messages, Gmail or WhatsApp. Use this whenever the user refers \
+      to something already copied — "text that to Noah", "email it to Ben", \
+      "send this to Mom on WhatsApp". Never follow it with click/type steps \
+      to do the sending; this verb does the whole thing, including asking the \
+      user to confirm. Do NOT emit an "open" step before it either — the user \
+      opens the app themselves, deliberately.
+    - open_conversation: bring someone's Messages conversation on screen, by \
+      name. {"verb":"open_conversation","app":"Messages","to":"Dino Dad"} \
+      Use this for "open Dino Dad's conversation", "pull up my chat with \
+      Ben". NEVER try to do this with click/focus/type steps against the \
+      sidebar or the search box — Messages doesn't expose either to \
+      automation and such plans stall halfway. This verb opens the thread \
+      and nothing else; it does not send.
     - done: nothing more is needed. Also use this — as the ONLY step — when \
       the request isn't something you can act on with these verbs (general \
       chit-chat, a question with nothing to click/type/open, or nothing on \
@@ -210,7 +253,7 @@ enum ActionPlanner {
                 app?.activate(options: [.activateAllWindows])
                 try? await Task.sleep(nanoseconds: 300_000_000)
             }
-            guard await execute(step, app: &app, screen: screen, outcome: &outcome,
+            guard await execute(step, app: &app, screen: screen, outcome: &outcome, callbacks: callbacks,
                                 screenshot: screenshot, claude: claude) else {
                 log.notice("step failed, stopping: \(step.verb, privacy: .public)")
                 callbacks.status(outcome ?? "Got stuck on: \(step.note ?? describe(step))")
@@ -236,6 +279,9 @@ enum ActionPlanner {
         case "type": "Typing…"
         case "press": "Pressing \(step.key ?? "a key")…"
         case "scroll": "Scrolling…"
+        case "copy_paragraph", "copy_range": "Finding that on screen…"
+        case "open_conversation": "Opening \(step.to ?? "that conversation")…"
+        case "send_copied": "Sending to \(step.to ?? "them")…"
         case "create_event": "Adding \(step.title ?? "the event") to your calendar…"
         case "update_event": "Updating \(step.title ?? "the event") in your calendar…"
         default: "Working…"
@@ -244,7 +290,7 @@ enum ActionPlanner {
 
     @MainActor
     private static func execute(_ step: Step, app: inout NSRunningApplication?, screen: NSScreen,
-                                outcome: inout String?,
+                                outcome: inout String?, callbacks: Callbacks,
                                 screenshot: @escaping () async throws -> Data, claude: AnthropicService) async -> Bool {
         // Never log step.text verbatim — it's the actual message/content
         // being typed, which can be personal; log its length instead.
@@ -311,6 +357,46 @@ enum ActionPlanner {
             guard let direction = step.direction.flatMap(AXActions.ScrollDirection.init(rawValue:)) else { return false }
             AXActions.scroll(direction)
             return true
+        case "copy_paragraph", "copy_range":
+            // Copying never touches the frontmost app's UI, so which app the
+            // plan thought it was driving doesn't matter here.
+            let result: TextCopyActions.Result
+            if step.verb == "copy_paragraph" {
+                guard let anchor = step.anchor, !anchor.isEmpty else { return false }
+                result = await TextCopyActions.copyParagraph(startingWith: anchor, claude: claude)
+            } else {
+                guard let from = step.fromText, let to = step.toText,
+                      !from.isEmpty, !to.isEmpty else { return false }
+                result = await TextCopyActions.copyRange(from: from, to: to, claude: claude)
+            }
+            switch result {
+            case .copied(let text, let source, let verbatim):
+                // Status first, then the passage. Both write to the same
+                // answer area, and the passage is what needs to survive —
+                // "Copied 30 words" is a receipt, the text is the point.
+                let words = text.split(whereSeparator: { $0.isWhitespace }).count
+                callbacks.status(verbatim
+                    ? "Copied \(words) words from \(source)."
+                    : "Copied \(words) words from \(source) — check it, the wording may not be exact.")
+                callbacks.remember(text)
+                return true
+            case .noSource:
+                callbacks.status("I can't read any text on screen right now.")
+                return false
+            case .notFound(let reason), .failed(let reason):
+                callbacks.status(reason)
+                return false
+            }
+        case "open_conversation":
+            guard let name = step.to, !name.isEmpty else { return false }
+            return await callbacks.openConversation(step.app ?? "Messages", name)
+        case "send_copied":
+            guard let target = step.app, let recipient = step.to else { return false }
+            guard let body = callbacks.lastCopied(), !body.isEmpty else {
+                callbacks.status("Nothing copied yet — copy something first, then say who to send it to.")
+                return false
+            }
+            return await callbacks.sendCopied(target, recipient, body)
         case "create_event":
             guard let title = step.title, let start = step.start else { return false }
             do {

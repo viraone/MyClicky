@@ -25,8 +25,15 @@ final class ConfirmActionPanelController {
             icon: icon,
             tint: tint,
             onDecision: { [weak self] confirmed in
-                self?.hide()
-                onDecision(confirmed)
+                // Tear the panel down on the NEXT runloop turn, not inside the
+                // button's own action. `hide()` drops the last reference to
+                // the panel and the hosting view whose gesture is still being
+                // dispatched — SwiftUI then messages a freed object and the
+                // app dies with an objc SIGABRT in _ButtonGesture. Observed.
+                DispatchQueue.main.async {
+                    self?.hide()
+                    onDecision(confirmed)
+                }
             }
         )
         let hosting = NSHostingController(rootView: view)
@@ -37,6 +44,8 @@ final class ConfirmActionPanelController {
             defer: false
         )
         panel.contentViewController = hosting
+        // Never let AppKit free the panel out from under the hosting view.
+        panel.isReleasedWhenClosed = false
         panel.isFloatingPanel = true
         panel.level = .floating
         panel.backgroundColor = .clear
