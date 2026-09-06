@@ -180,6 +180,14 @@ final class AssistantState: ObservableObject {
     }
     /// True while Clicky is reading an answer aloud.
     @Published var isSpeaking = false
+    /// Break coach: whether it's on, the countdown label, and the check-in
+    /// text while one is waiting to be answered.
+    @Published var coachEnabled = true
+    @Published var coachCountdown = "25:00"
+    @Published var coachMessage: String?
+    var onToggleCoach: (() -> Void)?
+    var onCoachBreak: (() -> Void)?
+    var onCoachSnooze: (() -> Void)?
     /// Whether the Ask tab shows replies as text instead of speaking them
     /// (⌥⌘C questions land here too). Off by default — Clicky reads replies
     /// aloud unless the user turns "Read Response" on to read them itself.
@@ -568,6 +576,10 @@ struct AssistantPanelView: View {
             // Thin rule under the tabs, as a terminal draws under its tab row.
             Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
             phaseStrip
+            if let message = state.coachMessage {
+                coachCard(message)
+                    .animation(.easeInOut(duration: 0.25), value: state.coachMessage)
+            }
             switch state.tab {
             case .ask, .talk:
                 topInputRow
@@ -1140,6 +1152,7 @@ struct AssistantPanelView: View {
                 .foregroundStyle(.white.opacity(0.28))
                 .padding(.leading, 6)
             Spacer()
+            coachButton
             Text("CLICKY")
                 .font(.system(size: 12, weight: .heavy, design: .monospaced))
                 .kerning(2)
@@ -1166,6 +1179,93 @@ struct AssistantPanelView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: state.canStop)
+    }
+
+    /// The break coach's countdown, and its on/off switch. Always visible so
+    /// the next check-in is never a surprise.
+    private var coachButton: some View {
+        let on = state.coachEnabled
+        let tint = Color(red: 0.35, green: 0.85, blue: 0.45)
+        return Button {
+            state.onToggleCoach?()
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: on ? "cup.and.saucer.fill" : "cup.and.saucer")
+                    .font(.system(size: 12, weight: .semibold))
+                Text(on ? state.coachCountdown : "break coach off")
+                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .monospacedDigit()
+            }
+            .foregroundStyle(on ? tint : .white.opacity(0.4))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(on ? tint.opacity(0.14) : Color.white.opacity(0.04))
+            )
+        }
+        .buttonStyle(.plain)
+        .help(on ? "Break coach is on — Clicky checks in after 25 minutes at the computer. Click to turn off."
+                 : "Break coach is off. Click to turn on.")
+    }
+
+    /// Clicky's check-in, with the two honest answers to it.
+    private func coachCard(_ message: String) -> some View {
+        let tint = Color(red: 0.35, green: 0.85, blue: 0.45)
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "figure.walk")
+                    .font(.system(size: 15, weight: .bold))
+                Text("BREAK TIME")
+                    .font(.system(size: 14, weight: .heavy, design: .monospaced))
+                    .kerning(1.5)
+                Spacer()
+                if state.isSpeaking {
+                    Image(systemName: "waveform")
+                        .symbolEffect(.pulse, isActive: true)
+                }
+            }
+            .foregroundStyle(tint)
+            Text(message)
+                .font(.system(size: 15.5, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.95))
+                .lineSpacing(3)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 10) {
+                coachAction("Taking a break", icon: "checkmark", fill: tint, dark: true) {
+                    state.onCoachBreak?()
+                }
+                coachAction("5 more minutes", icon: "clock", fill: Color.white.opacity(0.12), dark: false) {
+                    state.onCoachSnooze?()
+                }
+                Spacer()
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(tint.opacity(0.10))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(tint.opacity(0.6), lineWidth: 1.5))
+        )
+        .transition(.move(edge: .top).combined(with: .opacity))
+    }
+
+    private func coachAction(_ title: String, icon: String, fill: Color, dark: Bool,
+                             action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: icon).font(.system(size: 12, weight: .heavy))
+                Text(title).font(.system(size: 13.5, weight: .bold, design: .monospaced))
+            }
+            .foregroundStyle(dark ? .black.opacity(0.85) : .white)
+            .padding(.horizontal, 14)
+            .frame(height: 32)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(fill))
+        }
+        .buttonStyle(.plain)
     }
 
     private var sendButton: some View {

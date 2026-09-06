@@ -25,6 +25,7 @@ final class AssistantController {
     private let gmailUnread = GmailUnreadWatcher()
     private let captureFileWatcher = CaptureFileWatcher()
     private let driveCleanup = DriveCleanupWindowController()
+    private let breakCoach = BreakCoach()
     /// The passage a copy verb last put on the clipboard — what "that" means
     /// in "text that to Noah". Kept apart from `NSPasteboard.general` on
     /// purpose: the system clipboard is shared with every app on the Mac and
@@ -341,6 +342,7 @@ final class AssistantController {
         gmailUnread.start()
         remote.start()
         ActivityLog.startSampling()
+        startBreakCoach()
     }
 
     /// Brings up the assistant panel without starting local speech capture
@@ -356,6 +358,79 @@ final class AssistantController {
             panel.state.errorText = nil
         }
         panel.show(near: cursor, on: screen)
+    }
+
+    // MARK: - Break coach
+
+    /// Wires the 25-minute coach to the panel: a live countdown in the bottom
+    /// bar, and a spoken check-in when the stretch is up.
+    private func startBreakCoach() {
+        panel.state.coachEnabled = breakCoach.enabled
+        panel.state.coachCountdown = breakCoach.remainingLabel
+        breakCoach.onChange = { [weak self] in
+            guard let self else { return }
+            self.panel.state.coachEnabled = self.breakCoach.enabled
+            self.panel.state.coachCountdown = self.breakCoach.remainingLabel
+        }
+        breakCoach.onTimeUp = { [weak self] in self?.breakTimeUp() }
+        panel.state.onToggleCoach = { [weak self] in
+            guard let self else { return }
+            self.breakCoach.enabled.toggle()
+            if !self.breakCoach.enabled { self.dismissCoachCard() }
+        }
+        panel.state.onCoachBreak = { [weak self] in
+            guard let self else { return }
+            ActivityLog.recordAction("break-taken", ["after": "\(Int(self.breakCoach.elapsed / 60))"])
+            self.dismissCoachCard()
+            self.breakCoach.breakTaken()
+        }
+        panel.state.onCoachSnooze = { [weak self] in
+            guard let self else { return }
+            ActivityLog.recordAction("break-snoozed", ["after": "\(Int(self.breakCoach.elapsed / 60))"])
+            self.dismissCoachCard()
+            self.breakCoach.snooze()
+        }
+        breakCoach.start()
+    }
+
+    private func dismissCoachCard() {
+        synthesizer.stopSpeaking(at: .immediate)
+        panel.state.coachMessage = nil
+    }
+
+    /// The stretch is up: get a line from Claude about *this* stretch, bring
+    /// the panel up wherever the pointer is, show it and say it. Never
+    /// interrupts a recording or an answer in flight — it waits and tries on
+    /// the next tick instead, by simply not being dismissed.
+    private func breakTimeUp() {
+        let minutes = Int(breakCoach.elapsed / 60)
+        let apps = breakCoach.appsThisStretch
+        let hour = Calendar.current.component(.hour, from: Date())
+        ActivityLog.recordAction("break-due", ["minutes": "\(minutes)", "app": apps.first?.name ?? "?"])
+        Task {
+            var line = Self.fallbackCoachLine(minutes: minutes, app: apps.first?.name)
+            if let apiKey = KeychainService.anthropicAPIKey() {
+                let claude = AnthropicService(apiKey: apiKey)
+                if let written = try? await claude.breakCheckIn(minutes: minutes, apps: apps, hour: hour) {
+                    line = written
+                }
+            }
+            // Don't talk over the user's own recording or a reply being read.
+            while panel.state.status == .listening || panel.state.isSpeaking {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+            }
+            showPanel()
+            panel.growIfNeeded()
+            panel.state.coachMessage = line
+            speak(line)
+        }
+    }
+
+    private static func fallbackCoachLine(minutes: Int, app: String?) -> String {
+        let where_ = app.map { " in \($0)" } ?? ""
+        return "That's \(minutes) minutes straight\(where_). Stand up, get a glass of water, and look at "
+             + "something far away for a minute. Hours in a chair isn't good for you — the work will "
+             + "still be here in five minutes, and you'll do it better."
     }
 
     // MARK: - Voice flow

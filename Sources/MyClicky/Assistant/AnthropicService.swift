@@ -102,6 +102,44 @@ struct AnthropicService {
         )
     }
 
+    /// A short break check-in from Clicky in the role of a coach who knows
+    /// how long this stretch has been and what it was spent in. Text-only.
+    func breakCheckIn(minutes: Int, apps: [(name: String, minutes: Int)], hour: Int) async throws -> String {
+        let instruction = """
+        You are Clicky, a warm, direct wellbeing coach living on this person's \
+        Mac. They have a habit of sitting at the computer for hours working on \
+        projects. Their timer just went off. Write what you would SAY out loud \
+        to them right now: two to four sentences, spoken plain English, no \
+        lists, no markdown, no emoji. Be specific to the facts given (how long, \
+        what they were working in, the time of day). Ask them to actually get \
+        up — water, stretch, look out a window, walk for a few minutes — and \
+        be honest that hours in a chair is not healthy, without lecturing or \
+        guilt. Vary your opening; never start with "Hey". Encourage them: the \
+        work will still be there in five minutes and they'll do it better.
+        """
+        let appList = apps.prefix(3).map { "\($0.name) (\($0.minutes) min)" }.joined(separator: ", ")
+        let facts = """
+        Minutes at the computer this stretch: \(minutes)
+        Apps used, most first: \(appList.isEmpty ? "unknown" : appList)
+        Local hour (24h): \(hour)
+        """
+        let body: [String: Any] = [
+            "model": model,
+            "max_tokens": 300,
+            "output_config": ["effort": "low"],
+            "system": instruction,
+            "messages": [["role": "user", "content": facts]],
+        ]
+        let request = try makeRequest(body: body, timeout: 20)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if let reason = Self.refusalReason(from: data) { throw ServiceError.refused(reason) }
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+              let text = Self.answerText(from: data), !text.isEmpty else {
+            throw ServiceError.emptyAnswer
+        }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// Cleans up raw dictation: adds punctuation and capitalization without
     /// changing the words. Text-only request, no image.
     func cleanUpDictation(_ raw: String) async throws -> String {
