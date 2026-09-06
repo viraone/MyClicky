@@ -120,7 +120,10 @@ enum ActionPlanner {
       "send this to Mom on WhatsApp". Never follow it with click/type steps \
       to do the sending; this verb does the whole thing, including asking the \
       user to confirm. Do NOT emit an "open" step before it either — the user \
-      opens the app themselves, deliberately.
+      opens the app themselves, deliberately. Never put click/press steps \
+      BEFORE it either (no "click Copy" — the text is already copied). When \
+      the user says "send that / text that / send it to X", the whole plan \
+      is that one send_copied step.
     - open_conversation: bring someone's Messages conversation on screen, by \
       name. {"verb":"open_conversation","app":"Messages","to":"Dino Dad"} \
       Use this for "open Dino Dad's conversation", "pull up my chat with \
@@ -272,6 +275,9 @@ enum ActionPlanner {
     }
 
     private static func isIrreversible(_ step: Step) -> Bool {
+        // send_copied asks for itself, naming the conversation that's actually
+        // open — a second, vaguer prompt in front of it is just noise.
+        if step.verb == "send_copied" { return false }
         if step.irreversible == true { return true }
         let haystack = [step.label, step.key].compactMap { $0 }.joined(separator: " ").lowercased()
         return irreversibleKeywords.contains { haystack.contains($0) }
