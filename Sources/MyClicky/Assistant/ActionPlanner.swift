@@ -318,7 +318,8 @@ enum ActionPlanner {
         // notification steals it — and then Cmd+N lands in a browser instead
         // of Calendar (observed live). Anything that delivers input must
         // confirm the intended app is actually in front first.
-        if step.verb != "open" { await ensureFrontmost(app) }
+        // Messages verbs drive Messages, not the app the recording started in.
+        if !["open", "send_copied", "open_conversation"].contains(step.verb) { await ensureFrontmost(app) }
         switch step.verb {
         case "open":
             guard let name = step.app, let resolved = AppDriver.ensureRunning(appNamed: name) else { return false }
