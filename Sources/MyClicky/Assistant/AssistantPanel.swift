@@ -1153,16 +1153,6 @@ struct AssistantPanelView: View {
                 .padding(.leading, 6)
             Spacer()
             coachButton
-            Text("CLICKY")
-                .font(.system(size: 12, weight: .heavy, design: .monospaced))
-                .kerning(2)
-                .foregroundStyle(
-                    LinearGradient(
-                        colors: [.white.opacity(0.45), .white.opacity(0.15)],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
             if state.tab == .ask {
                 readAloudToggle
             }
