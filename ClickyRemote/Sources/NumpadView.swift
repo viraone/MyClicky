@@ -773,9 +773,14 @@ struct NumpadView: View {
 
     private func whatsappReplyTapped(_ chat: WhatsAppChat) {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        if blockedByActiveRecording(.whatsapp) { return }
         if recorder.isListening {
             // Only the row that started the recording can stop it.
-            guard recordTarget == .whatsapp, whatsappChat == chat else { return }
+            guard whatsappChat == chat else {
+                UINotificationFeedbackGenerator().notificationOccurred(.warning)
+                statusText = "Still recording for \(whatsappChat.label) — tap its Stop first"
+                return
+            }
         } else {
             recordTarget = .whatsapp
             dictateMode = false
@@ -1506,12 +1511,27 @@ struct NumpadView: View {
     private var whatsappRecording: Bool { recorder.isListening && recordTarget == .whatsapp }
     private var talkRecording: Bool { recorder.isListening && recordTarget == .talk }
 
+    /// A record key was tapped while a *different* mode is still recording.
+    /// Refuse (only the key that started a recording can stop it) and tell the
+    /// user which key to stop first, so the tap isn't silently swallowed.
+    private func blockedByActiveRecording(_ wanted: RecordTarget) -> Bool {
+        guard recorder.isListening, recordTarget != wanted else { return false }
+        let running: String
+        switch recordTarget {
+        case .talk: running = "TALK"
+        case .dictate: running = "DICTATE"
+        case .ask: running = "ASK"
+        case .whatsapp: running = "the WhatsApp reply"
+        }
+        UINotificationFeedbackGenerator().notificationOccurred(.warning)
+        statusText = "\(running) is still recording — tap \(running) to stop it first"
+        return true
+    }
+
     private func talkTapped() {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        if recorder.isListening {
-            // Only the TALK button itself can stop a TALK recording.
-            guard recordTarget == .talk else { return }
-        } else {
+        if blockedByActiveRecording(.talk) { return }
+        if !recorder.isListening {
             recordTarget = .talk
             dictateMode = false
         }
@@ -1536,7 +1556,8 @@ struct NumpadView: View {
             dictateMode = false
             statusText = "Ask — tap the mic (ASK) to speak your question"
         case "5":
-            // Ask record. Tapping while a dictation is running stops that instead.
+            // Ask record. Refuses while another mode is recording.
+            if blockedByActiveRecording(.ask) { return }
             if !recorder.isListening {
                 dictateMode = false
                 recordTarget = .ask
@@ -1554,7 +1575,8 @@ struct NumpadView: View {
             client.capture()
             statusText = "Capture — drag a region on your Mac, or tap CAPTURE again to cancel"
         case "3":
-            // Dictate record. Tapping while an Ask recording is running stops that instead.
+            // Dictate record. Refuses while another mode is recording.
+            if blockedByActiveRecording(.dictate) { return }
             if !recorder.isListening {
                 dictateMode = true
                 recordTarget = .dictate

@@ -17,7 +17,13 @@ enum KeychainService {
         read(account: "anthropic-workspace")
     }
 
+    /// Per-process cache. Every read goes through SecItemCopyMatching, which
+    /// blocks the calling thread while any keychain prompt is up — and the
+    /// unread watchers, planner and services all read on the main thread.
+    private static var cache: [String: String] = [:]
+
     static func read(account: String) -> String? {
+        if let cached = cache[account] { return cached }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: "MyClicky",
@@ -33,6 +39,7 @@ enum KeychainService {
               !value.isEmpty else {
             return nil
         }
+        cache[account] = value
         adoptIfNeeded(account: account, value: value)
         return value
     }
@@ -40,12 +47,25 @@ enum KeychainService {
     /// Items created in Terminal via the `security` CLI trigger a keychain
     /// password prompt every time this app reads them (partition-list quirk).
     /// After the first successful read, rewrite the item so it is owned by
-    /// this app — future reads are then prompt-free, even across rebuilds.
-    private static var adopted = Set<String>()
+    /// this app — future reads are then prompt-free, even across rebuilds
+    /// (the installed app is signed with a stable identity).
+    ///
+    /// Only the installed copy may do this, and only once per item: rewriting
+    /// replaces the item's access list, so an unsigned `swift build` binary
+    /// adopting it would lock the installed app out (and vice versa), with
+    /// every launch of either one prompting for the keychain password again.
+    private static let adoptedDefaultsKey = "keychainAdoptedAccounts"
+    private static var isInstalledCopy: Bool {
+        Bundle.main.bundlePath.hasPrefix("/Applications/")
+    }
     private static func adoptIfNeeded(account: String, value: String) {
+        guard isInstalledCopy else { return }
+        var adopted = Set(UserDefaults.standard.stringArray(forKey: adoptedDefaultsKey) ?? [])
         guard !adopted.contains(account) else { return }
-        adopted.insert(account)
-        save(account: account, value: value)
+        if save(account: account, value: value) {
+            adopted.insert(account)
+            UserDefaults.standard.set(Array(adopted).sorted(), forKey: adoptedDefaultsKey)
+        }
     }
 
     @discardableResult
@@ -58,7 +78,9 @@ enum KeychainService {
         SecItemDelete(base as CFDictionary)
         var attributes = base
         attributes[kSecValueData as String] = Data(value.utf8)
-        return SecItemAdd(attributes as CFDictionary, nil) == errSecSuccess
+        let ok = SecItemAdd(attributes as CFDictionary, nil) == errSecSuccess
+        if ok { cache[account] = value } else { cache[account] = nil }
+        return ok
     }
 
     static func delete(account: String) {
@@ -68,5 +90,6 @@ enum KeychainService {
             kSecAttrAccount as String: account,
         ]
         SecItemDelete(query as CFDictionary)
+        cache[account] = nil
     }
 }
