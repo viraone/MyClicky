@@ -1,8 +1,10 @@
 import AppKit
+import OSLog
 
 /// Gmail hot-key actions driven from the phone's GMAIL tab.
 @MainActor
 enum GmailActions {
+    private static let log = Logger(subsystem: "com.myclicky", category: "gmail")
     private static let composeURL = "https://mail.google.com/mail/u/0/#inbox?compose=new"
 
     /// Trashes the email currently open in the browser — after a confirm
@@ -137,9 +139,11 @@ enum GmailActions {
         components.percentEncodedQuery = components.percentEncodedQuery?
             .replacingOccurrences(of: "+", with: "%2B")
         guard let url = components.url else { return }
-        // The user parks Gmail where they want their mail — reuse that tab
-        // (and its window, on its screen) before falling back to a new one.
-        if BrowserTabReader.load(url.absoluteString, inTabContaining: "mail.google.com") != nil { return }
+        // The user parks Gmail where they want their mail — open the compose
+        // beside that tab, in its window, on its screen. A new tab rather
+        // than navigating the inbox: Gmail closes the compose tab after
+        // sending, and the inbox should still be there when it does.
+        if BrowserTabReader.openTab(url.absoluteString, besideTabContaining: "mail.google.com") != nil { return }
         NSWorkspace.shared.open(url)
     }
 
@@ -163,6 +167,12 @@ enum GmailActions {
 
     /// Clicks Send on the compose window open in Gmail. Gmail's own Undo
     /// toast stays available for a few seconds afterwards.
+    ///
+    /// Gmail ignores a bare synthetic `click()` on Send often enough (seen
+    /// live after a body typed in by insertText) that "Sent" is only
+    /// reported once the compose has actually gone away. Escalates: DOM
+    /// mouse events → a real click at the button's AX frame → ⌘↩ in the
+    /// body, checking between each.
     static func send(status: @escaping (_ message: String, _ ok: Bool) -> Void) {
         ActivityLog.recordAction("gmail-send")
         let isGmail: (String) -> Bool = { $0.contains("mail.google.com") }
@@ -172,27 +182,63 @@ enum GmailActions {
         }
         browser.activate()
 
-        let js = """
-        (function(){var a=Array.prototype.slice.call(document.querySelectorAll('div[role=button][aria-label^=Send]')).filter(function(e){return e.offsetParent!==null;});var el=a[a.length-1];if(!el){return 'none';}el.click();return 'ok';})()
+        // The compose's own Send reads "Send"; prefer it over anything else
+        // whose label merely starts with the word.
+        let clickJS = """
+        (function(){var a=Array.prototype.slice.call(document.querySelectorAll('div[role=button][aria-label^=Send]')).filter(function(e){return e.offsetParent!==null;});var el=a.filter(function(e){return e.innerText.trim()==='Send';}).pop()||a[a.length-1];if(!el){return 'none';}['mousedown','mouseup','click'].forEach(function(t){el.dispatchEvent(new MouseEvent(t,{bubbles:true,cancelable:true,view:window}));});return 'ok';})()
         """
-        switch BrowserTabReader.runJavaScript(js, inTabMatching: isGmail) {
+        switch BrowserTabReader.runJavaScript(clickJS, inTabMatching: isGmail) {
         case "ok":
-            status("Sent", true)
-            return
+            break
         case "none":
             status("No compose window open — nothing to send.", false)
             return
         default:
-            break // JavaScript from Apple Events is disabled; use Accessibility.
+            // JavaScript from Apple Events is off; go straight to the real click.
+            clickSendByAccessibility(in: browser, thenVerify: false, status: status)
+            return
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            guard let frame = AccessibilityFinder.buttonFrame(in: browser, matching: "send") else {
+        Task {
+            try? await Task.sleep(for: .milliseconds(1500))
+            if composeIsGone() { status("Sent", true); ActivityLog.recordAction("gmail-sent", ["via": "dom"]); return }
+            log.notice("gmail send: DOM click left the compose open, trying a real click")
+            clickSendByAccessibility(in: browser, thenVerify: true, status: status)
+        }
+    }
+
+    /// Gmail's standalone compose closes its own tab once the message is
+    /// away, so "no Gmail tab to ask" counts as gone too.
+    private static func composeIsGone() -> Bool {
+        let js = "(function(){var a=Array.prototype.slice.call(document.querySelectorAll(\"div[aria-label='Message Body']\")).filter(function(e){return e.offsetParent!==null;});return a.length?'open':'gone';})()"
+        return BrowserTabReader.runJavaScript(js, inTabMatching: { $0.contains("mail.google.com") }) != "open"
+    }
+
+    private static func clickSendByAccessibility(in browser: NSRunningApplication, thenVerify: Bool,
+                                                 status: @escaping (_ message: String, _ ok: Bool) -> Void) {
+        Task {
+            try? await Task.sleep(for: .milliseconds(200))
+            if let frame = AccessibilityFinder.buttonFrame(in: browser, matching: "send") {
+                MouseClicker.click(at: NSPoint(x: frame.midX, y: frame.midY))
+            } else if !thenVerify {
                 status("Couldn't find the Send button — is a compose window open?", false)
                 return
             }
-            MouseClicker.click(at: NSPoint(x: frame.midX, y: frame.midY))
-            status("Sent", true)
+            guard thenVerify else { status("Sent", true); return }
+            try? await Task.sleep(for: .milliseconds(1500))
+            if composeIsGone() { status("Sent", true); ActivityLog.recordAction("gmail-sent", ["via": "ax-click"]); return }
+
+            // Last resort: Gmail's own shortcut, with the cursor in the body.
+            log.notice("gmail send: real click left the compose open, trying ⌘↩")
+            _ = BrowserTabReader.runJavaScript(
+                "(function(){var a=Array.prototype.slice.call(document.querySelectorAll(\"div[aria-label='Message Body']\")).filter(function(e){return e.offsetParent!==null;});var el=a[a.length-1];if(el){el.focus();}return el?'ok':'none';})()",
+                inTabMatching: { $0.contains("mail.google.com") })
+            try? await Task.sleep(for: .milliseconds(200))
+            KeyboardTyper.press(KeyboardTyper.returnKey, flags: .maskCommand) // ⌘ Return
+            try? await Task.sleep(for: .milliseconds(1500))
+            if composeIsGone() { status("Sent", true); ActivityLog.recordAction("gmail-sent", ["via": "cmd-return"]); return }
+            ActivityLog.recordAction("gmail-send-stuck")
+            status("Couldn't send — the compose is still open. Press Send in Gmail.", false)
         }
     }
 

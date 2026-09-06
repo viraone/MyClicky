@@ -199,13 +199,14 @@ enum BrowserTabReader {
         return nil
     }
 
-    /// Loads `url` into the first open tab (any window) whose URL contains
-    /// `needle`, un-minimizing and raising that window where it already is —
-    /// so a Gmail tab parked on the second display gets the compose form
-    /// there, instead of a fresh window on whatever screen the cursor is on.
-    /// Returns the browser it drove, or nil if no such tab exists.
+    /// Opens `url` in a new tab of the first window (any browser) holding a
+    /// tab whose URL contains `needle`, un-minimizing and raising that window
+    /// where it already is — so a Gmail tab parked on the second display
+    /// gets the compose form beside it, instead of a fresh window on
+    /// whatever screen the cursor is on. Returns the browser it drove, or
+    /// nil if no such tab exists.
     @discardableResult
-    static func load(_ url: String, inTabContaining needle: String) -> NSRunningApplication? {
+    static func openTab(_ url: String, besideTabContaining needle: String) -> NSRunningApplication? {
         let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
         let safe = url.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "%22")
         for (bundleID, script) in tabLoadScripts(urlContains: needle, url: safe) where running.contains(bundleID) {
@@ -227,8 +228,8 @@ enum BrowserTabReader {
                         repeat with t in tabs of w
                             set i to i + 1
                             if (URL of t contains "\#(needle)") then
-                                set URL of t to "\#(url)"
-                                set active tab index of w to i
+                                make new tab at end of tabs of w with properties {URL:"\#(url)"}
+                                set active tab index of w to (count of tabs of w)
                                 set minimized of w to false
                                 set index of w to 1
                                 return "1"
@@ -246,8 +247,8 @@ enum BrowserTabReader {
                 try
                     repeat with t in tabs of w
                         if (URL of t contains "\#(needle)") then
-                            set URL of t to "\#(url)"
-                            set current tab of w to t
+                            set newTab to make new tab at end of tabs of w with properties {URL:"\#(url)"}
+                            set current tab of w to newTab
                             set miniaturized of w to false
                             set index of w to 1
                             return "1"
