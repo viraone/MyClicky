@@ -158,6 +158,9 @@ final class AssistantState: ObservableObject {
     @Published var copiedPreview: String?
     @Published var errorText: String?
     @Published var collapsed = false
+    /// Shrunk in place to a thin bar — mic, phase, nothing else. Distinct
+    /// from `collapsed`, which tucks a dot into the screen corner.
+    @Published var strip = false
     @Published var tab: AssistantTab = .captureDictate
     /// Last dictation result (on the clipboard, paired with the capture if any).
     @Published var dictationText = ""
@@ -208,6 +211,8 @@ final class AssistantState: ObservableObject {
     var onDismiss: (() -> Void)?
     var onMinimize: (() -> Void)?
     var onRestore: (() -> Void)?
+    /// Left-edge chevron: shrinks to the strip, or grows back from it.
+    var onToggleStrip: (() -> Void)?
     /// Toggles `isTall` and resizes the actual window to match.
     var onToggleTall: (() -> Void)?
     /// Live corner-drag resize: called continuously with the cumulative drag
@@ -246,6 +251,7 @@ final class AssistantPanelController {
     private static let expandedSize = NSSize(width: 960 + glowMargin * 2, height: 220 + glowMargin * 2)
     private static let tallSize = NSSize(width: 960 + glowMargin * 2, height: 520 + glowMargin * 2)
     private static let collapsedSize = NSSize(width: 56, height: 56)
+    private static let stripSize = NSSize(width: 420 + glowMargin * 2, height: 52 + glowMargin * 2)
     private static let minPanelSize = NSSize(width: 640 + glowMargin * 2, height: 160 + glowMargin * 2)
     private static let maxPanelSize = NSSize(width: 1500, height: 1000)
     /// Full frame just before minimizing, so restoring puts it back exactly
@@ -253,9 +259,32 @@ final class AssistantPanelController {
     private var savedFrame: NSRect?
     private var resizeStartFrame: NSRect?
 
+    /// Shrinks the panel in place to a one-line bar, or restores it. The bar
+    /// keeps the panel's top-left corner so it stays where the eye already
+    /// is; the corner dot (`minimize`) is for getting it out of the way.
+    func toggleStrip() {
+        guard let panel, !state.collapsed else { return }
+        if state.strip {
+            state.strip = false
+            let size = savedFrame?.size ?? Self.expandedSize
+            let screen = panel.screen ?? NSScreen.main
+            let visible = screen?.visibleFrame ?? .zero
+            var origin = NSPoint(x: panel.frame.minX, y: panel.frame.maxY - size.height)
+            origin.x = min(max(origin.x, visible.minX + 8), visible.maxX - size.width - 8)
+            origin.y = min(max(origin.y, visible.minY + 8), visible.maxY - size.height - 8)
+            panel.setFrame(NSRect(origin: origin, size: size), display: true, animate: true)
+        } else {
+            savedFrame = panel.frame
+            state.strip = true
+            let origin = NSPoint(x: panel.frame.minX, y: panel.frame.maxY - Self.stripSize.height)
+            panel.setFrame(NSRect(origin: origin, size: Self.stripSize), display: true, animate: true)
+        }
+    }
+
     func minimize() {
         guard let panel, !state.collapsed else { return }
-        savedFrame = panel.frame
+        savedFrame = state.strip ? (savedFrame ?? panel.frame) : panel.frame
+        state.strip = false
         state.collapsed = true
         let screen = panel.screen ?? NSScreen.main
         let visible = screen?.visibleFrame ?? .zero
@@ -294,7 +323,7 @@ final class AssistantPanelController {
     }
 
     func toggleTall() {
-        guard let panel, !state.collapsed else { return }
+        guard let panel, !state.collapsed, !state.strip else { return }
         state.isTall.toggle()
         let screen = panel.screen ?? NSScreen.main
         let visible = screen?.visibleFrame ?? .zero
@@ -310,7 +339,7 @@ final class AssistantPanelController {
     /// from where this drag started (SwiftUI, down-positive); `nil` means the
     /// drag just ended. The opposite corner stays anchored in place.
     func resize(_ corner: PanelResizeCorner, translation: CGSize?) {
-        guard let panel, !state.collapsed else { return }
+        guard let panel, !state.collapsed, !state.strip else { return }
         guard let translation else {
             resizeStartFrame = nil
             // Keep the header button's icon honest after a manual drag.
@@ -374,6 +403,7 @@ final class AssistantPanelController {
         state.onDismiss = { [weak self] in self?.hide() }
         state.onMinimize = { [weak self] in self?.minimize() }
         state.onRestore = { [weak self] in self?.expand() }
+        state.onToggleStrip = { [weak self] in self?.toggleStrip() }
         state.onToggleTall = { [weak self] in self?.toggleTall() }
         state.onResize = { [weak self] corner, translation in self?.resize(corner, translation: translation) }
         panel.onCancel = { [weak self] in
@@ -408,11 +438,92 @@ struct AssistantPanelView: View {
         Group {
             if state.collapsed {
                 collapsedDot
+            } else if state.strip {
+                stripBar
             } else {
                 expandedPanel
             }
         }
         .onExitCommand { state.onDismiss?() }
+    }
+
+    /// The one-line form of the panel: the chevron to grow back, the phase
+    /// indicator (bars while recording, amber pause, green tick), the mic
+    /// and — while something is in flight — Stop. Enough to see that words
+    /// are being heard and to end the recording, and nothing more.
+    private var stripBar: some View {
+        let phase = state.phase
+        return HStack(spacing: 12) {
+            edgeChevron(expanded: false)
+            Group {
+                if phase == .recording {
+                    RecordingBars(color: phase.color)
+                } else {
+                    Image(systemName: phase.icon)
+                        .symbolEffect(.pulse, isActive: phase == .working)
+                }
+            }
+            .font(.system(size: 15, weight: .bold))
+            .foregroundStyle(phase.color)
+            .frame(width: 28, height: 20)
+            Text(phase.label)
+                .font(.system(size: 14, weight: .heavy, design: .monospaced))
+                .kerning(1.2)
+                .foregroundStyle(phase.color)
+            Text(phase == .paused ? "say a command, or press STOP" : phase.hint)
+                .font(.system(size: 12.5, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.65))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 4)
+            micIndicator
+            if state.canStop && state.status != .listening {
+                stopButton
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(
+            ZStack {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(Color(red: 0.094, green: 0.094, blue: 0.098))
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(phase.color.opacity(phase == .ready ? 0.05 : 0.16))
+            }
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(phase.color.opacity(0.85), lineWidth: phase == .recording || phase == .paused ? 2 : 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .compositingGroup()
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(phase.color.opacity(breathing ? (phase == .recording ? 0.6 : 0.35) : 0.14))
+                .blur(radius: 14)
+                .animation(.easeInOut(duration: phase == .recording ? 0.9 : 2.2)
+                    .repeatForever(autoreverses: true), value: breathing)
+        )
+        .padding(AssistantPanelController.glowMargin)
+        .onAppear { breathing = true }
+        .onDisappear { breathing = false }
+        .animation(.easeInOut(duration: 0.3), value: phase)
+    }
+
+    /// The chevron on the left edge: points inward to shrink the panel to
+    /// its strip, outward to grow it back.
+    private func edgeChevron(expanded: Bool) -> some View {
+        Button {
+            state.onToggleStrip?()
+        } label: {
+            Image(systemName: expanded ? "chevron.left" : "chevron.right")
+                .font(.system(size: 12, weight: .heavy))
+                .foregroundStyle(.white.opacity(0.7))
+                .frame(width: 22, height: 40)
+                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Color.white.opacity(0.08)))
+        }
+        .buttonStyle(.plain)
+        .help(expanded ? "Shrink to a strip" : "Expand the panel")
     }
 
     private var collapsedDot: some View {
@@ -462,7 +573,9 @@ struct AssistantPanelView: View {
             Spacer(minLength: 0)
             bottomBar
         }
-        .padding(.horizontal, 18)
+        // Extra room on the left for the edge chevron.
+        .padding(.leading, 32)
+        .padding(.trailing, 18)
         .padding(.vertical, 14)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(.easeInOut(duration: 0.2), value: state.isTall)
@@ -501,6 +614,7 @@ struct AssistantPanelView: View {
                 )
         )
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(alignment: .leading) { edgeChevron(expanded: true).padding(.leading, 4) }
         .overlay(alignment: .topLeading) { resizeHandle(.topLeading) }
         .overlay(alignment: .topTrailing) { resizeHandle(.topTrailing) }
         .overlay(alignment: .bottomLeading) { resizeHandle(.bottomLeading) }
