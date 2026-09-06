@@ -1324,7 +1324,14 @@ struct NumpadView: View {
                     key("→").frame(height: heroH)
                 }
                 row([key("⌫"), key("="), key("/"), key("*")], h: rowH, gap: gap)
-                row([key("7"), key("8"), key("9"), key("-")], h: rowH, gap: gap)
+                // Capture controls sit up on the 7 8 9 row, above the Ask row,
+                // so the two voice rows read top-down: capture, then ask.
+                row([key("1", label: "CAPTURE TAB", icon: "rectangle.on.rectangle", tint: Snes.yellow, lit: true),
+                     key("2", label: "CAPTURE", icon: "camera.viewfinder", tint: Snes.blue, lit: true),
+                     key("3", label: dictateRecording ? "STOP" : "DICTATE",
+                         icon: dictateRecording ? "stop.fill" : "mic.fill",
+                         tint: Snes.red, lit: true, waveform: dictateRecording),
+                     key("-")], h: rowH, gap: gap)
                 // 4 5 6 / 1 2 3 with TALK spanning both rows — the tallest key
                 // on the pad, where "+" (which did nothing) used to sit.
                 HStack(alignment: .top, spacing: gap) {
@@ -1335,11 +1342,7 @@ struct NumpadView: View {
                                  icon: askRecording ? "stop.fill" : "mic.fill",
                                  tint: Snes.purple, lit: true, waveform: askRecording),
                              key("6")], h: rowH, gap: gap)
-                        row([key("1", label: "CAPTURE TAB", icon: "rectangle.on.rectangle", tint: Snes.yellow, lit: true),
-                             key("2", label: "CAPTURE", icon: "camera.viewfinder", tint: Snes.blue, lit: true),
-                             key("3", label: dictateRecording ? "STOP" : "DICTATE",
-                                 icon: dictateRecording ? "stop.fill" : "mic.fill",
-                                 tint: Snes.red, lit: true, waveform: dictateRecording)], h: rowH, gap: gap)
+                        row([key("7"), key("8"), key("9")], h: rowH, gap: gap)
                     }
                     key("talk", label: talkRecording ? "STOP" : "TALK",
                         icon: talkRecording ? "stop.fill" : "mic.fill",
