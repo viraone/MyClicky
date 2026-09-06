@@ -976,8 +976,11 @@ final class AssistantController {
         // command. Screen-aware dictation: Claude writes it in their voice.
         // Same for a Messages thread Clicky opened. Whichever was opened more
         // recently is the one being talked to.
-        let gmailActive = gmailDraftOpenedAt.map { Date().timeIntervalSince($0) < 10 * 60 } ?? false
-        let messagesActive = messagesDraftOpenedAt.map { Date().timeIntervalSince($0) < 10 * 60 } ?? false
+        // …unless it's plainly a command — "actually, open David's
+        // conversation" must not get typed to Dino Dad.
+        let gateBypassed = Self.isAppCommand(utterance)
+        let gmailActive = !gateBypassed && (gmailDraftOpenedAt.map { Date().timeIntervalSince($0) < 10 * 60 } ?? false)
+        let messagesActive = !gateBypassed && (messagesDraftOpenedAt.map { Date().timeIntervalSince($0) < 10 * 60 } ?? false)
         let messagesFirst = (messagesDraftOpenedAt ?? .distantPast) > (gmailDraftOpenedAt ?? .distantPast)
         for target in messagesFirst ? ["messages", "gmail"] : ["gmail", "messages"] {
             if target == "gmail", gmailActive,
@@ -1601,6 +1604,29 @@ final class AssistantController {
     private static func isNeverMind(_ utterance: String) -> Bool {
         let t = utterance.lowercased().trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
         return ["never mind", "nevermind", "cancel", "cancel that", "stop", "forget it", "leave it"].contains(t)
+    }
+
+    /// Speech that is clearly an instruction to Clicky rather than words for
+    /// the open draft: "actually, let's open up a conversation with David",
+    /// "switch to Safari", "write an email to Sam". Checked after stripping
+    /// lead-ins, so a message that merely *contains* "open" still counts as
+    /// dictation ("tell him the store is open till nine").
+    static func isAppCommand(_ utterance: String) -> Bool {
+        var words = utterance.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted.subtracting(CharacterSet(charactersIn: "'")))
+            .filter { !$0.isEmpty }
+        let leadIns: Set<String> = ["actually", "ok", "okay", "hey", "clicky", "let's", "lets", "can", "could", "you",
+                                    "please", "now", "um", "uh", "so", "and", "then", "wait", "no", "instead", "just", "go"]
+        while let first = words.first, leadIns.contains(first) { words.removeFirst() }
+        guard let verb = words.first else { return false }
+        let commandVerbs: Set<String> = ["open", "switch", "close", "minimize", "minimise", "quit", "launch", "start",
+                                         "show", "bring", "pull", "compose", "screenshot", "search", "google", "copy",
+                                         "paste", "scroll", "click", "focus", "restore", "hide", "maximize", "maximise"]
+        if commandVerbs.contains(verb) { return true }
+        let joined = words.joined(separator: " ")
+        let phrases = ["write an email", "write a new email", "send an email", "new email", "email to ",
+                       "conversation with", "chat with", "thread with", "text conversation", "look up"]
+        return phrases.contains { joined.hasPrefix($0) || joined.hasPrefix("write " + $0) }
     }
 
     private func draftGmail(gist: String, compose: GmailDrafter.Compose, apiKey: String) {
