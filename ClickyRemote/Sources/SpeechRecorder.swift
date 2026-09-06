@@ -43,6 +43,9 @@ final class SpeechRecorder: ObservableObject {
         stopping = false
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.record, mode: .measurement, options: .duckOthers)
+        // iOS mutes haptics while recording unless the session opts in; the
+        // "another mode is still recording" warning fires exactly then.
+        try? session.setAllowHapticsAndSystemSoundsDuringRecording(true)
         try session.setActive(true, options: .notifyOthersOnDeactivation)
 
         let engine = AVAudioEngine()
