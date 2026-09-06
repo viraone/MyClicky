@@ -57,8 +57,9 @@ struct NumpadView: View {
     @State private var youtubeOpenTap: DispatchWorkItem?
 
     enum RemoteMode: String, CaseIterable {
-        case talk = "TALK"
-        case remote = "REMOTE"
+        /// The keypad. Talk isn't a mode: its button rides in the corner of
+        /// every pad (see `cornerTalkButton`), so it needs no cartridge.
+        case remote = "Mobile Clicky"
         case gmail = "GMAIL"
         case spotify = "SPOTIFY"
         case whatsapp = "WHATSAPP"
@@ -66,7 +67,6 @@ struct NumpadView: View {
 
         var icon: String {
             switch self {
-            case .talk: "mic.fill"
             case .remote: "desktopcomputer"
             case .gmail: "envelope.fill"
             case .spotify: "music.note"
@@ -77,7 +77,6 @@ struct NumpadView: View {
 
         var accent: Color {
             switch self {
-            case .talk: Snes.talk
             case .remote: Snes.purple
             case .gmail: Snes.red
             case .spotify: Snes.spotify
@@ -88,7 +87,6 @@ struct NumpadView: View {
 
         var welcome: String {
             switch self {
-            case .talk: "Talk mode — press the button and say what you need"
             case .remote: "Tap CLICKY to open it on your Mac (tap again to hide)"
             case .gmail: "Gmail mode — buttons control Gmail on your Mac"
             case .spotify: "Spotify mode — buttons control the Spotify app on your Mac"
@@ -118,7 +116,6 @@ struct NumpadView: View {
                 .frame(maxWidth: .infinity)
                 Group {
                     switch mode {
-                    case .talk: talkPad
                     case .remote: keypad
                     case .gmail: gmailPad
                     case .spotify: spotifyPad
@@ -126,8 +123,8 @@ struct NumpadView: View {
                     case .youtube: youtubePad
                     }
                 }
-                // Talk rides along in the corner of every other pad, so you can
-                // speak a command without first hunting for the right mode.
+                // Talk rides along in the corner of every pad, so you can speak
+                // a command without first hunting for the right mode.
                 // `safeAreaInset` rather than an overlay: it reserves its own
                 // space instead of sitting on top of a key or tile and
                 // swallowing taps meant for what's underneath.
@@ -135,8 +132,21 @@ struct NumpadView: View {
                     // The trailing padding is what holds it off the right
                     // edge — raise it to move Talk further left, lower it to
                     // push it back toward the corner.
-                    if mode != .talk { cornerTalkButton.padding(.trailing, 44) }
+                    cornerTalkButton.padding(.trailing, 44)
                 }
+                // A confirmation is the one thing that must not be missed —
+                // it used to live on the Talk pad, so it now covers whichever
+                // pad is up until it's answered.
+                .overlay {
+                    if let confirm = client.pendingConfirm {
+                        confirmView(confirm)
+                            .padding(10)
+                            .background(Snes.bodyDark.opacity(0.85))
+                            .clipShape(RoundedRectangle(cornerRadius: 20))
+                            .transition(.scale.combined(with: .opacity))
+                    }
+                }
+                .animation(.spring(response: 0.3, dampingFraction: 0.8), value: client.pendingConfirm?.id)
                 .frame(width: geo.size.width * 0.78)
             }
         }
@@ -174,9 +184,8 @@ struct NumpadView: View {
             client.resume()
         }
         .onChange(of: client.talkMessage) { _, message in
-            // Talking from another pad would otherwise be a black hole: the
-            // reply lands on the Talk pad, which isn't on screen.
-            guard mode != .talk, !message.isEmpty else { return }
+            // The Mac's replies to a spoken command show up in the status line.
+            guard !message.isEmpty else { return }
             statusText = message
         }
         .onChange(of: client.youtubeCollapsed) { _, collapsed in
@@ -188,8 +197,8 @@ struct NumpadView: View {
     // MARK: - Mode tabs (cartridge selector)
 
     /// Entries in the scrolling mode wheel: the Refresh action plus every mode.
-    /// REFRESH and REMOTE swap places so REMOTE sits at the top, within easy
-    /// thumb reach, since it's the mode used most.
+    /// REFRESH and Mobile Clicky swap places so Mobile Clicky sits at the top,
+    /// within easy thumb reach, since it's the mode used most.
     private var wheelEntries: [String] {
         var entries = ["REFRESH"] + RemoteMode.allCases.map(\.rawValue)
         if let refreshIndex = entries.firstIndex(of: "REFRESH"),
@@ -340,75 +349,11 @@ struct NumpadView: View {
         .buttonStyle(.plain)
     }
 
-    // MARK: - Talk pad (universal voice control — any app on the Mac)
+    // MARK: - Talk (universal voice control — any app on the Mac)
 
-    /// One giant button: press to speak, Clicky plans and does it on the Mac.
-    /// Shows the Mac's STATUS stream in large text (spoken aloud too, in
-    /// ClickyClient) and turns into two huge Yes/No buttons when an
-    /// irreversible step needs confirming.
-    private var talkPad: some View {
-        VStack(spacing: 12) {
-            talkMessageView
-            Group {
-                if let confirm = client.pendingConfirm {
-                    confirmView(confirm)
-                } else {
-                    talkButton
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            if client.pendingConfirm == nil {
-                whatsItSayButton
-            }
-        }
-        .padding(10)
-    }
-
-    private var talkMessageView: some View {
-        ScrollView {
-            Text(client.talkMessage.isEmpty
-                 ? "Press the button and say what you need — Clicky will do it on your Mac."
-                 : client.talkMessage)
-                .font(.system(.title2, design: .rounded).weight(.bold))
-                .dynamicTypeSize(.large ... .accessibility5)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity)
-                .accessibilityLabel(client.talkMessage.isEmpty
-                                     ? "Ready. Press the button and say what you need."
-                                     : client.talkMessage)
-        }
-        .frame(maxHeight: 120)
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 14).fill(Snes.bodyDark.opacity(0.6)))
-    }
-
-    private var talkButton: some View {
-        Button(action: talkTapped) {
-            VStack(spacing: 12) {
-                Image(systemName: talkRecording ? "stop.fill" : "mic.fill")
-                    .font(.system(size: 64, weight: .black))
-                Text(talkRecording ? "STOP" : "TALK")
-                    .font(.system(.largeTitle, design: .rounded).weight(.black))
-                    .dynamicTypeSize(.large ... .accessibility5)
-            }
-            .foregroundStyle(Color.white)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(
-                Circle()
-                    .fill(talkRecording ? Snes.red : Snes.talk)
-                    .shadow(color: (talkRecording ? Snes.red : Snes.talk).opacity(0.6), radius: 18, y: 6)
-            )
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(talkRecording ? "Stop and send" : "Talk to Clicky")
-        .accessibilityHint(talkRecording ? "Double tap when you're done speaking"
-                                          : "Double tap, then say what you want your Mac to do")
-    }
-
-    /// The Talk pad's button, shrunk to a corner badge for the other pads.
-    /// Same handler, so recording started here behaves identically — including
-    /// only this button being able to stop it.
+    /// Press to speak, Clicky plans and does it on the Mac; press again to
+    /// stop and send. Sits in the corner of every pad. The Mac's STATUS stream
+    /// lands in the status line (and is spoken aloud, in ClickyClient).
     private var cornerTalkButton: some View {
         Button(action: talkTapped) {
             VStack(spacing: 1) {
@@ -461,29 +406,6 @@ struct NumpadView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(title == "Yes" ? "Yes, do it" : "No, cancel")
-    }
-
-    private var whatsItSayButton: some View {
-        Button {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            client.read()
-            client.talkMessage = "Asking your Mac what's on screen…"
-        } label: {
-            HStack(spacing: 10) {
-                Image(systemName: "text.viewfinder").font(.system(size: 20, weight: .bold))
-                Text("What does it say?")
-                    .font(.system(.headline, design: .rounded).weight(.bold))
-                    .dynamicTypeSize(.large ... .accessibility3)
-            }
-            .foregroundStyle(Color.white)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
-            .background(RoundedRectangle(cornerRadius: 16).fill(Snes.blue))
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("What does it say")
-        .accessibilityHint("Double tap to have Clicky describe what's on your Mac's screen")
-        .disabled(talkRecording)
     }
 
     // MARK: - Gmail pad (purpose-built: every button says what it does)

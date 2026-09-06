@@ -3,22 +3,53 @@ import SwiftUI
 
 enum AssistantStatus {
     case idle, listening, thinking, answering
+}
 
-    var dotColor: Color {
+/// What the panel is showing the user right now, one step finer than
+/// `AssistantStatus`: listening splits into *speaking* and *paused*, because
+/// the pause is where the user decides what happens next ("open Dino Dad's
+/// conversation", or press STOP) and needs to be told they can.
+enum AssistantPhase: Equatable {
+    case ready, recording, paused, working, done
+
+    /// Terminal palette — the same hues a shell prompt uses for its segments.
+    var color: Color {
         switch self {
-        case .idle: .cyan
-        case .listening: .red
-        case .thinking: .yellow
-        case .answering: .green
+        case .ready: Color(red: 0.35, green: 0.78, blue: 0.98)     // cyan
+        case .recording: Color(red: 1.0, green: 0.30, blue: 0.30)  // red
+        case .paused: Color(red: 1.0, green: 0.68, blue: 0.20)     // amber
+        case .working: Color(red: 0.72, green: 0.50, blue: 0.98)   // purple
+        case .done: Color(red: 0.35, green: 0.85, blue: 0.45)      // green
         }
     }
 
     var label: String {
         switch self {
-        case .idle: "Ready"
-        case .listening: "Listening…"
-        case .thinking: "Thinking…"
-        case .answering: "Answer"
+        case .ready: "ready"
+        case .recording: "RECORDING"
+        case .paused: "PAUSED"
+        case .working: "working…"
+        case .done: "DONE"
+        }
+    }
+
+    var hint: String {
+        switch self {
+        case .ready: "press TALK, or click the mic"
+        case .recording: "listening — keep talking"
+        case .paused: "say a command (“open Dino Dad’s conversation”), or press STOP"
+        case .working: "Clicky is on it"
+        case .done: "finished — press TALK for the next one"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .ready: "chevron.right"
+        case .recording: "record.circle.fill"
+        case .paused: "pause.fill"
+        case .working: "gearshape.2.fill"
+        case .done: "checkmark.circle.fill"
         }
     }
 }
@@ -72,8 +103,52 @@ enum CaptureClipboardChoice { case original, edited }
 
 @MainActor
 final class AssistantState: ObservableObject {
-    @Published var status: AssistantStatus = .idle
-    @Published var transcript = ""
+    @Published var status: AssistantStatus = .idle {
+        didSet {
+            guard status != oldValue else { return }
+            // A fresh recording starts hot; anything else clears the pause
+            // machinery so a stale timer can't flip a later state.
+            speechIdleTask?.cancel()
+            speechActive = status == .listening
+        }
+    }
+    @Published var transcript = "" {
+        didSet {
+            // Words arriving means the user is speaking. Neither the phone nor
+            // the Mac recogniser reports a pause, so it's inferred: partials
+            // stop coming, the panel turns amber a moment later.
+            if status == .listening, transcript != oldValue { noteSpeech() }
+        }
+    }
+    /// True while partial transcripts are still arriving. Drives the
+    /// recording/paused split that the user relies on to time a command.
+    @Published private(set) var speechActive = false
+    private var speechIdleTask: Task<Void, Never>?
+    /// How long without new words before "speaking" becomes "paused". iOS
+    /// finalises a segment after roughly this much silence, so it also lines
+    /// up with when a spoken command would actually be committed.
+    private static let pauseAfter: UInt64 = 1_400_000_000
+
+    private func noteSpeech() {
+        speechActive = true
+        speechIdleTask?.cancel()
+        speechIdleTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: Self.pauseAfter)
+            guard !Task.isCancelled, let self, self.status == .listening else { return }
+            self.speechActive = false
+        }
+    }
+
+    /// The single thing the panel colours itself by.
+    var phase: AssistantPhase {
+        switch status {
+        case .idle: .ready
+        case .listening: speechActive || transcript.isEmpty ? .recording : .paused
+        case .thinking: .working
+        case .answering: .done
+        }
+    }
+    var accent: Color { phase.color }
     @Published var answer = ""
     /// A passage copied off the screen by voice. Deliberately NOT `answer`:
     /// the planner writes a running commentary there and finishes every plan
@@ -347,9 +422,9 @@ struct AssistantPanelView: View {
                     .fill(Color(red: 0.08, green: 0.08, blue: 0.09))
                     .overlay(Circle().strokeBorder(Color.white.opacity(0.15), lineWidth: 1))
                 Circle()
-                    .fill(state.status.dotColor)
+                    .fill(state.accent)
                     .frame(width: 14, height: 14)
-                    .shadow(color: state.status.dotColor.opacity(0.8), radius: 5)
+                    .shadow(color: state.accent.opacity(0.8), radius: 5)
             }
             .frame(width: 44, height: 44)
         }
@@ -359,7 +434,7 @@ struct AssistantPanelView: View {
 
     private var expandedPanel: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top) {
+            HStack(alignment: .center) {
                 tabBar
                 Spacer()
                 headerButton(state.isTall ? "rectangle.compress.vertical" : "rectangle.expand.vertical",
@@ -373,6 +448,9 @@ struct AssistantPanelView: View {
                     state.onDismiss?()
                 }
             }
+            // Thin rule under the tabs, as a terminal draws under its tab row.
+            Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
+            phaseStrip
             switch state.tab {
             case .ask, .talk:
                 topInputRow
@@ -390,43 +468,36 @@ struct AssistantPanelView: View {
         .animation(.easeInOut(duration: 0.2), value: state.isTall)
         .background(
             ZStack {
+                // Flat, near-black terminal background.
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color(red: 0.13, green: 0.13, blue: 0.15),
-                                Color(red: 0.06, green: 0.06, blue: 0.08),
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                // Faint top sheen for a glassy feel.
+                    .fill(Color(red: 0.094, green: 0.094, blue: 0.098))
+                // A wash of the phase colour from the top, strong enough while
+                // recording that the whole panel reads as "live" at a glance.
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
                     .fill(
                         RadialGradient(
-                            colors: [state.status.dotColor.opacity(0.10), .clear],
+                            colors: [state.accent.opacity(state.phase == .recording ? 0.22 : 0.10), .clear],
                             center: .top,
                             startRadius: 0,
-                            endRadius: 260
+                            endRadius: 320
                         )
                     )
             }
         )
-        // Crisp thin gradient rim with a bright 1px highlight.
+        // Crisp rim in the phase colour, heavier while recording.
         .overlay(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
                 .strokeBorder(
                     LinearGradient(
                         colors: [
-                            state.status.dotColor.opacity(0.85),
-                            state.status.dotColor.opacity(0.35),
-                            state.status.dotColor.opacity(0.85),
+                            state.accent.opacity(0.9),
+                            state.accent.opacity(0.4),
+                            state.accent.opacity(0.9),
                         ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing
                     ),
-                    lineWidth: 1
+                    lineWidth: state.phase == .recording || state.phase == .paused ? 2 : 1
                 )
         )
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
@@ -439,9 +510,12 @@ struct AssistantPanelView: View {
         // the corners stay round, plus a grounding drop shadow.
         .background(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(state.status.dotColor.opacity(breathing ? 0.42 : 0.16))
-                .blur(radius: breathing ? 16 : 10)
-                .animation(.easeInOut(duration: 2.2).repeatForever(autoreverses: true), value: breathing)
+                .fill(state.accent.opacity(breathing ? (state.phase == .recording ? 0.6 : 0.42) : 0.16))
+                .blur(radius: breathing ? 18 : 10)
+                // The halo breathes slowly at rest and quickly while recording,
+                // so a live mic is visible even from across the room.
+                .animation(.easeInOut(duration: state.phase == .recording ? 0.9 : 2.2)
+                    .repeatForever(autoreverses: true), value: breathing)
         )
         .background(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
@@ -452,35 +526,89 @@ struct AssistantPanelView: View {
         .padding(AssistantPanelController.glowMargin)
         .onAppear { breathing = true }
         .onDisappear { breathing = false }
-        .animation(.easeInOut(duration: 0.5), value: state.status)
+        .animation(.easeInOut(duration: 0.35), value: state.phase)
     }
 
-    // Segmented tab strip along the top edge of the panel.
+    // Tab row along the top edge, drawn the way a code editor draws its
+    // terminal tabs: plain text, the active one lifted on a soft rectangle.
     private var tabBar: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 4) {
             ForEach(AssistantTab.allCases, id: \.self) { tab in
                 Button {
                     state.tab = tab
                 } label: {
-                    HStack(spacing: 5) {
+                    HStack(spacing: 6) {
                         Image(systemName: tab.icon)
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(.system(size: 12, weight: .semibold))
                         Text(tab.rawValue)
-                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .font(.system(size: 14, weight: state.tab == tab ? .semibold : .regular, design: .monospaced))
                     }
-                    .foregroundStyle(state.tab == tab ? .white : Color.white.opacity(0.45))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
+                    .foregroundStyle(state.tab == tab ? .white : Color.white.opacity(0.5))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
                     .background(
-                        Capsule().fill(state.tab == tab
-                            ? Color.white.opacity(0.14)
-                            : Color.white.opacity(0.03))
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(state.tab == tab ? Color.white.opacity(0.13) : .clear)
                     )
                 }
                 .buttonStyle(.plain)
             }
             Spacer()
         }
+    }
+
+    /// The one line that tells the user where they are in the voice flow —
+    /// and, above all, when they may speak a command. Red with moving bars
+    /// while words are coming in; amber the moment they stop; purple while
+    /// Clicky works; green when it's finished. The whole panel shifts hue
+    /// with it, but this strip says so in words.
+    private var phaseStrip: some View {
+        let phase = state.phase
+        return HStack(spacing: 12) {
+            Group {
+                if phase == .recording {
+                    RecordingBars(color: phase.color)
+                } else if phase == .working {
+                    Image(systemName: phase.icon)
+                        .symbolEffect(.pulse, isActive: true)
+                } else {
+                    Image(systemName: phase.icon)
+                }
+            }
+            .font(.system(size: 15, weight: .bold))
+            .foregroundStyle(phase.color)
+            .frame(width: 28, height: 20)
+            Text(phase.label)
+                .font(.system(size: 15, weight: .heavy, design: .monospaced))
+                .kerning(1.5)
+                .foregroundStyle(phase.color)
+            Text(phase.hint)
+                .font(.system(size: 13.5, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.7))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer()
+            if phase == .paused {
+                Text("STOP when done")
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.black.opacity(0.85))
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 4)
+                    .background(Capsule().fill(phase.color))
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(phase.color.opacity(phase == .ready ? 0.06 : 0.16))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(phase.color.opacity(phase == .ready ? 0.2 : 0.55), lineWidth: 1)
+                )
+        )
+        .animation(.easeInOut(duration: 0.25), value: phase)
     }
 
     // Capture + Dictate tab: the latest ⌃⌥X region grab centered on the left,
@@ -515,13 +643,13 @@ struct AssistantPanelView: View {
     private var dictationUnderImage: some View {
         HStack(alignment: .top, spacing: 8) {
             if state.status == .listening {
-                Image(systemName: "waveform")
-                    .foregroundStyle(.red)
-                    .symbolEffect(.pulse, isActive: true)
+                Image(systemName: state.phase == .paused ? "pause.fill" : "waveform")
+                    .foregroundStyle(state.accent)
+                    .symbolEffect(.pulse, isActive: state.phase == .recording)
                 Text(state.transcript.isEmpty
                      ? "Listening… speak now. Click the mic again when you're done."
                      : state.transcript)
-                    .font(.system(size: 13, design: .rounded))
+                    .font(.system(size: 15, design: .monospaced))
                     .foregroundStyle(state.transcript.isEmpty ? .white.opacity(0.6) : .white)
                     .lineLimit(2)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -531,7 +659,7 @@ struct AssistantPanelView: View {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
                 Text(error)
-                    .font(.system(size: 12, design: .rounded))
+                    .font(.system(size: 14, design: .monospaced))
                     .foregroundStyle(.orange)
                     .lineLimit(2)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -539,7 +667,7 @@ struct AssistantPanelView: View {
                 Image(systemName: "mic.badge.plus")
                     .foregroundStyle(.white.opacity(0.4))
                 Text("Click the mic (or hold ⌥⌘V) and speak — your words appear here and go on the clipboard with the image.")
-                    .font(.system(size: 12, design: .rounded))
+                    .font(.system(size: 14, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.55))
                     .lineLimit(2)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -548,7 +676,7 @@ struct AssistantPanelView: View {
                     .foregroundStyle(state.status == .thinking ? .yellow : .green)
                 ScrollView {
                     Text(state.dictationText)
-                        .font(.system(size: 13, design: .rounded))
+                        .font(.system(size: 15, design: .monospaced))
                         .foregroundStyle(.white)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -558,7 +686,7 @@ struct AssistantPanelView: View {
                     state.dictationText = ""
                 } label: {
                     Label("Clear", systemImage: "xmark.circle")
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.white.opacity(0.5))
@@ -566,7 +694,7 @@ struct AssistantPanelView: View {
                     state.onCopyAgain?()
                 } label: {
                     Label("Copy again", systemImage: "doc.on.doc")
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.cyan)
@@ -579,17 +707,17 @@ struct AssistantPanelView: View {
         VStack(alignment: .leading, spacing: 8) {
             if state.status == .listening {
                 HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "waveform")
-                        .foregroundStyle(.red)
-                        .symbolEffect(.pulse, isActive: true)
+                    Image(systemName: state.phase == .paused ? "pause.fill" : "waveform")
+                        .foregroundStyle(state.accent)
+                        .symbolEffect(.pulse, isActive: state.phase == .recording)
                     if state.transcript.isEmpty {
                         Text("Listening… speak now. Click the mic again (or release ⌥⌘V) when done.")
-                            .font(.system(size: 13, design: .rounded))
+                            .font(.system(size: 15, design: .monospaced))
                             .foregroundStyle(.white.opacity(0.6))
                     } else {
                         ScrollView {
                             Text(state.transcript)
-                                .font(.system(size: 15, design: .rounded))
+                                .font(.system(size: 17, design: .monospaced))
                                 .foregroundStyle(.white)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
@@ -601,10 +729,10 @@ struct AssistantPanelView: View {
                 // silently falling back to whatever old text is on screen.
                 VStack(spacing: 8) {
                     Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 22))
+                        .font(.system(size: 24))
                         .foregroundStyle(.orange)
                     Text(error)
-                        .font(.system(size: 12, design: .rounded))
+                        .font(.system(size: 14, design: .monospaced))
                         .foregroundStyle(.orange)
                         .multilineTextAlignment(.center)
                 }
@@ -612,10 +740,10 @@ struct AssistantPanelView: View {
             } else if state.dictationText.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "mic.badge.plus")
-                        .font(.system(size: 22))
+                        .font(.system(size: 24))
                         .foregroundStyle(.white.opacity(0.4))
                     Text("Click the mic below, or hold ⌥⌘V (or tap DICTATE on your phone) and speak.\nYour words are tidied up and copied to the clipboard.")
-                        .font(.system(size: 12, design: .rounded))
+                        .font(.system(size: 14, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.55))
                         .multilineTextAlignment(.center)
                 }
@@ -623,7 +751,7 @@ struct AssistantPanelView: View {
             } else {
                 ScrollView {
                     Text(state.dictationText)
-                        .font(.system(size: 14, design: .rounded))
+                        .font(.system(size: 16, design: .monospaced))
                         .foregroundStyle(.white)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -634,7 +762,7 @@ struct AssistantPanelView: View {
                     Text(state.captureImage == nil
                          ? "On your clipboard — paste anywhere with ⌘V"
                          : "Text + image on your clipboard — paste with ⌘V")
-                        .font(.system(size: 11, design: .rounded))
+                        .font(.system(size: 13, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.6))
                         .lineLimit(1)
                     Spacer()
@@ -642,7 +770,7 @@ struct AssistantPanelView: View {
                         state.dictationText = ""
                     } label: {
                         Label("Clear", systemImage: "xmark.circle")
-                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .font(.system(size: 13, weight: .semibold, design: .monospaced))
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.white.opacity(0.5))
@@ -650,7 +778,7 @@ struct AssistantPanelView: View {
                         state.onCopyAgain?()
                     } label: {
                         Label("Copy again", systemImage: "doc.on.doc")
-                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .font(.system(size: 13, weight: .semibold, design: .monospaced))
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.cyan)
@@ -701,7 +829,7 @@ struct AssistantPanelView: View {
                         state.onDismissCapture?()
                     } label: {
                         Image(systemName: "xmark")
-                            .font(.system(size: 9, weight: .bold))
+                            .font(.system(size: 11, weight: .bold))
                             .foregroundStyle(.white)
                             .frame(width: 18, height: 18)
                             .background(Circle().fill(Color.black.opacity(0.55)))
@@ -715,17 +843,17 @@ struct AssistantPanelView: View {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(.green)
                     Text(captureStatusText)
-                        .font(.system(size: 11, design: .rounded))
+                        .font(.system(size: 13, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.6))
                         .lineLimit(1)
                 }
             } else {
                 VStack(spacing: 8) {
                     Image(systemName: "camera.viewfinder")
-                        .font(.system(size: 22))
+                        .font(.system(size: 24))
                         .foregroundStyle(.white.opacity(0.4))
                     Text("Press ⌃⌥X (or tap CAPTURE on your phone) and drag out a region.\nThe capture is saved, copied, and previewed here.")
-                        .font(.system(size: 12, design: .rounded))
+                        .font(.system(size: 14, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.55))
                         .multilineTextAlignment(.center)
                 }
@@ -758,10 +886,10 @@ struct AssistantPanelView: View {
             Button(action: onSelect) {
                 HStack(spacing: 6) {
                     Image(systemName: isSelected ? "checkmark.square.fill" : "square")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(isSelected ? .cyan : .white.opacity(0.4))
                     Text(title)
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.8))
                 }
             }
@@ -769,7 +897,7 @@ struct AssistantPanelView: View {
             .help("Use this version for the clipboard")
             if let fileName {
                 Text(fileName)
-                    .font(.system(size: 10, design: .rounded))
+                    .font(.system(size: 12, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.4))
                     .lineLimit(1)
             }
@@ -798,13 +926,13 @@ struct AssistantPanelView: View {
             ZStack(alignment: .leading) {
                 if typedQuestion.isEmpty {
                     Text(state.tab == .talk ? "Tell Clicky what to do…" : "Ask Clicky anything…")
-                        .font(.system(size: 15, design: .rounded))
+                        .font(.system(size: 17, design: .monospaced))
                         .foregroundStyle(.white)
                         .allowsHitTesting(false)
                 }
                 TextField("", text: $typedQuestion)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 15, design: .rounded))
+                    .font(.system(size: 17, design: .monospaced))
                     .foregroundStyle(.white)
                     .focused($fieldFocused)
                     .onSubmit(submit)
@@ -827,13 +955,13 @@ struct AssistantPanelView: View {
         return Button {
             state.onToggleRecording?()
         } label: {
-            Image(systemName: listening ? "waveform" : "mic")
-                .font(.system(size: listening ? 17 : 13, weight: .medium))
-                .foregroundStyle(listening ? .red : state.status.dotColor.opacity(0.85))
-                .symbolEffect(.pulse, isActive: listening)
-                .frame(width: 28, height: 28)
+            Image(systemName: listening ? (state.phase == .paused ? "pause.fill" : "waveform") : "mic")
+                .font(.system(size: listening ? 19 : 15, weight: .medium))
+                .foregroundStyle(listening ? state.accent : state.accent.opacity(0.85))
+                .symbolEffect(.pulse, isActive: state.phase == .recording)
+                .frame(width: 32, height: 32)
                 .background(
-                    Circle().fill(listening ? Color.red.opacity(0.2) : Color.white.opacity(0.08))
+                    Circle().fill(listening ? state.accent.opacity(0.22) : Color.white.opacity(0.08))
                 )
         }
         .buttonStyle(.plain)
@@ -849,11 +977,11 @@ struct AssistantPanelView: View {
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: state.textOnlyMode ? "text.bubble.fill" : "speaker.wave.2.fill")
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.system(size: 12, weight: .semibold))
                 Text("Read Response")
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
             }
-            .foregroundStyle(state.textOnlyMode ? state.status.dotColor.opacity(0.9) : .white.opacity(0.4))
+            .foregroundStyle(state.textOnlyMode ? state.accent.opacity(0.9) : .white.opacity(0.4))
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
             .background(
@@ -870,26 +998,30 @@ struct AssistantPanelView: View {
 
     private var bottomBar: some View {
         HStack(spacing: 10) {
-            ZStack {
-                Circle()
-                    .fill(state.status.dotColor.opacity(0.22))
-                    .frame(width: 18, height: 18)
-                Circle()
-                    .fill(state.status.dotColor)
-                    .frame(width: 9, height: 9)
-                    .shadow(color: state.status.dotColor.opacity(0.9), radius: 4)
+            // Shell-prompt readout: `clicky on talk ❯` — the segments coloured
+            // as a prompt colours them, the chevron in the phase colour.
+            HStack(spacing: 6) {
+                Text("clicky")
+                    .foregroundStyle(Color(red: 0.35, green: 0.78, blue: 0.98))
+                Text("on")
+                    .foregroundStyle(.white.opacity(0.6))
+                Text(promptTabName)
+                    .foregroundStyle(Color(red: 0.72, green: 0.50, blue: 0.98))
+                Text("❯")
+                    .foregroundStyle(state.accent)
+                    .shadow(color: state.accent.opacity(0.8), radius: 4)
+                Text(state.phase.label.lowercased())
+                    .foregroundStyle(state.accent.opacity(0.9))
             }
-            .animation(.easeInOut(duration: 0.25), value: state.status)
-            Text(state.status.label)
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white.opacity(0.85))
+            .font(.system(size: 14, weight: .semibold, design: .monospaced))
+            .animation(.easeInOut(duration: 0.25), value: state.phase)
             Text("⌥⌘C ask · ⌥⌘V dictate")
-                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.28))
                 .padding(.leading, 6)
             Spacer()
             Text("CLICKY")
-                .font(.system(size: 10, weight: .heavy, design: .rounded))
+                .font(.system(size: 12, weight: .heavy, design: .monospaced))
                 .kerning(2)
                 .foregroundStyle(
                     LinearGradient(
@@ -919,7 +1051,7 @@ struct AssistantPanelView: View {
     private var sendButton: some View {
         Button(action: submit) {
             Image(systemName: "arrow.up")
-                .font(.system(size: 12, weight: .heavy))
+                .font(.system(size: 14, weight: .heavy))
                 .foregroundStyle(.black)
                 .frame(width: 26, height: 26)
                 .background(
@@ -946,9 +1078,9 @@ struct AssistantPanelView: View {
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: "stop.fill")
-                .font(.system(size: 10, weight: .heavy))
+                .font(.system(size: 12, weight: .heavy))
                 Text("Stop")
-                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .font(.system(size: 13, weight: .bold, design: .monospaced))
             }
             .foregroundStyle(.white)
             .padding(.horizontal, 10)
@@ -971,7 +1103,7 @@ struct AssistantPanelView: View {
     private func headerButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 9, weight: .bold))
+                .font(.system(size: 11, weight: .bold))
                 .foregroundStyle(.white.opacity(0.55))
                 .frame(width: 22, height: 22)
                 .background(Circle().fill(Color.white.opacity(0.07)))
@@ -985,7 +1117,7 @@ struct AssistantPanelView: View {
     private func resizeHandle(_ corner: PanelResizeCorner) -> some View {
         let hovering = resizeHoverCorner == corner
         return Image(systemName: "arrow.up.left.and.arrow.down.right")
-            .font(.system(size: 9, weight: .bold))
+            .font(.system(size: 11, weight: .bold))
             .foregroundStyle(.white.opacity(hovering ? 0.6 : 0.2))
             .rotationEffect(.degrees(corner == .topTrailing || corner == .bottomLeading ? 90 : 0))
             .padding(9)
@@ -1004,11 +1136,11 @@ struct AssistantPanelView: View {
         if !state.transcript.isEmpty {
             HStack(alignment: .top, spacing: 7) {
                 Image(systemName: "quote.opening")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(state.status.dotColor.opacity(0.8))
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(state.accent.opacity(0.8))
                     .padding(.top, 3)
                 Text(state.transcript)
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
+                    .font(.system(size: 14, weight: .medium, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.75))
                     .lineLimit(3)
             }
@@ -1031,7 +1163,7 @@ struct AssistantPanelView: View {
         if let error = state.errorText {
             ScrollView {
                 Text(error)
-                    .font(.system(size: 12, design: .rounded))
+                    .font(.system(size: 14, design: .monospaced))
                     .foregroundStyle(.orange)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1052,7 +1184,7 @@ struct AssistantPanelView: View {
                 if state.textOnlyMode || state.tab == .talk {
                     ScrollView {
                         Text(state.answer)
-                            .font(.system(size: 13.5, weight: .regular, design: .rounded))
+                            .font(.system(size: 15.5, weight: .regular, design: .monospaced))
                             .foregroundStyle(.white.opacity(0.94))
                             .lineSpacing(3.5)
                             .textSelection(.enabled)
@@ -1075,11 +1207,11 @@ struct AssistantPanelView: View {
         if let copied = state.copiedPreview, !copied.isEmpty {
             VStack(alignment: .leading, spacing: 3) {
                 Text("COPIED — on your clipboard")
-                    .font(.system(size: 9, weight: .heavy, design: .monospaced))
+                    .font(.system(size: 11, weight: .heavy, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.45))
                 ScrollView([.vertical, .horizontal]) {
                     Text(copied)
-                        .font(.system(size: 11.5, weight: .regular, design: .monospaced))
+                        .font(.system(size: 13.5, weight: .regular, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.92))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1096,7 +1228,7 @@ struct AssistantPanelView: View {
                 .symbolEffect(.pulse, isActive: state.isSpeaking)
             Text(state.isSpeaking ? "Reading the response aloud…" : "Response read aloud.")
         }
-        .font(.system(size: 12.5, weight: .medium, design: .rounded))
+        .font(.system(size: 14.5, weight: .medium, design: .monospaced))
         .foregroundStyle(.white.opacity(0.6))
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -1108,7 +1240,7 @@ struct AssistantPanelView: View {
             state.onReadAloud?()
         } label: {
             Label(state.isSpeaking ? "Reading…" : "Read aloud", systemImage: state.isSpeaking ? "waveform" : "speaker.wave.2")
-                .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
         }
         .buttonStyle(.plain)
         .foregroundStyle(.cyan)
@@ -1125,4 +1257,43 @@ struct AssistantPanelView: View {
             state.onSubmit?(text)
         }
     }
+
+    /// Short tab name for the prompt line, the way a shell shows a branch.
+    private var promptTabName: String {
+        switch state.tab {
+        case .captureDictate: "capture"
+        case .ask: "ask"
+        case .talk: "talk"
+        }
+    }
+}
+
+/// Five bars that dance while speech is coming in. There is no audio level
+/// to draw — the phone keeps the microphone — so the motion is synthetic,
+/// but it only ever runs while partial transcripts are arriving, which is the
+/// truth the user needs: words are being heard *right now*.
+private struct RecordingBars: View {
+    let color: Color
+    @State private var animating = false
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 2.5) {
+            ForEach(0..<5, id: \.self) { index in
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(color)
+                    .frame(width: 3, height: animating ? Self.tall[index] : Self.short[index])
+                    .animation(
+                        .easeInOut(duration: Self.speed[index]).repeatForever(autoreverses: true),
+                        value: animating
+                    )
+            }
+        }
+        .frame(height: 20)
+        .onAppear { animating = true }
+        .onDisappear { animating = false }
+    }
+
+    private static let tall: [CGFloat] = [12, 20, 16, 20, 10]
+    private static let short: [CGFloat] = [4, 8, 5, 6, 4]
+    private static let speed: [Double] = [0.38, 0.30, 0.45, 0.34, 0.41]
 }
