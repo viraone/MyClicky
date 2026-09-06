@@ -452,8 +452,30 @@ struct NumpadView: View {
 
     // MARK: - WhatsApp pad (controls the WhatsApp desktop app on the Mac)
 
+    // Each section is wrapped in AnyView on purpose: the combined modifier
+    // chain (photosPicker + fullScreenCover + onChange + alert + six-button
+    // rows) produced a generic type so deeply nested that the Swift runtime
+    // overflowed its stack just decoding the type name when this pad first
+    // appeared. Erasing per section keeps every type shallow.
     private var whatsappPad: some View {
         VStack(spacing: 10) {
+            whatsappDesktopSection
+            whatsappChatsSection
+            Spacer()
+            clickyPill
+            HStack(spacing: 6) {
+                Image(systemName: "info.circle.fill")
+                Text("Buttons act on the WhatsApp app on your Mac.")
+            }
+            .font(.system(size: 9, design: .monospaced).weight(.semibold))
+            .foregroundStyle(Snes.text.opacity(0.6))
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+        }
+    }
+
+    private var whatsappDesktopSection: AnyView {
+        AnyView(
             padSection(title: "DESKTOP", subtitle: "Skip WhatsApp — send a photo straight to your Mac's Desktop") {
                 HStack(spacing: 8) {
                     padButton(icon: savingToDesktop ? "arrow.up.circle.dotted" : "photo.on.rectangle.angled",
@@ -480,10 +502,15 @@ struct NumpadView: View {
                 guard let item else { return }
                 Task { await sendPhotoToDesktop(item) }
             }
+        )
+    }
+
+    private var whatsappChatsSection: AnyView {
+        AnyView(
             padSection(title: "CHATS", subtitle: "Open → Reply (speak, tap again to stop) → check it → Send · Photo attaches from your library") {
                 VStack(spacing: 8) {
-                    whatsappRow(.test)
-                    whatsappRow(.vip)
+                    AnyView(whatsappRow(.test))
+                    AnyView(whatsappRow(.vip))
                 }
             }
             .photosPicker(isPresented: $photoPickerShown, selection: $photoPick,
@@ -507,17 +534,7 @@ struct NumpadView: View {
             } message: {
                 Text("Clicky types this into \(textComposeChat.label) on your Mac — you still tap Send.")
             }
-            Spacer()
-            clickyPill
-            HStack(spacing: 6) {
-                Image(systemName: "info.circle.fill")
-                Text("Buttons act on the WhatsApp app on your Mac.")
-            }
-            .font(.system(size: 9, design: .monospaced).weight(.semibold))
-            .foregroundStyle(Snes.text.opacity(0.6))
-            .lineLimit(1)
-            .minimumScaleFactor(0.7)
-        }
+        )
     }
 
     /// Clicky toggle: bring the Mac panel up (e.g. to see what was typed), tap again to collapse it.
