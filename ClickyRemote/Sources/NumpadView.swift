@@ -11,8 +11,8 @@ struct NumpadView: View {
     @StateObject private var recorder = SpeechRecorder()
     @State private var statusText = "Tap CLICKY to open it on your Mac (tap again to hide)"
     @State private var permissionDenied = false
-    /// Short-lived warning shown in place of the live transcript while a
-    /// recording is running (where `statusText` isn't visible).
+    /// Short-lived toast over the whole console — used for warnings that fire
+    /// while a recording is running, when the status line isn't visible.
     @State private var recordingNotice: String?
     @State private var recordingNoticeTask: Task<Void, Never>?
     /// True after tapping "1"/"3": speech goes to the Mac clipboard, not a question.
@@ -163,6 +163,14 @@ struct NumpadView: View {
         }
         .padding(10)
         .background(consoleBackground.ignoresSafeArea())
+        .overlay(alignment: .bottom) {
+            if let notice = recordingNotice {
+                toast(notice)
+                    .padding(.bottom, 18)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: recordingNotice)
         .task {
             client.onMacMessage = { line in
                 // Stop pressed on the Mac panel: drop the recording, send nothing.
@@ -1309,22 +1317,13 @@ struct NumpadView: View {
             if recorder.isListening {
                 WaveformView(level: recorder.level)
                     .frame(height: 18)
-                if let notice = recordingNotice {
-                    Label(notice, systemImage: "exclamationmark.triangle.fill")
-                        .font(.system(size: 11, design: .monospaced).weight(.bold))
-                        .foregroundStyle(Snes.yellow)
-                        .lineLimit(3)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .transition(.opacity)
-                } else {
-                    Text(recorder.transcript.isEmpty
-                         ? (recordTarget == .whatsapp ? "Listening… tap Stop when done" : "Listening… tap STOP when done")
-                         : recorder.transcript)
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(Snes.red)
-                        .lineLimit(6)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                Text(recorder.transcript.isEmpty
+                     ? (recordTarget == .whatsapp ? "Listening… tap Stop when done" : "Listening… tap STOP when done")
+                     : recorder.transcript)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(Snes.red)
+                    .lineLimit(6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 Text(permissionDenied
                      ? "Enable Microphone & Speech Recognition in Settings."
@@ -1535,7 +1534,7 @@ struct NumpadView: View {
         case .ask: running = "ASK"
         case .whatsapp: running = "the WhatsApp reply"
         }
-        showRecordingNotice("\(running) is still recording — tap \(running) to stop it first")
+        showRecordingNotice("\(running) is still recording — stop it first")
         return true
     }
 
@@ -1543,14 +1542,34 @@ struct NumpadView: View {
     /// while recording, fading out after a couple of seconds.
     private func showRecordingNotice(_ message: String) {
         UINotificationFeedbackGenerator().notificationOccurred(.error)
-        statusText = message
         recordingNoticeTask?.cancel()
-        withAnimation(.easeInOut(duration: 0.15)) { recordingNotice = message }
+        recordingNotice = message
         recordingNoticeTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(2.5))
+            try? await Task.sleep(for: .seconds(1.6))
             guard !Task.isCancelled else { return }
-            withAnimation(.easeInOut(duration: 0.3)) { recordingNotice = nil }
+            recordingNotice = nil
         }
+    }
+
+    /// Black pill toast, centered at the bottom of the console.
+    private func toast(_ message: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(Snes.yellow)
+            Text(message)
+                .foregroundStyle(.white)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+        }
+        .font(.system(size: 13, weight: .semibold, design: .rounded))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 11)
+        .background(
+            Capsule()
+                .fill(Color.black.opacity(0.92))
+                .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
+        )
+        .padding(.horizontal, 24)
     }
 
     private func talkTapped() {
