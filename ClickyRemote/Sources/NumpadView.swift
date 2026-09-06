@@ -144,10 +144,11 @@ struct NumpadView: View {
                 .overlay {
                     if let confirm = client.pendingConfirm {
                         confirmView(confirm)
-                            .padding(10)
-                            .background(Snes.bodyDark.opacity(0.85))
+                            .padding(12)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(Color.black.opacity(0.35))
                             .clipShape(RoundedRectangle(cornerRadius: 20))
-                            .transition(.scale.combined(with: .opacity))
+                            .transition(.scale(scale: 0.94).combined(with: .opacity))
                     } else if let choice = client.pendingChoice {
                         AnyView(choiceView(choice))
                             .padding(10)
@@ -399,31 +400,96 @@ struct NumpadView: View {
     }
 
     private func confirmView(_ confirm: (id: String, question: String)) -> some View {
-        VStack(spacing: 16) {
-            Text(confirm.question)
-                .font(.system(.title, design: .rounded).weight(.bold))
-                .dynamicTypeSize(.large ... .accessibility5)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.white)
-                .accessibilityLabel("Clicky wants to confirm: \(confirm.question)")
-            HStack(spacing: 12) {
-                confirmButton("Yes", color: Snes.green) { respondConfirm(true) }
-                confirmButton("No", color: Snes.red) { respondConfirm(false) }
+        // "Send to X in Gmail?\n\n<preview>" — headline first, the passage
+        // (if any) shown as a quoted card underneath it.
+        let parts = confirm.question.components(separatedBy: "\n\n")
+        let headline = parts.first ?? confirm.question
+        let preview = parts.dropFirst().joined(separator: "\n\n").trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return VStack(spacing: 18) {
+            VStack(spacing: 6) {
+                Text("CONFIRM")
+                    .font(.system(size: 11, weight: .heavy, design: .rounded))
+                    .tracking(3)
+                    .foregroundStyle(.white.opacity(0.45))
+                Text(headline)
+                    .font(.system(.title, design: .rounded).weight(.bold))
+                    .dynamicTypeSize(.large ... .accessibility5)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.white)
+                    .lineLimit(3)
+                    .minimumScaleFactor(0.7)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Clicky wants to confirm: \(confirm.question)")
+
+            if !preview.isEmpty {
+                Text(preview)
+                    .font(.system(.callout, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .lineLimit(4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14)
+                            .fill(.white.opacity(0.07))
+                            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(0.12), lineWidth: 1))
+                    )
+                    .overlay(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(Snes.talk)
+                            .frame(width: 3)
+                            .padding(.vertical, 12)
+                            .padding(.leading, 1)
+                    }
+                    .accessibilityHidden(true)
+            }
+
+            HStack(spacing: 14) {
+                confirmButton("No", icon: "xmark", color: Snes.red, prominent: false) { respondConfirm(false) }
+                confirmButton("Yes", icon: "checkmark", color: Snes.green, prominent: true) { respondConfirm(true) }
             }
             .frame(maxHeight: .infinity)
         }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 20).fill(Snes.bodyDark.opacity(0.6)))
+        .padding(22)
+        .background(
+            RoundedRectangle(cornerRadius: 28)
+                .fill(
+                    LinearGradient(colors: [Color(red: 0.13, green: 0.13, blue: 0.16),
+                                            Color(red: 0.07, green: 0.07, blue: 0.09)],
+                                   startPoint: .top, endPoint: .bottom)
+                )
+                .overlay(RoundedRectangle(cornerRadius: 28).strokeBorder(.white.opacity(0.10), lineWidth: 1))
+                .shadow(color: .black.opacity(0.45), radius: 30, y: 12)
+        )
     }
 
-    private func confirmButton(_ title: String, color: Color, action: @escaping () -> Void) -> some View {
+    private func confirmButton(_ title: String, icon: String, color: Color, prominent: Bool,
+                               action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(title)
-                .font(.system(.largeTitle, design: .rounded).weight(.black))
-                .dynamicTypeSize(.large ... .accessibility5)
-                .foregroundStyle(Color.white)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(RoundedRectangle(cornerRadius: 20).fill(color))
+            VStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 34, weight: .black))
+                Text(title)
+                    .font(.system(.title2, design: .rounded).weight(.heavy))
+                    .dynamicTypeSize(.large ... .accessibility5)
+            }
+            .foregroundStyle(prominent ? Color.white : color.lighter(0.35))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 22)
+                    .fill(
+                        prominent
+                            ? AnyShapeStyle(LinearGradient(colors: [color.lighter(0.15), color.darker(0.15)],
+                                                           startPoint: .top, endPoint: .bottom))
+                            : AnyShapeStyle(color.opacity(0.16))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 22)
+                            .strokeBorder(prominent ? .white.opacity(0.25) : color.opacity(0.45), lineWidth: 1)
+                    )
+                    .shadow(color: prominent ? color.opacity(0.55) : .clear, radius: 18, y: 6)
+            )
         }
         .buttonStyle(.plain)
         .accessibilityLabel(title == "Yes" ? "Yes, do it" : "No, cancel")
@@ -459,7 +525,7 @@ struct NumpadView: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("Pick \(option)")
                 }
-                confirmButton("Cancel", color: Snes.red) {
+                confirmButton("Cancel", icon: "xmark", color: Snes.red, prominent: false) {
                     client.respondChoice(nil)
                     statusText = "Cancelled"
                 }
