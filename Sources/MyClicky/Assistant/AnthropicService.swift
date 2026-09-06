@@ -287,7 +287,7 @@ struct AnthropicService {
         guard let payloadText = Self.answerText(from: data) else { throw ServiceError.emptyAnswer }
         guard let json = Self.parseJSONObject(from: payloadText) else {
             log.error("model answer was not a JSON object (\(payloadText.count) chars): \(payloadText.prefix(300), privacy: .private)")
-            throw ServiceError.emptyAnswer
+            throw ServiceError.notJSON(payloadText.trimmingCharacters(in: .whitespacesAndNewlines))
         }
         return json
     }
@@ -421,10 +421,14 @@ struct AnthropicService {
         case badResponse, emptyAnswer
         case api(String)
         case refused(String)
+        /// The model replied in prose where JSON was asked for. Carries the
+        /// prose, which is usually the model explaining why it couldn't.
+        case notJSON(String)
         var errorDescription: String? {
             switch self {
             case .badResponse: "Unexpected response from Claude."
             case .emptyAnswer: "Claude returned an empty answer."
+            case .notJSON: "Claude answered in prose instead of the format I asked for."
             case .refused(let reason): "Claude declined this one (\(reason))."
             case .api(let message): "Claude error: \(message)"
             }

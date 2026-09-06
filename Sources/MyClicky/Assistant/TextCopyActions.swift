@@ -113,7 +113,8 @@ enum TextCopyActions {
 
     Reply with JSON only: {"found": true, "text": "<the passage verbatim>"} \
     or, when nothing in the document plausibly matches, \
-    {"found": false, "reason": "<short reason>"}.
+    {"found": false, "reason": "<short reason>"}. Never answer in prose — \
+    if you can't find it, say so inside the JSON.
     """
 
     private static func copy(request: String, claude: AnthropicService) async -> Result {
@@ -158,6 +159,12 @@ enum TextCopyActions {
                 "verbatim": verbatim ? "yes" : "no",
             ])
             return .copied(text: text, from: source.appName, verbatim: verbatim)
+        } catch AnthropicService.ServiceError.notJSON(let prose) where !prose.isEmpty {
+            // Prose in place of JSON is the model saying it couldn't find
+            // the passage — relay that rather than a parsing complaint.
+            let reason = prose.count <= 240 ? prose : "Couldn't find that in what's on screen."
+            ActivityLog.recordAction("copy-text-miss", ["reason": reason])
+            return .notFound(reason)
         } catch {
             return .failed(error.localizedDescription)
         }
