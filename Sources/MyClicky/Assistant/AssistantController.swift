@@ -1564,9 +1564,14 @@ final class AssistantController {
         let words = utterance.lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { !$0.isEmpty }
-        guard words.count <= 5, words.first == "send" else { return false }
-        let filler: Set<String> = ["it", "that", "this", "the", "email", "mail", "message", "draft", "now", "please", "off"]
-        return words.dropFirst().allSatisfy { filler.contains($0) }
+        // "Looks good to me, send it" — an approval may lead in.
+        let approval: Set<String> = ["ok", "okay", "looks", "good", "great", "perfect", "yes", "yeah", "yep",
+                                     "alright", "all", "right", "and", "now", "go", "ahead", "please", "then",
+                                     "that", "that's", "thats", "it's", "its", "fine", "cool", "nice", "to", "me", "just"]
+        guard let sendAt = words.firstIndex(of: "send"), words.count - sendAt <= 5,
+              words[..<sendAt].count <= 6, words[..<sendAt].allSatisfy({ approval.contains($0) }) else { return false }
+        let filler: Set<String> = ["it", "that", "this", "the", "email", "mail", "message", "draft", "now", "please", "off", "out"]
+        return words[(sendAt + 1)...].allSatisfy { filler.contains($0) }
     }
 
     private static func isNeverMind(_ utterance: String) -> Bool {
