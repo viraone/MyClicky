@@ -33,6 +33,9 @@ final class AssistantController {
     /// with Clicky's own paste-based typing, so it can change out from under
     /// a sentence that's still being spoken.
     private var lastCopiedText: String?
+    /// Set when "email that to X" leaves a Gmail draft open, so a follow-up
+    /// "send it" knows there is something to send.
+    private var gmailDraftOpenedAt: Date?
     /// The in-flight inventory/flagging pass, so Cancel and a second ⌥⌘D can
     /// stop it rather than stacking a second scan on top.
     private var driveCleanupTask: Task<Void, Never>?
@@ -939,6 +942,10 @@ final class AssistantController {
         guard !busy else { return }
         ActivityLog.recordAction("do", ["text": utterance])
         panel.state.logTalk(.command, utterance)
+        if Self.isSendIt(utterance) {
+            sendOpenGmailDraft()
+            return
+        }
         guard let apiKey = KeychainService.anthropicAPIKey() else {
             let message = "No Anthropic API key found in Keychain.\n\nRun this once in Terminal:\n\(KeychainService.setupCommand)"
             panel.state.logTalk(.error, message)
@@ -1536,9 +1543,47 @@ final class AssistantController {
             return "Cancelled — nothing was sent."
         }
         GmailActions.composeTo(only.email, body: body)
-        panel.state.answer = "Drafted to \(only.display) in Gmail — press Send when it looks right."
-        panel.state.logTalk(.status, "Drafted to \(only.display) in Gmail — press Send when it looks right.")
+        gmailDraftOpenedAt = Date()
+        let note = "Drafted to \(only.display) in Gmail — say “send it” or press Send when it looks right."
+        panel.state.answer = note
+        panel.state.logTalk(.status, note)
         return nil
+    }
+
+    /// "Send it", "send the email", "send that" — a handful of words, no
+    /// planner round trip. Only fires while a Gmail draft Clicky opened is
+    /// plausibly still on screen, so a stray "send" in normal speech won't
+    /// mail a half-written message.
+    private static func isSendIt(_ utterance: String) -> Bool {
+        let words = utterance.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+        guard words.count <= 5, words.first == "send" else { return false }
+        let filler: Set<String> = ["it", "that", "this", "the", "email", "mail", "message", "draft", "now", "please", "off"]
+        return words.dropFirst().allSatisfy { filler.contains($0) }
+    }
+
+    private func sendOpenGmailDraft() {
+        guard let opened = gmailDraftOpenedAt, Date().timeIntervalSince(opened) < 10 * 60 else {
+            let message = "No Gmail draft from me to send — say “email that to someone” first."
+            panel.state.status = .answering
+            panel.state.answer = message
+            panel.state.logTalk(.status, message)
+            remote.broadcast("STATUS \(message)")
+            return
+        }
+        panel.state.status = .thinking
+        GmailActions.send { [weak self] message, ok in
+            guard let self else { return }
+            if ok { self.gmailDraftOpenedAt = nil }
+            self.panel.state.status = .answering
+            self.panel.state.answer = message
+            self.panel.state.logTalk(ok ? .status : .error, message)
+            self.remote.broadcast("STATUS \(message)")
+            self.toast.show(message,
+                            icon: ok ? "paperplane.fill" : "exclamationmark.triangle.fill",
+                            tint: ok ? .green : .orange)
+        }
     }
 
     private func sendViaWhatsApp(recipient: String, body: String, screen: NSScreen) async -> String? {
