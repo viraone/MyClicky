@@ -1529,6 +1529,23 @@ struct AssistantPanelView: View {
                 .foregroundStyle(.white.opacity(0.28))
                 .padding(.leading, 6)
             Spacer()
+            VStack(alignment: .trailing, spacing: 1) {
+                Text("CLICKY")
+                    .font(.system(size: 10, weight: .heavy, design: .rounded))
+                    .kerning(2)
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [.white.opacity(0.45), .white.opacity(0.15)],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                Text("Talk to any screen without leaving this one.")
+                    .font(.system(size: 8, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.28))
+                    .lineLimit(1)
+                    .fixedSize()
+            }
             coachButton
             if state.tab == .ask {
                 readAloudToggle
