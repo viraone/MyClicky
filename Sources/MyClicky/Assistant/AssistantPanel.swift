@@ -1338,7 +1338,7 @@ struct AssistantPanelView: View {
         let hovering = resizeHoverCorner == corner
         return Image(systemName: "arrow.up.left.and.arrow.down.right")
             .font(.system(size: 11, weight: .bold))
-            .foregroundStyle(.white.opacity(hovering ? 0.6 : 0.2))
+            .foregroundStyle(.white.opacity(hovering ? 0.6 : 0))
             .rotationEffect(.degrees(corner == .topTrailing || corner == .bottomLeading ? 90 : 0))
             .padding(9)
             .contentShape(Rectangle())
