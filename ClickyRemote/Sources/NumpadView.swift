@@ -102,64 +102,48 @@ struct NumpadView: View {
 
     var body: some View {
         GeometryReader { geo in
-            HStack(alignment: .top, spacing: 12) {
-                VStack(spacing: 8) {
-                    // Sits below the top edge rather than flush against it,
-                    // so the status line reads as its own thing instead of
-                    // running into the mode column.
-                    header
-                        .padding(.top, 40)
-                    modeTabs
-                        .frame(maxHeight: .infinity)
-                    Text("SUPER CLICKY\nENTERTAINMENT SYSTEM")
-                        .font(.system(size: 8, weight: .heavy, design: .monospaced).italic())
-                        .kerning(1)
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(Snes.text.opacity(0.5))
-                }
-                .frame(maxWidth: .infinity)
-                Group {
-                    switch mode {
-                    case .remote: keypad
-                    case .gmail: gmailPad
-                    case .spotify: spotifyPad
-                    case .whatsapp: whatsappPad
-                    case .youtube: youtubePad
+            // The app is locked to portrait, but the layout still keys off
+            // the actual shape so it degrades sensibly on iPad split view.
+            if geo.size.height > geo.size.width {
+                VStack(spacing: 12) {
+                    HStack(alignment: .top, spacing: 12) {
+                        VStack(spacing: 8) {
+                            header
+                            Text("SUPER CLICKY\nENTERTAINMENT SYSTEM")
+                                .font(.system(size: 8, weight: .heavy, design: .monospaced).italic())
+                                .kerning(1)
+                                .multilineTextAlignment(.center)
+                                .foregroundStyle(Snes.text.opacity(0.5))
+                        }
+                        .frame(maxWidth: .infinity)
+                        modeTabs
+                            .frame(width: geo.size.width * 0.46)
                     }
+                    .frame(height: 210)
+                    .padding(.top, 8)
+                    pad
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                // Talk rides along in the corner of every pad but the keypad,
-                // which has a full-size TALK key of its own.
-                // `safeAreaInset` rather than an overlay: it reserves its own
-                // space instead of sitting on top of a key or tile and
-                // swallowing taps meant for what's underneath.
-                .safeAreaInset(edge: .trailing, alignment: .bottom, spacing: 6) {
-                    // The trailing padding is what holds it off the right
-                    // edge — raise it to move Talk further left, lower it to
-                    // push it back toward the corner.
-                    if mode != .remote { cornerTalkButton.padding(.trailing, 44) }
-                }
-                // A confirmation is the one thing that must not be missed —
-                // it used to live on the Talk pad, so it now covers whichever
-                // pad is up until it's answered.
-                .overlay {
-                    if let confirm = client.pendingConfirm {
-                        confirmView(confirm)
-                            .padding(12)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .background(Color.black.opacity(0.35))
-                            .clipShape(RoundedRectangle(cornerRadius: 20))
-                            .transition(.scale(scale: 0.94).combined(with: .opacity))
-                    } else if let choice = client.pendingChoice {
-                        AnyView(choiceView(choice))
-                            .padding(10)
-                            .background(Snes.bodyDark.opacity(0.85))
-                            .clipShape(RoundedRectangle(cornerRadius: 20))
-                            .transition(.scale.combined(with: .opacity))
+            } else {
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(spacing: 8) {
+                        // Sits below the top edge rather than flush against it,
+                        // so the status line reads as its own thing instead of
+                        // running into the mode column.
+                        header
+                            .padding(.top, 40)
+                        modeTabs
+                            .frame(maxHeight: .infinity)
+                        Text("SUPER CLICKY\nENTERTAINMENT SYSTEM")
+                            .font(.system(size: 8, weight: .heavy, design: .monospaced).italic())
+                            .kerning(1)
+                            .multilineTextAlignment(.center)
+                            .foregroundStyle(Snes.text.opacity(0.5))
                     }
+                    .frame(maxWidth: .infinity)
+                    pad
+                        .frame(width: geo.size.width * 0.78)
                 }
-                .animation(.spring(response: 0.3, dampingFraction: 0.8), value: client.pendingConfirm?.id)
-                .animation(.spring(response: 0.3, dampingFraction: 0.8), value: client.pendingChoice?.id)
-                .frame(width: geo.size.width * 0.78)
             }
         }
         .padding(10)
@@ -226,6 +210,52 @@ struct NumpadView: View {
             entries.swapAt(refreshIndex, remoteIndex)
         }
         return entries
+    }
+
+    /// The active mode's pad, with the corner Talk button and any pending
+    /// confirm/choice card layered on. Shared by both orientations.
+    private var pad: some View {
+        Group {
+            switch mode {
+            case .remote: keypad
+            case .gmail: gmailPad
+            case .spotify: spotifyPad
+            case .whatsapp: whatsappPad
+            case .youtube: youtubePad
+            }
+        }
+        // Talk rides along in the corner of every pad but the keypad,
+        // which has a full-size TALK key of its own.
+        // `safeAreaInset` rather than an overlay: it reserves its own
+        // space instead of sitting on top of a key or tile and
+        // swallowing taps meant for what's underneath.
+        .safeAreaInset(edge: .trailing, alignment: .bottom, spacing: 6) {
+            // The trailing padding is what holds it off the right
+            // edge — raise it to move Talk further left, lower it to
+            // push it back toward the corner.
+            if mode != .remote { cornerTalkButton.padding(.trailing, 44) }
+        }
+        // A confirmation is the one thing that must not be missed —
+        // it used to live on the Talk pad, so it now covers whichever
+        // pad is up until it's answered.
+        .overlay {
+            if let confirm = client.pendingConfirm {
+                confirmView(confirm)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.black.opacity(0.35))
+                    .clipShape(RoundedRectangle(cornerRadius: 20))
+                    .transition(.scale(scale: 0.94).combined(with: .opacity))
+            } else if let choice = client.pendingChoice {
+                AnyView(choiceView(choice))
+                    .padding(10)
+                    .background(Snes.bodyDark.opacity(0.85))
+                    .clipShape(RoundedRectangle(cornerRadius: 20))
+                    .transition(.scale.combined(with: .opacity))
+            }
+        }
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: client.pendingConfirm?.id)
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: client.pendingChoice?.id)
     }
 
     private var modeTabs: some View {
