@@ -77,7 +77,8 @@ enum AssistantTab: String, CaseIterable {
 
 /// One line of the Talk tab's terminal-style log.
 struct TalkLogEntry: Identifiable, Equatable {
-    enum Kind { case command, status, error }
+    /// `copied` carries the passage a copy verb put on the clipboard.
+    enum Kind { case command, status, error, copied }
     let id = UUID()
     let time = Date()
     let kind: Kind
@@ -1165,7 +1166,6 @@ struct AssistantPanelView: View {
                         if let last = state.talkLog.last { proxy.scrollTo(last.id, anchor: .bottom) }
                     }
                 }
-                .frame(maxHeight: (state.copiedPreview ?? "").isEmpty ? .infinity : 150)
                 .overlay(alignment: .topTrailing) {
                     Button {
                         state.clearTalkLog()
@@ -1181,7 +1181,6 @@ struct AssistantPanelView: View {
                     .help("Clear the log (⌘K)")
                 }
             }
-            copiedPreviewView
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(
@@ -1217,11 +1216,98 @@ struct AssistantPanelView: View {
                     .font(.system(size: 14, design: .monospaced))
                     .foregroundStyle(.orange)
                     .padding(.leading, 18)
+            case .copied:
+                copiedLogBlock(entry)
+                    .padding(.leading, 18)
             }
         }
         .fixedSize(horizontal: false, vertical: true)
         .textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @State private var expandedCopies: Set<UUID> = []
+
+    /// A copied passage inline in the log, like `cat` output under the command
+    /// that produced it: a one-line summary, the first few lines dimmed, and
+    /// a toggle for the rest.
+    private func copiedLogBlock(_ entry: TalkLogEntry) -> some View {
+        let lines = entry.text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let expanded = expandedCopies.contains(entry.id)
+        let previewCount = 4
+        let shown = expanded ? lines : Array(lines.prefix(previewCount))
+        let hidden = lines.count - shown.count
+        return VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 8) {
+                Button {
+                    if expanded { expandedCopies.remove(entry.id) } else { expandedCopies.insert(entry.id) }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 10, weight: .bold))
+                        Text("copied \(entry.text.count) chars · \(lines.count) line\(lines.count == 1 ? "" : "s") — on your clipboard")
+                            .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    }
+                    .foregroundStyle(AssistantPhase.done.color.opacity(0.9))
+                }
+                .buttonStyle(.plain)
+                .help(expanded ? "Collapse" : "Show all lines")
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(entry.text, forType: .string)
+                } label: {
+                    Text("⧉ copy again")
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.45))
+                }
+                .buttonStyle(.plain)
+                .help("Put it back on the clipboard")
+            }
+            Group {
+                if expanded {
+                    ScrollView([.vertical, .horizontal]) {
+                        Text(shown.joined(separator: "\n"))
+                            .font(.system(size: 13, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.85))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 260)
+                } else {
+                    Text(shown.joined(separator: "\n"))
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.55))
+                        .lineLimit(previewCount)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(.leading, 16)
+            .overlay(alignment: .leading) {
+                Rectangle().fill(AssistantPhase.done.color.opacity(0.35)).frame(width: 2).padding(.leading, 4)
+            }
+            if !expanded, hidden > 0 {
+                Button {
+                    expandedCopies.insert(entry.id)
+                } label: {
+                    Text("… \(hidden) more line\(hidden == 1 ? "" : "s")")
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.4))
+                }
+                .buttonStyle(.plain)
+                .padding(.leading, 16)
+            }
+        }
+    }
+
+    /// Strips the indentation the passage shared on the page, so it hangs
+    /// from the log's own margin instead of floating mid-panel.
+    static func dedent(_ text: String) -> String {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let indent = lines.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            .map { $0.prefix { $0 == " " || $0 == "\t" }.count }
+            .min() ?? 0
+        guard indent > 0 else { return text }
+        return lines.map { String($0.dropFirst(min(indent, $0.prefix { $0 == " " || $0 == "\t" }.count))) }
+            .joined(separator: "\n")
     }
 
     private static let logClock: DateFormatter = {

@@ -1314,6 +1314,7 @@ final class AssistantController {
     private func showCopiedText(_ text: String) {
         panel.state.status = .answering
         panel.state.copiedPreview = text
+        panel.state.logTalk(.copied, AssistantPanelView.dedent(text))
         // A copied passage is for reading, and the default panel height only
         // has room for the status line above it.
         panel.growIfNeeded()
