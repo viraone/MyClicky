@@ -36,6 +36,7 @@ final class AssistantController {
     /// Set when "email that to X" leaves a Gmail draft open, so a follow-up
     /// "send it" knows there is something to send.
     private var gmailDraftOpenedAt: Date?
+    private var gmailDraftRecipient: String?
     /// The in-flight inventory/flagging pass, so Cancel and a second ⌥⌘D can
     /// stop it rather than stacking a second scan on top.
     private var driveCleanupTask: Task<Void, Never>?
@@ -946,12 +947,29 @@ final class AssistantController {
             sendOpenGmailDraft()
             return
         }
+        if Self.isNeverMind(utterance), gmailDraftOpenedAt != nil {
+            gmailDraftOpenedAt = nil
+            let message = "OK — the draft stays as it is; I'm back to taking commands."
+            panel.state.status = .answering
+            panel.state.answer = message
+            panel.state.logTalk(.status, message)
+            remote.broadcast("STATUS \(message)")
+            return
+        }
         guard let apiKey = KeychainService.anthropicAPIKey() else {
             let message = "No Anthropic API key found in Keychain.\n\nRun this once in Terminal:\n\(KeychainService.setupCommand)"
             panel.state.logTalk(.error, message)
             panel.state.errorText = message
             panel.state.status = .idle
             remote.broadcast("STATUS \(message.replacingOccurrences(of: "\n", with: " "))")
+            return
+        }
+        // While a compose Clicky opened is on screen, what the user says next
+        // is the email — "tell them I'm interested in the sales role" — not a
+        // command. Screen-aware dictation: Claude writes it in their voice.
+        if let opened = gmailDraftOpenedAt, Date().timeIntervalSince(opened) < 10 * 60,
+           let compose = GmailDrafter.openCompose(recipientHint: gmailDraftRecipient) {
+            draftGmail(gist: utterance, compose: compose, apiKey: apiKey)
             return
         }
         // Drive (and screenshot) the display the target app is actually on —
@@ -1531,6 +1549,7 @@ final class AssistantController {
         }
         GmailActions.composeTo(only.email, body: body)
         gmailDraftOpenedAt = Date()
+        gmailDraftRecipient = only.display
         let note = "Drafted to \(only.display) in Gmail — say “send it” or press Send when it looks right."
         panel.state.answer = note
         panel.state.logTalk(.status, note)
@@ -1548,6 +1567,49 @@ final class AssistantController {
         guard words.count <= 5, words.first == "send" else { return false }
         let filler: Set<String> = ["it", "that", "this", "the", "email", "mail", "message", "draft", "now", "please", "off"]
         return words.dropFirst().allSatisfy { filler.contains($0) }
+    }
+
+    private static func isNeverMind(_ utterance: String) -> Bool {
+        let t = utterance.lowercased().trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+        return ["never mind", "nevermind", "cancel", "cancel that", "stop", "forget it", "leave it"].contains(t)
+    }
+
+    private func draftGmail(gist: String, compose: GmailDrafter.Compose, apiKey: String) {
+        busy = true
+        synthesizer.stopSpeaking(at: .immediate)
+        ring.hide()
+        panel.state.status = .thinking
+        panel.state.answer = compose.body.isEmpty ? "Writing it…" : "Rewriting it…"
+        panel.state.errorText = nil
+        remote.broadcast("STATUS \(panel.state.answer)")
+        ActivityLog.recordAction("gmail-draft", ["revision": compose.body.isEmpty ? "no" : "yes"])
+
+        requestID += 1
+        let id = requestID
+        currentTask = Task {
+            defer { if id == requestID { busy = false; currentTask = nil } }
+            let claude = AnthropicService(apiKey: apiKey)
+            let message: String
+            var ok = false
+            do {
+                let draft = try await GmailDrafter.write(gist: gist, compose: compose,
+                                                         senderName: NSFullUserName(), claude: claude)
+                guard id == requestID else { return }
+                if GmailDrafter.fill(draft, replaceSubject: compose.subject.isEmpty) {
+                    ok = true
+                    let words = draft.body.split(whereSeparator: { $0.isWhitespace }).count
+                    message = "Drafted \(words) words — read it over, then say “send it”, or tell me what to change."
+                } else {
+                    message = "Wrote it, but couldn't type into the compose window — is it still open?"
+                }
+            } catch {
+                message = "Couldn't write that: \(error.localizedDescription)"
+            }
+            panel.state.status = .answering
+            panel.state.answer = message
+            panel.state.logTalk(ok ? .status : .error, message)
+            remote.broadcast("STATUS \(message)")
+        }
     }
 
     private func sendOpenGmailDraft() {
@@ -1583,6 +1645,7 @@ final class AssistantController {
         }
         GmailActions.composeTo(only.email, body: "")
         gmailDraftOpenedAt = Date()
+        gmailDraftRecipient = only.display
         let note = "New email to \(only.display) is open in Gmail — write it, then say “send it”."
         panel.state.answer = note
         panel.state.logTalk(.status, note)
