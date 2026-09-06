@@ -123,7 +123,9 @@ enum ActionPlanner {
       opens the app themselves, deliberately. Never put click/press steps \
       BEFORE it either (no "click Copy" — the text is already copied). When \
       the user says "send that / text that / send it to X", the whole plan \
-      is that one send_copied step.
+      is that one send_copied step. If the "already copied" line below says \
+      "no", still emit only send_copied — it will tell the user to copy \
+      something first; do NOT invent a copy step from the screen.
     - open_conversation: bring someone's Messages conversation on screen, by \
       name. {"verb":"open_conversation","app":"Messages","to":"Dino Dad"} \
       Use this for "open Dino Dad's conversation", "pull up my chat with \
@@ -194,9 +196,10 @@ enum ActionPlanner {
         var app = targetApp ?? NSWorkspace.shared.frontmostApplication
         let elements = AXActions.read(in: app)
 
+        let hasCopied = callbacks.lastCopied().map { !$0.isEmpty } ?? false
         var plan: Plan
         do {
-            plan = try await requestPlan(utterance: utterance, elements: elements, claude: claude,
+            plan = try await requestPlan(utterance: utterance, elements: elements, claude: claude, hasCopied: hasCopied,
                                          includeScreenshot: elements.isEmpty, screenshot: screenshot)
         } catch {
             log.error("plan request failed: \(error.localizedDescription, privacy: .public)")
@@ -215,7 +218,7 @@ enum ActionPlanner {
         if isDeclined(plan), !elements.isEmpty {
             log.notice("AX-only plan declined — retrying with a screenshot for visual grounding")
             do {
-                let retryPlan = try await requestPlan(utterance: utterance, elements: elements, claude: claude,
+                let retryPlan = try await requestPlan(utterance: utterance, elements: elements, claude: claude, hasCopied: hasCopied,
                                                        includeScreenshot: true, screenshot: screenshot)
                 if isDeclined(retryPlan) {
                     log.notice("screenshot retry also declined: \(retryPlan.steps.first?.note ?? "(no note)", privacy: .public)")
@@ -232,6 +235,17 @@ enum ActionPlanner {
             } catch {
                 log.error("screenshot retry failed: \(error.localizedDescription, privacy: .public)")
             }
+        }
+
+        // send_copied is the whole job — it resolves, confirms and sends.
+        // The prompt says so, but the model still sometimes wraps it in a
+        // copy step invented from the screenshot (observed live: "email
+        // that to X" became copy_paragraph "Preferred Way" → send_copied),
+        // and the failing invention then blocks the send. Enforce the rule
+        // here rather than trusting it.
+        if let send = plan.steps.first(where: { $0.verb == "send_copied" }), plan.steps.count > 1 {
+            log.notice("collapsing \(plan.steps.count)-step plan to its send_copied step")
+            plan = Plan(steps: [send])
         }
 
         var executedAny = false
@@ -414,6 +428,7 @@ enum ActionPlanner {
                 return false
             }
             if let reason = await callbacks.sendCopied(target, recipient, body) {
+                log.error("send_copied via \(target, privacy: .public) failed: \(reason, privacy: .public)")
                 outcome = reason
                 return false
             }
@@ -509,7 +524,7 @@ enum ActionPlanner {
         )
     }
 
-    private static func requestPlan(utterance: String, elements: [AXElement], claude: AnthropicService,
+    private static func requestPlan(utterance: String, elements: [AXElement], claude: AnthropicService, hasCopied: Bool,
                                     includeScreenshot: Bool, screenshot: @escaping () async throws -> Data) async throws -> Plan {
         let lines = elements.prefix(150).map { element -> String in
             var line = "\(element.role) \"\(element.label)\""
@@ -526,6 +541,8 @@ enum ActionPlanner {
         User said: \u{201c}\(utterance)\u{201d}
 
         Current local date and time: \(now.string(from: Date()))
+
+        Something already copied and ready to send: \(hasCopied ? "yes" : "no")
 
         Visible interactive elements:
         \(lines.isEmpty ? "(none found)" : lines.joined(separator: "\n"))

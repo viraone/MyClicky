@@ -713,6 +713,16 @@ final class AssistantController {
     private func runNextTalk() {
         guard !busy, !talkQueue.isEmpty else { return }
         let segment = talkQueue.removeFirst()
+        // The target was captured when the session began, but a session
+        // outlives a single app: start talking with VS Code focused, click
+        // into Safari on the other screen, and "copy the paragraph…" should
+        // read Safari — not the app that was in front minutes ago (observed
+        // live: it read Clicky's own transcript back). Follow focus, unless
+        // focus is on Clicky's panel, in which case the last real app stands.
+        if let front = NSWorkspace.shared.frontmostApplication,
+           front.bundleIdentifier != Bundle.main.bundleIdentifier {
+            talkTargetApp = front
+        }
         handleDo(segment, targetApp: talkTargetApp)
     }
 

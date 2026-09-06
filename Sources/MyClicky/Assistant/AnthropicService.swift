@@ -1,4 +1,7 @@
 import Foundation
+import OSLog
+
+private let log = Logger(subsystem: "com.myclicky", category: "anthropic")
 
 struct AssistantAnswer {
     let text: String
@@ -281,8 +284,9 @@ struct AnthropicService {
             throw ServiceError.api(message)
         }
         if let reason = Self.refusalReason(from: data) { throw ServiceError.refused(reason) }
-        guard let payloadText = Self.answerText(from: data),
-              let json = Self.parseJSONObject(from: payloadText) else {
+        guard let payloadText = Self.answerText(from: data) else { throw ServiceError.emptyAnswer }
+        guard let json = Self.parseJSONObject(from: payloadText) else {
+            log.error("model answer was not a JSON object (\(payloadText.count) chars): \(payloadText.prefix(300), privacy: .private)")
             throw ServiceError.emptyAnswer
         }
         return json
@@ -328,8 +332,43 @@ struct AnthropicService {
         guard let start = trimmed.firstIndex(of: "{"),
               let end = trimmed.lastIndex(of: "}"), start < end else { return nil }
         let slice = String(trimmed[start...end])
-        guard let data = slice.data(using: .utf8) else { return nil }
+        if let data = slice.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            return json
+        }
+        // Passages that span lines (code, especially) come back with the
+        // line breaks left raw inside the string, which strict JSON rejects.
+        // Escape control characters that fall inside quotes and try once more.
+        guard let data = escapingControlCharactersInStrings(slice).data(using: .utf8) else { return nil }
         return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    }
+
+    private static func escapingControlCharactersInStrings(_ text: String) -> String {
+        var result = ""
+        result.reserveCapacity(text.count)
+        var inString = false
+        var escaped = false
+        for ch in text {
+            if inString {
+                if escaped {
+                    escaped = false
+                } else if ch == "\\" {
+                    escaped = true
+                } else if ch == "\"" {
+                    inString = false
+                } else if ch == "\n" {
+                    result += "\\n"; continue
+                } else if ch == "\r" {
+                    result += "\\r"; continue
+                } else if ch == "\t" {
+                    result += "\\t"; continue
+                }
+            } else if ch == "\"" {
+                inString = true
+            }
+            result.append(ch)
+        }
+        return result
     }
 
     /// Converts [ymin, xmin, ymax, xmax] (0–1000) to a normalized
