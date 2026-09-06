@@ -80,9 +80,16 @@ enum GmailDrafter {
     Replies: when a thread is provided, answer it specifically — refer to \
     what they actually wrote. Keep the existing subject.
 
-    Revisions: when a current draft is provided and the gist is a change to \
-    it ("shorter", "add that I'm free Friday", "less formal"), return the \
-    full revised email, keeping everything not asked to change.
+    Revisions: when a current draft is provided, what the person says is \
+    ABOUT the draft, not text for it. They are talking to you, the writer — \
+    "shorter", "add that I'm free Friday", "less formal", "sorry, I got the \
+    location wrong, it's downtown Kirkland". Work out what they want changed \
+    and return the full revised email with only that changed. A correction \
+    ("I got X wrong, it's Y", "not Tuesday, Thursday", "actually it's a \
+    manager role") means find the old detail in the draft and replace it \
+    with the new one — never paste their apology or their instruction into \
+    the email. Only treat the words as new content to include when they are \
+    clearly a message to the recipient ("also tell him thanks for lunch").
 
     Reply with JSON only: {"subject": "<subject line, 2-7 words>", \
     "body": "<the email, with real line breaks>"}.

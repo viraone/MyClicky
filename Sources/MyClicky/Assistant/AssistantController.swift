@@ -1597,6 +1597,9 @@ final class AssistantController {
                 guard id == requestID else { return }
                 if GmailDrafter.fill(draft, replaceSubject: compose.subject.isEmpty) {
                     ok = true
+                    // Still working on it — keep the compose in dictation
+                    // mode another ten minutes from now, not from when it opened.
+                    gmailDraftOpenedAt = Date()
                     let words = draft.body.split(whereSeparator: { $0.isWhitespace }).count
                     message = "Drafted \(words) words — read it over, then say “send it”, or tell me what to change."
                 } else {
