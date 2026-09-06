@@ -70,9 +70,18 @@ enum MacContactsService {
         }
 
         let store = CNContactStore()
-        let keys = [CNContactGivenNameKey, CNContactFamilyNameKey,
-                    CNContactOrganizationNameKey, CNContactNicknameKey,
-                    CNContactPhoneNumbersKey] as [CNKeyDescriptor]
+        // The formatter reads more than given/family (middle name, prefix,
+        // suffix, phonetic names…) and raises an ObjC exception for any key
+        // that wasn't fetched. On the main thread that exception is caught by
+        // NSApplication's run loop and merely logged, which abandons this
+        // task mid-flight: the caller awaits forever and the assistant hangs
+        // with no error. Asking the formatter for its own key list is the
+        // only safe way to know what it will touch.
+        let keys: [CNKeyDescriptor] = [
+            CNContactFormatter.descriptorForRequiredKeys(for: .fullName),
+            CNContactOrganizationNameKey as CNKeyDescriptor,
+            CNContactPhoneNumbersKey as CNKeyDescriptor,
+        ]
         let contacts = (try? store.unifiedContacts(
             matching: CNContact.predicateForContacts(matchingName: trimmed), keysToFetch: keys
         )) ?? []
