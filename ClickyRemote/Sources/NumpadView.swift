@@ -79,6 +79,15 @@ struct NumpadView: View {
             }
         }
 
+        /// One-word label for the portrait strip, where there's no room for
+        /// "Mobile Clicky".
+        var shortName: String {
+            switch self {
+            case .remote: "CLICKY"
+            default: rawValue
+            }
+        }
+
         var accent: Color {
             switch self {
             case .remote: Snes.purple
@@ -102,63 +111,36 @@ struct NumpadView: View {
 
     var body: some View {
         GeometryReader { geo in
-            HStack(alignment: .top, spacing: 12) {
-                VStack(spacing: 8) {
-                    // Sits below the top edge rather than flush against it,
-                    // so the status line reads as its own thing instead of
-                    // running into the mode column.
+            // The app is locked to portrait, but the layout still keys off
+            // the actual shape so it degrades sensibly on iPad split view.
+            if geo.size.height > geo.size.width {
+                VStack(spacing: 10) {
                     header
-                        .padding(.top, 40)
-                    modeTabs
-                        .frame(maxHeight: .infinity)
-                    Text("SUPER CLICKY\nENTERTAINMENT SYSTEM")
-                        .font(.system(size: 8, weight: .heavy, design: .monospaced).italic())
-                        .kerning(1)
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(Snes.text.opacity(0.5))
+                        .padding(.top, 8)
+                    modeStrip
+                    pad
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .frame(maxWidth: .infinity)
-                Group {
-                    switch mode {
-                    case .remote: keypad
-                    case .gmail: gmailPad
-                    case .spotify: spotifyPad
-                    case .whatsapp: whatsappPad
-                    case .youtube: youtubePad
+            } else {
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(spacing: 8) {
+                        // Sits below the top edge rather than flush against it,
+                        // so the status line reads as its own thing instead of
+                        // running into the mode column.
+                        header
+                            .padding(.top, 40)
+                        modeTabs
+                            .frame(maxHeight: .infinity)
+                        Text("SUPER CLICKY\nENTERTAINMENT SYSTEM")
+                            .font(.system(size: 8, weight: .heavy, design: .monospaced).italic())
+                            .kerning(1)
+                            .multilineTextAlignment(.center)
+                            .foregroundStyle(Snes.text.opacity(0.5))
                     }
+                    .frame(maxWidth: .infinity)
+                    pad
+                        .frame(width: geo.size.width * 0.78)
                 }
-                // Talk rides along in the corner of every pad but the keypad,
-                // which has a full-size TALK key of its own.
-                // `safeAreaInset` rather than an overlay: it reserves its own
-                // space instead of sitting on top of a key or tile and
-                // swallowing taps meant for what's underneath.
-                .safeAreaInset(edge: .trailing, alignment: .bottom, spacing: 6) {
-                    // The trailing padding is what holds it off the right
-                    // edge — raise it to move Talk further left, lower it to
-                    // push it back toward the corner.
-                    if mode != .remote { cornerTalkButton.padding(.trailing, 44) }
-                }
-                // A confirmation is the one thing that must not be missed —
-                // it used to live on the Talk pad, so it now covers whichever
-                // pad is up until it's answered.
-                .overlay {
-                    if let confirm = client.pendingConfirm {
-                        confirmView(confirm)
-                            .padding(10)
-                            .background(Snes.bodyDark.opacity(0.85))
-                            .clipShape(RoundedRectangle(cornerRadius: 20))
-                            .transition(.scale.combined(with: .opacity))
-                    } else if let choice = client.pendingChoice {
-                        AnyView(choiceView(choice))
-                            .padding(10)
-                            .background(Snes.bodyDark.opacity(0.85))
-                            .clipShape(RoundedRectangle(cornerRadius: 20))
-                            .transition(.scale.combined(with: .opacity))
-                    }
-                }
-                .animation(.spring(response: 0.3, dampingFraction: 0.8), value: client.pendingConfirm?.id)
-                .animation(.spring(response: 0.3, dampingFraction: 0.8), value: client.pendingChoice?.id)
-                .frame(width: geo.size.width * 0.78)
             }
         }
         .padding(10)
@@ -225,6 +207,130 @@ struct NumpadView: View {
             entries.swapAt(refreshIndex, remoteIndex)
         }
         return entries
+    }
+
+    /// The active mode's pad, with the corner Talk button and any pending
+    /// confirm/choice card layered on. Shared by both orientations.
+    private var pad: some View {
+        Group {
+            switch mode {
+            case .remote: keypad
+            case .gmail: gmailPad
+            case .spotify: spotifyPad
+            case .whatsapp: whatsappPad
+            case .youtube: youtubePad
+            }
+        }
+        // Talk rides along in the corner of every pad but the keypad,
+        // which has a full-size TALK key of its own.
+        // `safeAreaInset` rather than an overlay: it reserves its own
+        // space instead of sitting on top of a key or tile and
+        // swallowing taps meant for what's underneath.
+        .safeAreaInset(edge: .trailing, alignment: .bottom, spacing: 6) {
+            // The trailing padding is what holds it off the right
+            // edge — raise it to move Talk further left, lower it to
+            // push it back toward the corner.
+            if mode != .remote { cornerTalkButton.padding(.trailing, 44) }
+        }
+        // A confirmation is the one thing that must not be missed —
+        // it used to live on the Talk pad, so it now covers whichever
+        // pad is up until it's answered.
+        .overlay {
+            if let confirm = client.pendingConfirm {
+                confirmView(confirm)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.black.opacity(0.35))
+                    .clipShape(RoundedRectangle(cornerRadius: 20))
+                    .transition(.scale(scale: 0.94).combined(with: .opacity))
+            } else if let choice = client.pendingChoice {
+                AnyView(choiceView(choice))
+                    .padding(10)
+                    .background(Snes.bodyDark.opacity(0.85))
+                    .clipShape(RoundedRectangle(cornerRadius: 20))
+                    .transition(.scale.combined(with: .opacity))
+            }
+        }
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: client.pendingConfirm?.id)
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: client.pendingChoice?.id)
+    }
+
+    /// Portrait mode picker: one row, Weather-app style — icon over a short
+    /// label for every mode, plus REFRESH, evenly spaced across a single
+    /// translucent card. The active mode is lit in its own colour.
+    private var modeStrip: some View {
+        HStack(spacing: 0) {
+            ForEach(wheelEntries, id: \.self) { entry in
+                stripButton(entry)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Snes.bodyDark.opacity(0.55))
+                .overlay(RoundedRectangle(cornerRadius: 16)
+                    .strokeBorder(Color.white.opacity(0.18), lineWidth: 1))
+        )
+    }
+
+    @ViewBuilder
+    private func stripButton(_ entry: String) -> some View {
+        if entry == "REFRESH" {
+            stripItem(icon: "arrow.clockwise", title: "REFRESH", accent: Snes.green, selected: false) {
+                client.browserReload()
+                statusText = "Refreshing the page on your Mac"
+            }
+        } else if let m = RemoteMode(rawValue: entry) {
+            stripItem(icon: m.icon.isEmpty ? "sparkles" : m.icon, title: m.shortName, accent: m.accent,
+                      selected: mode == m) {
+                withAnimation(.easeInOut(duration: 0.15)) { mode = m }
+                UISelectionFeedbackGenerator().selectionChanged()
+                statusText = m.welcome
+            }
+            .overlay(alignment: .topTrailing) {
+                if m == .whatsapp, client.whatsappUnread > 0 {
+                    unreadBadge(client.whatsappUnread).offset(x: 6, y: -6)
+                } else if m == .gmail, client.gmailUnread > 0 {
+                    unreadBadge(client.gmailUnread).offset(x: 6, y: -6)
+                }
+            }
+        }
+    }
+
+    private func stripItem(icon: String, title: String, accent: Color, selected: Bool,
+                           action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 20, weight: .bold))
+                    .frame(width: 40, height: 40)
+                    .foregroundStyle(selected ? Color.white : accent)
+                    .background(
+                        Circle()
+                            .fill(selected
+                                  ? AnyShapeStyle(LinearGradient(colors: [accent.lighter(0.2), accent.darker(0.1)],
+                                                                 startPoint: .top, endPoint: .bottom))
+                                  : AnyShapeStyle(accent.opacity(0.14)))
+                            .overlay(Circle().strokeBorder(selected ? .white.opacity(0.6) : accent.opacity(0.35),
+                                                           lineWidth: 1))
+                            .shadow(color: selected ? accent.opacity(0.6) : .clear, radius: 8, y: 2)
+                    )
+                Text(title)
+                    .font(.system(size: 9, design: .monospaced).weight(.black))
+                    .kerning(0.5)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .foregroundStyle(selected ? Snes.text : Snes.text.opacity(0.6))
+            }
+            .padding(.horizontal, 2)
+            .scaleEffect(selected ? 1.0 : 0.94)
+            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: selected)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private var modeTabs: some View {
@@ -399,31 +505,96 @@ struct NumpadView: View {
     }
 
     private func confirmView(_ confirm: (id: String, question: String)) -> some View {
-        VStack(spacing: 16) {
-            Text(confirm.question)
-                .font(.system(.title, design: .rounded).weight(.bold))
-                .dynamicTypeSize(.large ... .accessibility5)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.white)
-                .accessibilityLabel("Clicky wants to confirm: \(confirm.question)")
-            HStack(spacing: 12) {
-                confirmButton("Yes", color: Snes.green) { respondConfirm(true) }
-                confirmButton("No", color: Snes.red) { respondConfirm(false) }
+        // "Send to X in Gmail?\n\n<preview>" — headline first, the passage
+        // (if any) shown as a quoted card underneath it.
+        let parts = confirm.question.components(separatedBy: "\n\n")
+        let headline = parts.first ?? confirm.question
+        let preview = parts.dropFirst().joined(separator: "\n\n").trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return VStack(spacing: 18) {
+            VStack(spacing: 6) {
+                Text("CONFIRM")
+                    .font(.system(size: 11, weight: .heavy, design: .rounded))
+                    .tracking(3)
+                    .foregroundStyle(.white.opacity(0.45))
+                Text(headline)
+                    .font(.system(.title, design: .rounded).weight(.bold))
+                    .dynamicTypeSize(.large ... .accessibility5)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.white)
+                    .lineLimit(3)
+                    .minimumScaleFactor(0.7)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Clicky wants to confirm: \(confirm.question)")
+
+            if !preview.isEmpty {
+                Text(preview)
+                    .font(.system(.callout, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.85))
+                    .lineLimit(4)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 14)
+                            .fill(.white.opacity(0.07))
+                            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(0.12), lineWidth: 1))
+                    )
+                    .overlay(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(Snes.talk)
+                            .frame(width: 3)
+                            .padding(.vertical, 12)
+                            .padding(.leading, 1)
+                    }
+                    .accessibilityHidden(true)
+            }
+
+            HStack(spacing: 14) {
+                confirmButton("No", icon: "xmark", color: Snes.red, prominent: false) { respondConfirm(false) }
+                confirmButton("Yes", icon: "checkmark", color: Snes.green, prominent: true) { respondConfirm(true) }
             }
             .frame(maxHeight: .infinity)
         }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 20).fill(Snes.bodyDark.opacity(0.6)))
+        .padding(22)
+        .background(
+            RoundedRectangle(cornerRadius: 28)
+                .fill(
+                    LinearGradient(colors: [Color(red: 0.13, green: 0.13, blue: 0.16),
+                                            Color(red: 0.07, green: 0.07, blue: 0.09)],
+                                   startPoint: .top, endPoint: .bottom)
+                )
+                .overlay(RoundedRectangle(cornerRadius: 28).strokeBorder(.white.opacity(0.10), lineWidth: 1))
+                .shadow(color: .black.opacity(0.45), radius: 30, y: 12)
+        )
     }
 
-    private func confirmButton(_ title: String, color: Color, action: @escaping () -> Void) -> some View {
+    private func confirmButton(_ title: String, icon: String, color: Color, prominent: Bool,
+                               action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Text(title)
-                .font(.system(.largeTitle, design: .rounded).weight(.black))
-                .dynamicTypeSize(.large ... .accessibility5)
-                .foregroundStyle(Color.white)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(RoundedRectangle(cornerRadius: 20).fill(color))
+            VStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 34, weight: .black))
+                Text(title)
+                    .font(.system(.title2, design: .rounded).weight(.heavy))
+                    .dynamicTypeSize(.large ... .accessibility5)
+            }
+            .foregroundStyle(prominent ? Color.white : color.lighter(0.35))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 22)
+                    .fill(
+                        prominent
+                            ? AnyShapeStyle(LinearGradient(colors: [color.lighter(0.15), color.darker(0.15)],
+                                                           startPoint: .top, endPoint: .bottom))
+                            : AnyShapeStyle(color.opacity(0.16))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 22)
+                            .strokeBorder(prominent ? .white.opacity(0.25) : color.opacity(0.45), lineWidth: 1)
+                    )
+                    .shadow(color: prominent ? color.opacity(0.55) : .clear, radius: 18, y: 6)
+            )
         }
         .buttonStyle(.plain)
         .accessibilityLabel(title == "Yes" ? "Yes, do it" : "No, cancel")
@@ -459,7 +630,7 @@ struct NumpadView: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("Pick \(option)")
                 }
-                confirmButton("Cancel", color: Snes.red) {
+                confirmButton("Cancel", icon: "xmark", color: Snes.red, prominent: false) {
                     client.respondChoice(nil)
                     statusText = "Cancelled"
                 }
@@ -1413,22 +1584,23 @@ struct NumpadView: View {
                          icon: dictateRecording ? "stop.fill" : "mic.fill",
                          tint: Snes.red, lit: true, waveform: dictateRecording),
                      key("-")], h: rowH, gap: gap)
-                // 4 5 6 / 1 2 3 with TALK spanning both rows — the tallest key
-                // on the pad, where "+" (which did nothing) used to sit.
+                // ASK TAB / ASK and 7 8, with TALK spanning both rows and the
+                // two right-hand columns — by far the largest key on the pad,
+                // where 6, 9 and "+" (none of which did anything) used to sit.
                 HStack(alignment: .top, spacing: gap) {
                     VStack(spacing: gap) {
                         row([key("4", label: "ASK TAB", icon: "questionmark.bubble.fill",
                                  tint: Snes.purple, lit: true),
                              key("5", label: askRecording ? "STOP" : "ASK",
                                  icon: askRecording ? "stop.fill" : "mic.fill",
-                                 tint: Snes.purple, lit: true, waveform: askRecording),
-                             key("6")], h: rowH, gap: gap)
-                        row([key("7"), key("8"), key("9")], h: rowH, gap: gap)
+                                 tint: Snes.purple, lit: true, waveform: askRecording)], h: rowH, gap: gap)
+                        row([key("7"), key("8")], h: rowH, gap: gap)
                     }
+                    .frame(width: unit * 2 + gap)
                     key("talk", label: talkRecording ? "STOP" : "TALK",
                         icon: talkRecording ? "stop.fill" : "mic.fill",
                         tint: talkRecording ? Snes.red : Snes.talk, lit: true,
-                        h: rowH * 2 + gap, w: unit, hero: true, waveform: talkRecording) { _ in talkTapped() }
+                        h: rowH * 2 + gap, w: unit * 2 + gap, hero: true, waveform: talkRecording) { _ in talkTapped() }
                         .shadow(color: (talkRecording ? Snes.red : Snes.talk).opacity(0.6), radius: 10, y: 3)
                 }
                 // ".", collapse

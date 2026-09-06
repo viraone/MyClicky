@@ -117,6 +117,46 @@ enum MacContactsService {
         }
     }
 
+    /// Every email address belonging to a contact whose name matches `query`
+    /// — the Gmail fallback for people who live in the Mac address book but
+    /// not in Google Contacts. An address spoken directly passes straight
+    /// through.
+    static func emails(for query: String) async throws -> [ContactsService.Match] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        if trimmed.contains("@"), !trimmed.contains(" ") {
+            return [ContactsService.Match(name: "", email: trimmed)]
+        }
+        switch requestAccess() {
+        case .granted: break
+        case .denied: throw LookupError.denied
+        case .noAnswer: throw LookupError.noAnswer
+        }
+
+        let store = CNContactStore()
+        let keys: [CNKeyDescriptor] = [
+            CNContactFormatter.descriptorForRequiredKeys(for: .fullName),
+            CNContactOrganizationNameKey as CNKeyDescriptor,
+            CNContactEmailAddressesKey as CNKeyDescriptor,
+        ]
+        let contacts = (try? store.unifiedContacts(
+            matching: CNContact.predicateForContacts(matchingName: trimmed), keysToFetch: keys
+        )) ?? []
+
+        var seen: Set<String> = []
+        var matches: [ContactsService.Match] = []
+        for contact in contacts {
+            let name = CNContactFormatter.string(from: contact, style: .fullName)
+                ?? contact.organizationName
+            for entry in contact.emailAddresses {
+                let email = (entry.value as String).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !email.isEmpty, seen.insert(email.lowercased()).inserted else { continue }
+                matches.append(ContactsService.Match(name: name ?? "", email: email))
+            }
+        }
+        return matches
+    }
+
     private static func looksLikePhoneNumber(_ text: String) -> Bool {
         let digits = text.filter(\.isNumber)
         return digits.count >= 7 && text.allSatisfy { $0.isNumber || " +-()._".contains($0) }

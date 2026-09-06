@@ -33,6 +33,10 @@ final class AssistantController {
     /// with Clicky's own paste-based typing, so it can change out from under
     /// a sentence that's still being spoken.
     private var lastCopiedText: String?
+    /// Set when "email that to X" leaves a Gmail draft open, so a follow-up
+    /// "send it" knows there is something to send.
+    private var gmailDraftOpenedAt: Date?
+    private var gmailDraftRecipient: String?
     /// The in-flight inventory/flagging pass, so Cancel and a second ⌥⌘D can
     /// stop it rather than stacking a second scan on top.
     private var driveCleanupTask: Task<Void, Never>?
@@ -713,6 +717,16 @@ final class AssistantController {
     private func runNextTalk() {
         guard !busy, !talkQueue.isEmpty else { return }
         let segment = talkQueue.removeFirst()
+        // The target was captured when the session began, but a session
+        // outlives a single app: start talking with VS Code focused, click
+        // into Safari on the other screen, and "copy the paragraph…" should
+        // read Safari — not the app that was in front minutes ago (observed
+        // live: it read Clicky's own transcript back). Follow focus, unless
+        // focus is on Clicky's panel, in which case the last real app stands.
+        if let front = NSWorkspace.shared.frontmostApplication,
+           front.bundleIdentifier != Bundle.main.bundleIdentifier {
+            talkTargetApp = front
+        }
         handleDo(segment, targetApp: talkTargetApp)
     }
 
@@ -929,12 +943,33 @@ final class AssistantController {
         guard !busy else { return }
         ActivityLog.recordAction("do", ["text": utterance])
         panel.state.logTalk(.command, utterance)
+        if Self.isSendIt(utterance) {
+            sendOpenGmailDraft()
+            return
+        }
+        if Self.isNeverMind(utterance), gmailDraftOpenedAt != nil {
+            gmailDraftOpenedAt = nil
+            let message = "OK — the draft stays as it is; I'm back to taking commands."
+            panel.state.status = .answering
+            panel.state.answer = message
+            panel.state.logTalk(.status, message)
+            remote.broadcast("STATUS \(message)")
+            return
+        }
         guard let apiKey = KeychainService.anthropicAPIKey() else {
             let message = "No Anthropic API key found in Keychain.\n\nRun this once in Terminal:\n\(KeychainService.setupCommand)"
             panel.state.logTalk(.error, message)
             panel.state.errorText = message
             panel.state.status = .idle
             remote.broadcast("STATUS \(message.replacingOccurrences(of: "\n", with: " "))")
+            return
+        }
+        // While a compose Clicky opened is on screen, what the user says next
+        // is the email — "tell them I'm interested in the sales role" — not a
+        // command. Screen-aware dictation: Claude writes it in their voice.
+        if let opened = gmailDraftOpenedAt, Date().timeIntervalSince(opened) < 10 * 60,
+           let compose = GmailDrafter.openCompose(recipientHint: gmailDraftRecipient) {
+            draftGmail(gist: utterance, compose: compose, apiKey: apiKey)
             return
         }
         // Drive (and screenshot) the display the target app is actually on —
@@ -984,6 +1019,10 @@ final class AssistantController {
                 openConversation: { [weak self] app, name in
                     guard let self, id == self.requestID else { return "Cancelled." }
                     return await self.openConversation(app: app, named: name)
+                },
+                composeEmail: { [weak self] recipient in
+                    guard let self, id == self.requestID else { return "Cancelled." }
+                    return await self.composeGmail(to: recipient)
                 }
             )
             await ActionPlanner.run(utterance: utterance, apiKey: apiKey, targetApp: targetApp, screen: screen, callbacks: callbacks) { [capture] in
@@ -1494,32 +1533,159 @@ final class AssistantController {
         return failure
     }
 
-    /// Gmail resolves the name against real contacts. One match proceeds,
-    /// several stop and ask, none says so plainly — never a guess, because
-    /// the wrong Ben is not a recoverable mistake.
+    /// Gmail resolves the name against real contacts — Google Contacts first,
+    /// then the Mac address book, which is where the people Messages knows
+    /// actually live. One match proceeds, several stop and ask, none says so
+    /// plainly — never a guess, because the wrong Ben is not a recoverable
+    /// mistake.
     private func sendViaGmail(recipient: String, body: String, screen: NSScreen) async -> String? {
-        let contacts = ContactsService(auth: googleAuth)
-        let matches: [ContactsService.Match]
-        do {
-            matches = try await contacts.search(recipient)
-        } catch {
-            return "Couldn't look up \(recipient): \(error.localizedDescription)"
-        }
-        guard let only = matches.first, matches.count == 1 else {
-            if matches.isEmpty {
-                return "No contact matching “\(recipient)”. Try their full name or email address."
-            }
-            let list = matches.prefix(6).map { "• \($0.display)" }.joined(separator: "\n")
-            return "\(matches.count) contacts match “\(recipient)”:\n\(list)\n\n"
-                 + "Say the full name or the email address."
+        let only: ContactsService.Match
+        switch await gmailRecipient(named: recipient) {
+        case .success(let match): only = match
+        case .failure(let reason): return reason.message
         }
         guard await confirmSend(to: only.display, via: "Gmail", body: body, screen: screen) else {
             return "Cancelled — nothing was sent."
         }
         GmailActions.composeTo(only.email, body: body)
-        panel.state.answer = "Drafted to \(only.display) in Gmail — press Send when it looks right."
-        panel.state.logTalk(.status, "Drafted to \(only.display) in Gmail — press Send when it looks right.")
+        gmailDraftOpenedAt = Date()
+        gmailDraftRecipient = only.display
+        let note = "Drafted to \(only.display) in Gmail — say “send it” or press Send when it looks right."
+        panel.state.answer = note
+        panel.state.logTalk(.status, note)
         return nil
+    }
+
+    /// "Send it", "send the email", "send that" — a handful of words, no
+    /// planner round trip. Only fires while a Gmail draft Clicky opened is
+    /// plausibly still on screen, so a stray "send" in normal speech won't
+    /// mail a half-written message.
+    private static func isSendIt(_ utterance: String) -> Bool {
+        let words = utterance.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+        // "Looks good to me, send it" — an approval may lead in.
+        let approval: Set<String> = ["ok", "okay", "looks", "good", "great", "perfect", "yes", "yeah", "yep",
+                                     "alright", "all", "right", "and", "now", "go", "ahead", "please", "then",
+                                     "that", "that's", "thats", "it's", "its", "fine", "cool", "nice", "to", "me", "just"]
+        guard let sendAt = words.firstIndex(of: "send"), words.count - sendAt <= 5,
+              words[..<sendAt].count <= 6, words[..<sendAt].allSatisfy({ approval.contains($0) }) else { return false }
+        let filler: Set<String> = ["it", "that", "this", "the", "email", "mail", "message", "draft", "now", "please", "off", "out"]
+        return words[(sendAt + 1)...].allSatisfy { filler.contains($0) }
+    }
+
+    private static func isNeverMind(_ utterance: String) -> Bool {
+        let t = utterance.lowercased().trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+        return ["never mind", "nevermind", "cancel", "cancel that", "stop", "forget it", "leave it"].contains(t)
+    }
+
+    private func draftGmail(gist: String, compose: GmailDrafter.Compose, apiKey: String) {
+        busy = true
+        synthesizer.stopSpeaking(at: .immediate)
+        ring.hide()
+        panel.state.status = .thinking
+        panel.state.answer = compose.body.isEmpty ? "Writing it…" : "Rewriting it…"
+        panel.state.errorText = nil
+        remote.broadcast("STATUS \(panel.state.answer)")
+        ActivityLog.recordAction("gmail-draft", ["revision": compose.body.isEmpty ? "no" : "yes"])
+
+        requestID += 1
+        let id = requestID
+        currentTask = Task {
+            defer { if id == requestID { busy = false; currentTask = nil } }
+            let claude = AnthropicService(apiKey: apiKey)
+            let message: String
+            var ok = false
+            do {
+                let draft = try await GmailDrafter.write(gist: gist, compose: compose,
+                                                         senderName: NSFullUserName(), claude: claude)
+                guard id == requestID else { return }
+                if GmailDrafter.fill(draft, replaceSubject: compose.subject.isEmpty) {
+                    ok = true
+                    // Still working on it — keep the compose in dictation
+                    // mode another ten minutes from now, not from when it opened.
+                    gmailDraftOpenedAt = Date()
+                    let words = draft.body.split(whereSeparator: { $0.isWhitespace }).count
+                    message = "Drafted \(words) words — read it over, then say “send it”, or tell me what to change."
+                } else {
+                    message = "Wrote it, but couldn't type into the compose window — is it still open?"
+                }
+            } catch {
+                message = "Couldn't write that: \(error.localizedDescription)"
+            }
+            panel.state.status = .answering
+            panel.state.answer = message
+            panel.state.logTalk(ok ? .status : .error, message)
+            remote.broadcast("STATUS \(message)")
+        }
+    }
+
+    private func sendOpenGmailDraft() {
+        guard let opened = gmailDraftOpenedAt, Date().timeIntervalSince(opened) < 10 * 60 else {
+            let message = "No Gmail draft from me to send — say “email that to someone” first."
+            panel.state.status = .answering
+            panel.state.answer = message
+            panel.state.logTalk(.status, message)
+            remote.broadcast("STATUS \(message)")
+            return
+        }
+        panel.state.status = .thinking
+        GmailActions.send { [weak self] message, ok in
+            guard let self else { return }
+            if ok { self.gmailDraftOpenedAt = nil }
+            self.panel.state.status = .answering
+            self.panel.state.answer = message
+            self.panel.state.logTalk(ok ? .status : .error, message)
+            self.remote.broadcast("STATUS \(message)")
+            self.toast.show(message,
+                            icon: ok ? "paperplane.fill" : "exclamationmark.triangle.fill",
+                            tint: ok ? .green : .orange)
+        }
+    }
+
+    /// "Write an email to X" — a blank draft, addressed, nothing sent, so no
+    /// confirmation needed; the user is about to type into it anyway.
+    private func composeGmail(to recipient: String) async -> String? {
+        let only: ContactsService.Match
+        switch await gmailRecipient(named: recipient) {
+        case .success(let match): only = match
+        case .failure(let reason): return reason.message
+        }
+        GmailActions.composeTo(only.email, body: "")
+        gmailDraftOpenedAt = Date()
+        gmailDraftRecipient = only.display
+        let note = "New email to \(only.display) is open in Gmail — write it, then say “send it”."
+        panel.state.answer = note
+        panel.state.logTalk(.status, note)
+        return nil
+    }
+
+    private struct LookupFailure: Error { let message: String }
+
+    private func gmailRecipient(named recipient: String) async -> Result<ContactsService.Match, LookupFailure> {
+        let contacts = ContactsService(auth: googleAuth)
+        var matches: [ContactsService.Match]
+        do {
+            matches = try await contacts.search(recipient)
+        } catch {
+            return .failure(.init(message: "Couldn't look up \(recipient): \(error.localizedDescription)"))
+        }
+        if matches.isEmpty {
+            do {
+                matches = try await MacContactsService.emails(for: recipient)
+            } catch {
+                return .failure(.init(message: "Couldn't look up \(recipient): \(error.localizedDescription)"))
+            }
+        }
+        guard let only = matches.first, matches.count == 1 else {
+            if matches.isEmpty {
+                return .failure(.init(message: "No contact with an email matching “\(recipient)”. Try their full name or email address."))
+            }
+            let list = matches.prefix(6).map { "• \($0.display)" }.joined(separator: "\n")
+            return .failure(.init(message: "\(matches.count) contacts match “\(recipient)”:\n\(list)\n\n"
+                 + "Say the full name or the email address."))
+        }
+        return .success(only)
     }
 
     private func sendViaWhatsApp(recipient: String, body: String, screen: NSScreen) async -> String? {

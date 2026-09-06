@@ -63,9 +63,11 @@ enum ActionPlanner {
         /// Brings a named conversation on screen without sending anything.
         /// Same convention: nil is success.
         var openConversation: (_ app: String, _ name: String) async -> String? = { _, _ in "not wired up" }
+        /// Opens a blank Gmail draft addressed to a named person. nil = success.
+        var composeEmail: (_ recipient: String) async -> String? = { _ in "not wired up" }
     }
 
-    private static let allowedVerbs: Set<String> = ["open", "click", "focus", "type", "press", "scroll", "create_event", "update_event", "copy_paragraph", "copy_range", "send_copied", "open_conversation", "done"]
+    private static let allowedVerbs: Set<String> = ["open", "click", "focus", "type", "press", "scroll", "create_event", "update_event", "copy_paragraph", "copy_range", "send_copied", "compose_email", "open_conversation", "done"]
 
     /// Backstops the model's own "irreversible" flag: these words in a
     /// click/press target force a confirmation even if it didn't say so.
@@ -123,7 +125,16 @@ enum ActionPlanner {
       opens the app themselves, deliberately. Never put click/press steps \
       BEFORE it either (no "click Copy" — the text is already copied). When \
       the user says "send that / text that / send it to X", the whole plan \
-      is that one send_copied step.
+      is that one send_copied step. If the "already copied" line below says \
+      "no", still emit only send_copied — it will tell the user to copy \
+      something first; do NOT invent a copy step from the screen.
+    - compose_email: start a NEW, empty email to a person in Gmail — nothing \
+      copied is involved. {"verb":"compose_email","to":"clicky test"} \
+      Use this for "write an email to X", "compose a message to X", "new \
+      email to X", "let's email X" — the user wants to write it themselves. \
+      The difference from send_copied is the word "that/this/it": "email \
+      THAT to X" sends the copy; "write an email to X" is this verb. Like \
+      send_copied it is the whole plan: no open/click/type steps around it.
     - open_conversation: bring someone's Messages conversation on screen, by \
       name. {"verb":"open_conversation","app":"Messages","to":"Dino Dad"} \
       Use this for "open Dino Dad's conversation", "pull up my chat with \
@@ -194,9 +205,10 @@ enum ActionPlanner {
         var app = targetApp ?? NSWorkspace.shared.frontmostApplication
         let elements = AXActions.read(in: app)
 
+        let hasCopied = callbacks.lastCopied().map { !$0.isEmpty } ?? false
         var plan: Plan
         do {
-            plan = try await requestPlan(utterance: utterance, elements: elements, claude: claude,
+            plan = try await requestPlan(utterance: utterance, elements: elements, claude: claude, hasCopied: hasCopied,
                                          includeScreenshot: elements.isEmpty, screenshot: screenshot)
         } catch {
             log.error("plan request failed: \(error.localizedDescription, privacy: .public)")
@@ -215,7 +227,7 @@ enum ActionPlanner {
         if isDeclined(plan), !elements.isEmpty {
             log.notice("AX-only plan declined — retrying with a screenshot for visual grounding")
             do {
-                let retryPlan = try await requestPlan(utterance: utterance, elements: elements, claude: claude,
+                let retryPlan = try await requestPlan(utterance: utterance, elements: elements, claude: claude, hasCopied: hasCopied,
                                                        includeScreenshot: true, screenshot: screenshot)
                 if isDeclined(retryPlan) {
                     log.notice("screenshot retry also declined: \(retryPlan.steps.first?.note ?? "(no note)", privacy: .public)")
@@ -232,6 +244,17 @@ enum ActionPlanner {
             } catch {
                 log.error("screenshot retry failed: \(error.localizedDescription, privacy: .public)")
             }
+        }
+
+        // send_copied is the whole job — it resolves, confirms and sends.
+        // The prompt says so, but the model still sometimes wraps it in a
+        // copy step invented from the screenshot (observed live: "email
+        // that to X" became copy_paragraph "Preferred Way" → send_copied),
+        // and the failing invention then blocks the send. Enforce the rule
+        // here rather than trusting it.
+        if let send = plan.steps.first(where: { ["send_copied", "compose_email"].contains($0.verb) }), plan.steps.count > 1 {
+            log.notice("collapsing \(plan.steps.count)-step plan to its \(send.verb, privacy: .public) step")
+            plan = Plan(steps: [send])
         }
 
         var executedAny = false
@@ -277,7 +300,7 @@ enum ActionPlanner {
     private static func isIrreversible(_ step: Step) -> Bool {
         // send_copied asks for itself, naming the conversation that's actually
         // open — a second, vaguer prompt in front of it is just noise.
-        if step.verb == "send_copied" { return false }
+        if step.verb == "send_copied" || step.verb == "compose_email" { return false }
         if step.irreversible == true { return true }
         let haystack = [step.label, step.key].compactMap { $0 }.joined(separator: " ").lowercased()
         return irreversibleKeywords.contains { haystack.contains($0) }
@@ -294,6 +317,7 @@ enum ActionPlanner {
         case "copy_paragraph", "copy_range": "Finding that on screen…"
         case "open_conversation": "Opening \(step.to ?? "that conversation")…"
         case "send_copied": "Sending to \(step.to ?? "them")…"
+        case "compose_email": "Starting an email to \(step.to ?? "them")…"
         case "create_event": "Adding \(step.title ?? "the event") to your calendar…"
         case "update_event": "Updating \(step.title ?? "the event") in your calendar…"
         default: "Working…"
@@ -319,7 +343,7 @@ enum ActionPlanner {
         // of Calendar (observed live). Anything that delivers input must
         // confirm the intended app is actually in front first.
         // Messages verbs drive Messages, not the app the recording started in.
-        if !["open", "send_copied", "open_conversation"].contains(step.verb) { await ensureFrontmost(app) }
+        if !["open", "send_copied", "compose_email", "open_conversation"].contains(step.verb) { await ensureFrontmost(app) }
         switch step.verb {
         case "open":
             guard let name = step.app, let resolved = AppDriver.ensureRunning(appNamed: name) else { return false }
@@ -414,6 +438,15 @@ enum ActionPlanner {
                 return false
             }
             if let reason = await callbacks.sendCopied(target, recipient, body) {
+                log.error("send_copied via \(target, privacy: .public) failed: \(reason, privacy: .public)")
+                outcome = reason
+                return false
+            }
+            return true
+        case "compose_email":
+            guard let recipient = step.to, !recipient.isEmpty else { return false }
+            if let reason = await callbacks.composeEmail(recipient) {
+                log.error("compose_email failed: \(reason, privacy: .public)")
                 outcome = reason
                 return false
             }
@@ -509,7 +542,7 @@ enum ActionPlanner {
         )
     }
 
-    private static func requestPlan(utterance: String, elements: [AXElement], claude: AnthropicService,
+    private static func requestPlan(utterance: String, elements: [AXElement], claude: AnthropicService, hasCopied: Bool,
                                     includeScreenshot: Bool, screenshot: @escaping () async throws -> Data) async throws -> Plan {
         let lines = elements.prefix(150).map { element -> String in
             var line = "\(element.role) \"\(element.label)\""
@@ -526,6 +559,8 @@ enum ActionPlanner {
         User said: \u{201c}\(utterance)\u{201d}
 
         Current local date and time: \(now.string(from: Date()))
+
+        Something already copied and ready to send: \(hasCopied ? "yes" : "no")
 
         Visible interactive elements:
         \(lines.isEmpty ? "(none found)" : lines.joined(separator: "\n"))

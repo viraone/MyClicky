@@ -15,8 +15,8 @@ targets:
         INFOPLIST_KEY_NSMicrophoneUsageDescription: Clicky Remote uses the microphone so you can speak questions to your Mac.
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: Your speech is transcribed on-device before being sent to your Mac.
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: Clicky Remote connects to the MyClicky app running on your Mac over your local network.
-        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
-        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait"
         GENERATE_INFOPLIST_FILE: YES
         CURRENT_PROJECT_VERSION: 1
         MARKETING_VERSION: 1.0

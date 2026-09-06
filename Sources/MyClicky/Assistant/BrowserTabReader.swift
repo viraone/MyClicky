@@ -199,6 +199,111 @@ enum BrowserTabReader {
         return nil
     }
 
+    /// Opens `url` in a new tab of the first window (any browser) holding a
+    /// tab whose URL contains `needle`, un-minimizing and raising that window
+    /// where it already is — so a Gmail tab parked on the second display
+    /// gets the compose form beside it, instead of a fresh window on
+    /// whatever screen the cursor is on. Returns the browser it drove, or
+    /// nil if no such tab exists.
+    @discardableResult
+    static func openTab(_ url: String, besideTabContaining needle: String) -> NSRunningApplication? {
+        let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
+        let safe = url.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "%22")
+        for (bundleID, script) in tabLoadScripts(urlContains: needle, url: safe) where running.contains(bundleID) {
+            guard run(script: script) == "1" else { continue }
+            let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first
+            app?.activate()
+            return app
+        }
+        return nil
+    }
+
+    private static func tabLoadScripts(urlContains needle: String, url: String) -> [(bundleID: String, script: String)] {
+        func chromiumScript(_ app: String) -> String {
+            #"""
+            tell application "\#(app)"
+                repeat with w in windows
+                    try
+                        set i to 0
+                        repeat with t in tabs of w
+                            set i to i + 1
+                            if (URL of t contains "\#(needle)") then
+                                make new tab at end of tabs of w with properties {URL:"\#(url)"}
+                                set active tab index of w to (count of tabs of w)
+                                set minimized of w to false
+                                set index of w to 1
+                                return "1"
+                            end if
+                        end repeat
+                    end try
+                end repeat
+            end tell
+            return ""
+            """#
+        }
+        let safariScript = #"""
+        tell application "Safari"
+            repeat with w in windows
+                try
+                    repeat with t in tabs of w
+                        if (URL of t contains "\#(needle)") then
+                            set newTab to make new tab at end of tabs of w with properties {URL:"\#(url)"}
+                            set current tab of w to newTab
+                            set miniaturized of w to false
+                            set index of w to 1
+                            return "1"
+                        end if
+                    end repeat
+                end try
+            end repeat
+        end tell
+        return ""
+        """#
+        return [
+            ("com.google.Chrome", chromiumScript("Google Chrome")),
+            ("com.apple.Safari", safariScript),
+            ("company.thebrowser.Browser", chromiumScript("Arc")),
+            ("com.microsoft.edgemac", chromiumScript("Microsoft Edge")),
+            ("com.brave.Browser", chromiumScript("Brave Browser")),
+        ]
+    }
+
+    /// How many tabs, across every window of every running supported
+    /// browser, have a URL containing `needle`.
+    static func tabCount(urlContains needle: String) -> Int {
+        let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
+        var total = 0
+        for (bundleID, script) in tabCountScripts(urlContains: needle) where running.contains(bundleID) {
+            total += Int(run(script: script) ?? "") ?? 0
+        }
+        return total
+    }
+
+    private static func tabCountScripts(urlContains needle: String) -> [(bundleID: String, script: String)] {
+        func script(_ app: String) -> String {
+            #"""
+            tell application "\#(app)"
+                set n to 0
+                repeat with w in windows
+                    try
+                        repeat with t in tabs of w
+                            if (URL of t contains "\#(needle)") then set n to n + 1
+                        end repeat
+                    end try
+                end repeat
+                return n as text
+            end tell
+            """#
+        }
+        return [
+            ("com.google.Chrome", script("Google Chrome")),
+            ("com.apple.Safari", script("Safari")),
+            ("company.thebrowser.Browser", script("Arc")),
+            ("com.microsoft.edgemac", script("Microsoft Edge")),
+            ("com.brave.Browser", script("Brave Browser")),
+        ]
+    }
+
     /// Chromium exposes the selection as a tab index, Safari as the tab
     /// object itself; both raise the window with `set index of w to 1`.
     /// Each script answers "1" when it found and selected a tab.
