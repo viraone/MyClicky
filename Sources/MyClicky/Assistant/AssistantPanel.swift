@@ -1240,7 +1240,7 @@ struct AssistantPanelView: View {
 
     private var inputPlaceholder: String {
         switch state.tab {
-        case .talk: "Tell Clicky what to do…"
+        case .talk: ""
         case .morning: state.morningMessages.isEmpty ? "Say “Good morning, Clicky”…" : "Reply to Clicky…"
         default: "Ask Clicky anything…"
         }
