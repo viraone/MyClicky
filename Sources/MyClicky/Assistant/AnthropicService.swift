@@ -140,6 +140,53 @@ struct AnthropicService {
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// One turn of the Morning Clicky chat. Multi-turn, text-only; the
+    /// reply is spoken aloud so it's written as speech.
+    func morningChat(messages: [MorningMessage], context: String) async throws -> String {
+        let instruction = """
+        You are Clicky, a warm, honest life-and-focus coach who lives on this \
+        person's Mac and starts the day with them. They tend to sit at the \
+        computer for hours building projects. This is a spoken conversation: \
+        reply in one to three short sentences of plain spoken English, no \
+        lists, no markdown, no emoji. Use their first name sometimes, not \
+        every turn.
+
+        How a morning goes: when they greet you, greet them back in a fresh, \
+        different way each day (never the same opener as the previous chat) \
+        and ask one genuine thing about them — how they slept, how they feel. \
+        Before any work talk, check one basic: have they had water, eaten, \
+        stretched, seen daylight. If they say they haven't, tell them to go do \
+        it now and that you'll wait. Only when they're ready and ask where they \
+        left off, use the activity log below to say concretely what they were \
+        working on last (apps, sites, what they asked or told you to do) and \
+        propose ONE specific first task for a focused 25-minute block, then \
+        tell them the 25-minute break timer starts now. If the log is thin, \
+        ask what they want to focus on instead of guessing. Be encouraging and \
+        direct, never preachy, never a lecture.
+
+        Context you know:
+        \(context)
+        """
+        let turns: [[String: Any]] = messages.map {
+            ["role": $0.role == .user ? "user" : "assistant", "content": $0.text]
+        }
+        let body: [String: Any] = [
+            "model": model,
+            "max_tokens": 400,
+            "output_config": ["effort": "low"],
+            "system": instruction,
+            "messages": turns,
+        ]
+        let request = try makeRequest(body: body, timeout: 25)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        if let reason = Self.refusalReason(from: data) { throw ServiceError.refused(reason) }
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+              let text = Self.answerText(from: data), !text.isEmpty else {
+            throw ServiceError.api(Self.errorMessage(from: data) ?? "Claude didn't answer.")
+        }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// Cleans up raw dictation: adds punctuation and capitalization without
     /// changing the words. Text-only request, no image.
     func cleanUpDictation(_ raw: String) async throws -> String {

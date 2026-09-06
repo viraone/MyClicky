@@ -62,12 +62,15 @@ enum AssistantTab: String, CaseIterable {
     /// Voice/typed commands Clicky *acts on* (e.g. "create a calendar event
     /// at 2pm"), same plan-and-do flow as the phone's TALK button.
     case talk = "Talk / Request"
+    /// Start-of-day chat: Clicky as a coach, then a briefing on where you left off.
+    case morning = "Morning Clicky"
 
     var icon: String {
         switch self {
         case .ask: "bubble.left.and.text.bubble.right"
         case .captureDictate: "camera.on.rectangle"
         case .talk: "bolt.fill"
+        case .morning: "sunrise.fill"
         }
     }
 }
@@ -185,6 +188,10 @@ final class AssistantState: ObservableObject {
     @Published var coachEnabled = true
     @Published var coachCountdown = "25:00"
     @Published var coachMessage: String?
+    /// Morning Clicky chat, oldest first.
+    @Published var morningMessages: [MorningMessage] = []
+    var onMorningSend: ((String) -> Void)?
+    var onMorningReset: (() -> Void)?
     var onToggleCoach: (() -> Void)?
     var onCoachBreak: (() -> Void)?
     var onCoachSnooze: (() -> Void)?
@@ -587,6 +594,8 @@ struct AssistantPanelView: View {
                 answerView
             case .captureDictate:
                 captureDictateTab
+            case .morning:
+                morningChatView
             }
             Spacer(minLength: 0)
             bottomBar
@@ -1057,7 +1066,7 @@ struct AssistantPanelView: View {
         HStack(spacing: 10) {
             ZStack(alignment: .leading) {
                 if typedQuestion.isEmpty {
-                    Text(state.tab == .talk ? "Tell Clicky what to do…" : "Ask Clicky anything…")
+                    Text(inputPlaceholder)
                         .font(.system(size: 17, design: .monospaced))
                         .foregroundStyle(.white)
                         .allowsHitTesting(false)
@@ -1073,6 +1082,111 @@ struct AssistantPanelView: View {
         .padding(.top, 4)
     }
 
+    private var inputPlaceholder: String {
+        switch state.tab {
+        case .talk: "Tell Clicky what to do…"
+        case .morning: state.morningMessages.isEmpty ? "Say “Good morning, Clicky”…" : "Reply to Clicky…"
+        default: "Ask Clicky anything…"
+        }
+    }
+
+    /// The Morning Clicky tab: a chat log with the input underneath.
+    private var morningChatView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if state.morningMessages.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Start the day with Clicky.")
+                        .font(.system(size: 17, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white)
+                    Text("Say or type “Good morning, Clicky”. It checks in on you first, then briefs you on where you left off and what the first 25 minutes should be.")
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.55))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.top, 4)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(state.morningMessages) { message in
+                                morningBubble(message)
+                                    .id(message.id)
+                            }
+                            if state.status == .thinking {
+                                HStack(spacing: 8) {
+                                    ProgressView().controlSize(.small).tint(.white)
+                                    Text("Clicky is thinking…")
+                                        .font(.system(size: 13, design: .monospaced))
+                                        .foregroundStyle(.white.opacity(0.5))
+                                }
+                                .id("thinking")
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 2)
+                    }
+                    .onChange(of: state.morningMessages.count) { _ in
+                        if let last = state.morningMessages.last {
+                            withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                        }
+                    }
+                    .onChange(of: state.status) { _ in
+                        if state.status == .thinking { withAnimation { proxy.scrollTo("thinking", anchor: .bottom) } }
+                    }
+                    .onAppear {
+                        if let last = state.morningMessages.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                    }
+                }
+            }
+            HStack(spacing: 8) {
+                topInputRow
+                if !state.morningMessages.isEmpty {
+                    Button {
+                        state.onMorningReset?()
+                    } label: {
+                        Image(systemName: "arrow.counterclockwise")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.5))
+                            .frame(width: 22, height: 22)
+                            .background(Circle().fill(Color.white.opacity(0.07)))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Start a fresh morning chat")
+                }
+            }
+            transcriptView
+            if let errorText = state.errorText {
+                Text(errorText)
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(.orange)
+            }
+        }
+    }
+
+    private func morningBubble(_ message: MorningMessage) -> some View {
+        let mine = message.role == .user
+        return HStack(alignment: .top, spacing: 8) {
+            if mine { Spacer(minLength: 60) }
+            Text(message.text)
+                .font(.system(size: 15, design: .monospaced))
+                .foregroundStyle(.white)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(mine ? Color.cyan.opacity(0.18) : Color.white.opacity(0.08))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(mine ? Color.cyan.opacity(0.35) : Color.white.opacity(0.1), lineWidth: 1)
+                )
+            if !mine { Spacer(minLength: 60) }
+        }
+        .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
+    }
+
     /// Mic in the bottom bar: click to start recording, click again to stop.
     /// What it records follows the tab — a question on Ask, a dictation on
     /// Capture + Dictate, a command to carry out on Talk. (⌥⌘C / ⌥⌘V still
@@ -1083,6 +1197,7 @@ struct AssistantPanelView: View {
         case .ask: "Ask by voice"
         case .talk: "Say what you want Clicky to do"
         case .captureDictate: "Start dictation"
+        case .morning: "Talk to Clicky"
         }
         return Button {
             state.onToggleRecording?()
@@ -1475,10 +1590,10 @@ struct AssistantPanelView: View {
         let text = typedQuestion.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
         typedQuestion = ""
-        if state.tab == .talk {
-            state.onDo?(text)
-        } else {
-            state.onSubmit?(text)
+        switch state.tab {
+        case .talk: state.onDo?(text)
+        case .morning: state.onMorningSend?(text)
+        default: state.onSubmit?(text)
         }
     }
 
@@ -1488,6 +1603,7 @@ struct AssistantPanelView: View {
         case .captureDictate: "capture"
         case .ask: "ask"
         case .talk: "talk"
+        case .morning: "morning"
         }
     }
 }
