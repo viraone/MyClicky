@@ -40,12 +40,18 @@ enum TextCopyActions {
         if let editor = EditorContextReader.current() {
             return Source(appName: editor.appName, text: capped(editor.text))
         }
-        if let frontmost, let text = focusedText(of: frontmost), !text.isEmpty {
-            return Source(appName: frontmost.localizedName ?? "that app", text: capped(text))
+        // A focused field in a chat app (Electron, say) is usually an empty
+        // composer, not the document the user is looking at. Anything that
+        // short loses to a browser tab in the background.
+        let focused = frontmost.flatMap(focusedText(of:))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if focused.count >= 40, let frontmost {
+            return Source(appName: frontmost.localizedName ?? "that app", text: capped(focused))
         }
-        // Nothing readable up front — a browser in the background is a better
-        // answer than giving up.
-        return browserText()
+        if let browser = browserText() { return browser }
+        if !focused.isEmpty, let frontmost {
+            return Source(appName: frontmost.localizedName ?? "that app", text: capped(focused))
+        }
+        return nil
     }
 
     private static func browserText() -> Source? {
