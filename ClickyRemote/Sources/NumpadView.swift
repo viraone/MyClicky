@@ -79,6 +79,15 @@ struct NumpadView: View {
             }
         }
 
+        /// One-word label for the portrait strip, where there's no room for
+        /// "Mobile Clicky".
+        var shortName: String {
+            switch self {
+            case .remote: "CLICKY"
+            default: rawValue
+            }
+        }
+
         var accent: Color {
             switch self {
             case .remote: Snes.purple
@@ -105,22 +114,10 @@ struct NumpadView: View {
             // The app is locked to portrait, but the layout still keys off
             // the actual shape so it degrades sensibly on iPad split view.
             if geo.size.height > geo.size.width {
-                VStack(spacing: 12) {
-                    HStack(alignment: .top, spacing: 12) {
-                        VStack(spacing: 8) {
-                            header
-                            Text("SUPER CLICKY\nENTERTAINMENT SYSTEM")
-                                .font(.system(size: 8, weight: .heavy, design: .monospaced).italic())
-                                .kerning(1)
-                                .multilineTextAlignment(.center)
-                                .foregroundStyle(Snes.text.opacity(0.5))
-                        }
-                        .frame(maxWidth: .infinity)
-                        modeTabs
-                            .frame(width: geo.size.width * 0.46)
-                    }
-                    .frame(height: 210)
-                    .padding(.top, 8)
+                VStack(spacing: 10) {
+                    header
+                        .padding(.top, 8)
+                    modeStrip
                     pad
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
@@ -256,6 +253,84 @@ struct NumpadView: View {
         }
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: client.pendingConfirm?.id)
         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: client.pendingChoice?.id)
+    }
+
+    /// Portrait mode picker: one row, Weather-app style — icon over a short
+    /// label for every mode, plus REFRESH, evenly spaced across a single
+    /// translucent card. The active mode is lit in its own colour.
+    private var modeStrip: some View {
+        HStack(spacing: 0) {
+            ForEach(wheelEntries, id: \.self) { entry in
+                stripButton(entry)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Snes.bodyDark.opacity(0.55))
+                .overlay(RoundedRectangle(cornerRadius: 16)
+                    .strokeBorder(Color.white.opacity(0.18), lineWidth: 1))
+        )
+    }
+
+    @ViewBuilder
+    private func stripButton(_ entry: String) -> some View {
+        if entry == "REFRESH" {
+            stripItem(icon: "arrow.clockwise", title: "REFRESH", accent: Snes.green, selected: false) {
+                client.browserReload()
+                statusText = "Refreshing the page on your Mac"
+            }
+        } else if let m = RemoteMode(rawValue: entry) {
+            stripItem(icon: m.icon.isEmpty ? "sparkles" : m.icon, title: m.shortName, accent: m.accent,
+                      selected: mode == m) {
+                withAnimation(.easeInOut(duration: 0.15)) { mode = m }
+                UISelectionFeedbackGenerator().selectionChanged()
+                statusText = m.welcome
+            }
+            .overlay(alignment: .topTrailing) {
+                if m == .whatsapp, client.whatsappUnread > 0 {
+                    unreadBadge(client.whatsappUnread).offset(x: 6, y: -6)
+                } else if m == .gmail, client.gmailUnread > 0 {
+                    unreadBadge(client.gmailUnread).offset(x: 6, y: -6)
+                }
+            }
+        }
+    }
+
+    private func stripItem(icon: String, title: String, accent: Color, selected: Bool,
+                           action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 20, weight: .bold))
+                    .frame(width: 40, height: 40)
+                    .foregroundStyle(selected ? Color.white : accent)
+                    .background(
+                        Circle()
+                            .fill(selected
+                                  ? AnyShapeStyle(LinearGradient(colors: [accent.lighter(0.2), accent.darker(0.1)],
+                                                                 startPoint: .top, endPoint: .bottom))
+                                  : AnyShapeStyle(accent.opacity(0.14)))
+                            .overlay(Circle().strokeBorder(selected ? .white.opacity(0.6) : accent.opacity(0.35),
+                                                           lineWidth: 1))
+                            .shadow(color: selected ? accent.opacity(0.6) : .clear, radius: 8, y: 2)
+                    )
+                Text(title)
+                    .font(.system(size: 9, design: .monospaced).weight(.black))
+                    .kerning(0.5)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .foregroundStyle(selected ? Snes.text : Snes.text.opacity(0.6))
+            }
+            .padding(.horizontal, 2)
+            .scaleEffect(selected ? 1.0 : 0.94)
+            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: selected)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private var modeTabs: some View {
