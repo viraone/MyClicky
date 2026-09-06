@@ -1302,6 +1302,10 @@ struct AssistantPanelView: View {
                 // always text: its answer is a running log of what Clicky is
                 // doing, which is never spoken.
                 if state.textOnlyMode || state.tab == .talk {
+                    // With a copied passage underneath, the answer (often just
+                    // "Done.") hugs its own height so the passage — the thing
+                    // worth reading — gets the room instead of a blank gap.
+                    let hasCopied = !(state.copiedPreview ?? "").isEmpty
                     ScrollView {
                         Text(state.answer)
                             .font(.system(size: 15.5, weight: .regular, design: .monospaced))
@@ -1310,6 +1314,8 @@ struct AssistantPanelView: View {
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .fixedSize(horizontal: false, vertical: hasCopied)
+                    .frame(maxHeight: hasCopied ? 96 : .infinity)
                 } else {
                     speakingPlaceholder
                 }
@@ -1335,10 +1341,18 @@ struct AssistantPanelView: View {
                         .foregroundStyle(.white.opacity(0.92))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
                 }
-                .frame(maxHeight: 150)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.white.opacity(0.04))
+                        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+                )
             }
-            .padding(.top, 6)
+            .frame(maxHeight: .infinity)
+            .padding(.top, 4)
         }
     }
 
