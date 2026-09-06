@@ -614,6 +614,7 @@ final class AssistantController {
     private func applyPartial(_ text: String) {
         if talkStreaming, panel.state.status != .listening, panel.state.status != .thinking,
            text != panel.state.transcript {
+            panel.state.chaining = false
             panel.state.status = .listening
         }
         guard panel.state.status == .listening else { return }
@@ -659,6 +660,7 @@ final class AssistantController {
             panel.state.errorText = "Didn't catch that — try again, or type below."
         } else if !busy, talkQueue.isEmpty {
             talkSession = false
+            panel.state.chaining = false
             panel.state.status = panel.state.answer.isEmpty ? .idle : .answering
         }
     }
@@ -681,9 +683,13 @@ final class AssistantController {
         if !talkQueue.isEmpty {
             runNextTalk()
         } else if talkStreaming {
-            panel.state.resumeListeningPaused()
+            // Hold the green "Done." so the user sees the command landed;
+            // applyPartial flips back to listening the moment they speak.
+            panel.state.chaining = true
+            panel.state.status = .answering
         } else {
             talkSession = false
+            panel.state.chaining = false
             panel.state.status = .idle
         }
     }
@@ -1033,6 +1039,7 @@ final class AssistantController {
         let wasStreaming = talkStreaming
         talkStreaming = false
         talkSession = false
+        panel.state.chaining = false
         talkQueue = []
         talkDispatchedWords = 0
         if wasStreaming, panel.state.status != .listening {

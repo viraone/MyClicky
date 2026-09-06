@@ -146,6 +146,9 @@ final class AssistantState: ObservableObject {
     /// Fires when speech has stopped for `pauseAfter` while listening — the
     /// Talk tab runs whatever was said since the last pause.
     var onPause: (() -> Void)?
+    /// A Talk recording is still open after a command ran: the panel stays
+    /// green until the next words arrive.
+    @Published var chaining = false
 
     /// Back to listening after a segment ran mid-recording, already in the
     /// paused (amber) state rather than flashing "recording".
@@ -498,7 +501,7 @@ struct AssistantPanelView: View {
                 .font(.system(size: 14, weight: .heavy, design: .monospaced))
                 .kerning(1.2)
                 .foregroundStyle(phase.color)
-            Text(phase == .paused ? "say a command, or press STOP" : phase.hint)
+            Text(phaseHint)
                 .font(.system(size: 12.5, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.65))
                 .lineLimit(1)
@@ -1093,6 +1096,14 @@ struct AssistantPanelView: View {
             }
         }
         .padding(.top, 4)
+    }
+
+    private var phaseHint: String {
+        switch state.phase {
+        case .paused: "say a command, or press STOP"
+        case .done where state.chaining: "done — say the next command, or press STOP"
+        default: state.phase.hint
+        }
     }
 
     private var inputPlaceholder: String {
