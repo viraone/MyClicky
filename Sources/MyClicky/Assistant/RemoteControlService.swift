@@ -55,6 +55,7 @@ import Network
 ///                    opens), using only AXActions/AppDriver verbs
 ///   CONFIRM_OK <id> / CONFIRM_NO <id> – the phone's answer to a CONFIRM the
 ///                    Mac sent for an irreversible DO step
+///   CHOOSE_OK <id>\t<index> / CHOOSE_NO <id> – the phone's answer to a CHOOSE
 ///   READ           – "what does it say?": Claude describes the frontmost
 ///                    window's content; the Mac replies with READ <text>
 ///
@@ -77,6 +78,10 @@ import Network
 ///   CONFIRM_DONE <id>\tYES|NO – a CONFIRM was resolved (by the phone itself,
 ///                    or by someone answering it directly on the Mac's own
 ///                    panel) — clear that prompt if it's still showing
+///   CHOOSE <id>\t<question>\t<opt>|<opt>… – DO needs one option picked
+///                    (e.g. two contacts match a name); answer with
+///                    CHOOSE_OK <id>\t<index> or CHOOSE_NO <id>
+///   CHOOSE_DONE <id> – a CHOOSE was resolved or timed out; clear the prompt
 ///   READ <text>    – Claude's description of the frontmost window, for READ
 @MainActor
 final class RemoteControlService {
@@ -100,6 +105,7 @@ final class RemoteControlService {
     var onDo: ((String) -> Void)?
     /// (id, confirmed) from CONFIRM_OK / CONFIRM_NO.
     var onConfirmResponse: ((String, Bool) -> Void)?
+    var onChoiceResponse: ((String, Int?) -> Void)?
     var onRead: (() -> Void)?
     /// Lines to send to a phone as soon as it connects (current state, e.g. unread counts).
     var greeting: (() -> [String])?
@@ -217,6 +223,14 @@ final class RemoteControlService {
             onConfirmResponse?(String(line.dropFirst(11)).trimmingCharacters(in: .whitespaces), true)
         } else if line.hasPrefix("CONFIRM_NO ") {
             onConfirmResponse?(String(line.dropFirst(11)).trimmingCharacters(in: .whitespaces), false)
+        } else if line.hasPrefix("CHOOSE_OK ") {
+            // CHOOSE_OK <id>\t<index>
+            let parts = String(line.dropFirst(10)).components(separatedBy: "\t")
+            if parts.count == 2, let index = Int(parts[1].trimmingCharacters(in: .whitespaces)) {
+                onChoiceResponse?(parts[0].trimmingCharacters(in: .whitespaces), index)
+            }
+        } else if line.hasPrefix("CHOOSE_NO ") {
+            onChoiceResponse?(String(line.dropFirst(10)).trimmingCharacters(in: .whitespaces), nil)
         } else if line == "READ" {
             onRead?()
         }

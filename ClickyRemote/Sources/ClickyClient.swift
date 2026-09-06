@@ -30,6 +30,14 @@ final class ClickyClient: ObservableObject {
     @Published var talkMessage = ""
     /// An irreversible DO step waiting on a yes/no answer.
     @Published var pendingConfirm: (id: String, question: String)?
+    /// A pick-one prompt from the Mac (e.g. two contacts match a spoken name).
+    @Published var pendingChoice: PendingChoice?
+
+    struct PendingChoice: Equatable {
+        let id: String
+        let question: String
+        let options: [String]
+    }
 
     private var browser: NWBrowser?
     private var connection: NWConnection?
@@ -158,6 +166,16 @@ final class ClickyClient: ObservableObject {
                             // panel) — clear a stale prompt if it's still up.
                             let id = line.dropFirst(13).split(separator: "\t", maxSplits: 1).map(String.init).first ?? ""
                             if self.pendingConfirm?.id == id { self.pendingConfirm = nil }
+                        } else if line.hasPrefix("CHOOSE ") {
+                            let parts = line.dropFirst(7).split(separator: "\t", maxSplits: 2).map(String.init)
+                            if parts.count == 3 {
+                                let options = parts[2].split(separator: "|").map(String.init)
+                                self.pendingChoice = PendingChoice(id: parts[0], question: parts[1], options: options)
+                                self.speak(parts[1] + " " + options.joined(separator: ", or "))
+                            }
+                        } else if line.hasPrefix("CHOOSE_DONE ") {
+                            let id = String(line.dropFirst(12)).trimmingCharacters(in: .whitespaces)
+                            if self.pendingChoice?.id == id { self.pendingChoice = nil }
                         } else if !line.isEmpty {
                             self.onMacMessage?(line)
                         }
@@ -278,6 +296,13 @@ final class ClickyClient: ObservableObject {
         guard let id = pendingConfirm?.id else { return }
         send(confirmed ? "CONFIRM_OK \(id)" : "CONFIRM_NO \(id)")
         pendingConfirm = nil
+    }
+
+    /// Answers the current CHOOSE prompt, if any; nil cancels.
+    func respondChoice(_ index: Int?) {
+        guard let id = pendingChoice?.id else { return }
+        if let index { send("CHOOSE_OK \(id)\t\(index)") } else { send("CHOOSE_NO \(id)") }
+        pendingChoice = nil
     }
 
     func show() { send("SHOW") }

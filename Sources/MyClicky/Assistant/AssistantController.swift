@@ -100,6 +100,7 @@ final class AssistantController {
     /// whichever answers first, the Mac's ConfirmActionPanel or the phone's
     /// CONFIRM_OK/CONFIRM_NO.
     private var pendingConfirms: [String: CheckedContinuation<Bool, Never>] = [:]
+    private var pendingChoices: [String: CheckedContinuation<Int?, Never>] = [:]
 
     func start() {
         panel.state.onSubmit = { [weak self] text in
@@ -366,6 +367,9 @@ final class AssistantController {
         }
         remote.onConfirmResponse = { [weak self] id, confirmed in
             self?.resolveConfirm(id: id, result: confirmed)
+        }
+        remote.onChoiceResponse = { [weak self] id, index in
+            self?.resolveChoice(id: id, index: index)
         }
         remote.onRead = { [weak self] in self?.handleReadScreen() }
         remote.greeting = { [weak self] in
@@ -1005,6 +1009,30 @@ final class AssistantController {
         continuation.resume(returning: result)
     }
 
+    /// A pick-one prompt on the phone: one button per option plus Cancel.
+    /// Resolves to the chosen index, or nil on cancel / after 45s of silence
+    /// (so a plan can't hang forever on a question nobody saw).
+    @MainActor
+    private func requestChoice(question: String, options: [String]) async -> Int? {
+        await withCheckedContinuation { continuation in
+            let id = UUID().uuidString
+            log.notice("requesting choice \(id, privacy: .public): \(question, privacy: .public)")
+            pendingChoices[id] = continuation
+            remote.broadcast("CHOOSE \(id)\t\(question)\t\(options.joined(separator: "|"))")
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 45_000_000_000)
+                self?.resolveChoice(id: id, index: nil)
+            }
+        }
+    }
+
+    private func resolveChoice(id: String, index: Int?) {
+        guard let continuation = pendingChoices.removeValue(forKey: id) else { return }
+        log.notice("choice \(id, privacy: .public) resolved: \(index.map(String.init) ?? "cancel", privacy: .public)")
+        remote.broadcast("CHOOSE_DONE \(id)")
+        continuation.resume(returning: index)
+    }
+
     /// "What does it say?" from the phone: describes the frontmost window's
     /// content for someone who can't see the screen, via the same Claude
     /// vision Q&A path the assistant panel already uses.
@@ -1048,6 +1076,8 @@ final class AssistantController {
         googleAuth.onStatus = nil
         for continuation in pendingConfirms.values { continuation.resume(returning: false) }
         pendingConfirms.removeAll()
+        for continuation in pendingChoices.values { continuation.resume(returning: nil) }
+        pendingChoices.removeAll()
         let wasStreaming = talkStreaming
         talkStreaming = false
         talkSession = false
@@ -1343,20 +1373,30 @@ final class AssistantController {
         }
         // Staged so a hang shows where it stopped instead of being inferred.
         ActivityLog.recordAction("messages-open-looked-up", ["matches": "\(matches.count)"])
-        // Same rule as Gmail: one match proceeds, several ask, none says so.
-        // Never a guess — opening the wrong thread is how the next "text
-        // that" goes to the wrong person.
-        guard let only = matches.first, matches.count == 1 else {
-            ActivityLog.recordAction("messages-open-failed",
-                                     ["why": matches.isEmpty ? "no-match" : "ambiguous",
-                                      "count": "\(matches.count)"])
-            if matches.isEmpty {
-                return "No contact named “\(name)” with a phone number. "
-                     + "Try their full name, or say the number itself."
+        // One person proceeds (their mobile, even if they have other numbers);
+        // an exact name wins over a name that merely contains what was said;
+        // genuinely different people get asked about — never guessed, because
+        // opening the wrong thread is how the next "text that" goes astray.
+        let only: MacContactsService.Match
+        switch MacContactsService.resolve(matches, spoken: name) {
+        case .none:
+            ActivityLog.recordAction("messages-open-failed", ["why": "no-match"])
+            return "No contact named “\(name)” with a phone number. "
+                 + "Try their full name, or say the number itself."
+        case .one(let match):
+            only = match
+        case .several(let people):
+            ActivityLog.recordAction("messages-open-ambiguous", ["count": "\(people.count)"])
+            let options = people.prefix(4).map(\.name)
+            panel.state.logTalk(.status, "\(people.count) people match “\(name)” — pick one on your phone.")
+            guard let index = await requestChoice(question: "Which “\(name)”?", options: Array(options)),
+                  index < people.count else {
+                ActivityLog.recordAction("messages-open-failed", ["why": "ambiguous", "count": "\(people.count)"])
+                let list = people.prefix(6).map { "• \($0.display)" }.joined(separator: "\n")
+                return "\(people.count) people match “\(name)”:\n\(list)\n\n"
+                     + "Say the full name or the number you want."
             }
-            let list = matches.prefix(6).map { "• \($0.display)" }.joined(separator: "\n")
-            return "\(matches.count) numbers match “\(name)”:\n\(list)\n\n"
-                 + "Say the full name or the number you want."
+            only = people[index]
         }
         ActivityLog.recordAction("messages-open-url")
         let opened = await MessagesActions.openConversation(number: only.number)

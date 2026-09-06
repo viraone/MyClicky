@@ -121,4 +121,39 @@ enum MacContactsService {
         let digits = text.filter(\.isNumber)
         return digits.count >= 7 && text.allSatisfy { $0.isNumber || " +-()._".contains($0) }
     }
+
+    /// Where a spoken name landed after lookup. `numbers(for:)` returns one
+    /// row per phone number, so a single person with a mobile and a home line
+    /// comes back as two — that isn't ambiguity, it's a person with two
+    /// numbers, and the mobile (already sorted first) is the one to text.
+    enum Resolution {
+        case none
+        case one(Match)
+        /// Several distinct people — one representative number each, mobile-first.
+        case several([Match])
+    }
+
+    static func resolve(_ matches: [Match], spoken query: String) -> Resolution {
+        guard !matches.isEmpty else { return .none }
+        // Distinct people, keeping the first (mobile-first) number for each.
+        var people: [Match] = []
+        var seen: Set<String> = []
+        for match in matches where seen.insert(normalize(match.name)).inserted {
+            people.append(match)
+        }
+        if people.count == 1 { return .one(people[0]) }
+        // "Dad" matches both "Dad" and "Dino Dad"; the one that IS the spoken
+        // name, rather than merely containing it, is what was meant.
+        let wanted = normalize(query)
+        let exact = people.filter { normalize($0.name) == wanted }
+        if exact.count == 1 { return .one(exact[0]) }
+        return .several(people)
+    }
+
+    private static func normalize(_ name: String) -> String {
+        name.lowercased()
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: nil)
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .joined(separator: " ")
+    }
 }

@@ -144,9 +144,16 @@ struct NumpadView: View {
                             .background(Snes.bodyDark.opacity(0.85))
                             .clipShape(RoundedRectangle(cornerRadius: 20))
                             .transition(.scale.combined(with: .opacity))
+                    } else if let choice = client.pendingChoice {
+                        AnyView(choiceView(choice))
+                            .padding(10)
+                            .background(Snes.bodyDark.opacity(0.85))
+                            .clipShape(RoundedRectangle(cornerRadius: 20))
+                            .transition(.scale.combined(with: .opacity))
                     }
                 }
                 .animation(.spring(response: 0.3, dampingFraction: 0.8), value: client.pendingConfirm?.id)
+                .animation(.spring(response: 0.3, dampingFraction: 0.8), value: client.pendingChoice?.id)
                 .frame(width: geo.size.width * 0.78)
             }
         }
@@ -408,6 +415,47 @@ struct NumpadView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(title == "Yes" ? "Yes, do it" : "No, cancel")
+    }
+
+    /// Pick-one card: one big button per option (e.g. each contact that
+    /// matched a spoken name), plus Cancel. Same shape as the Yes/No card so
+    /// it's found in the same place.
+    private func choiceView(_ choice: ClickyClient.PendingChoice) -> some View {
+        VStack(spacing: 12) {
+            Text(choice.question)
+                .font(.system(.title, design: .rounded).weight(.bold))
+                .dynamicTypeSize(.large ... .accessibility5)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.white)
+                .accessibilityLabel("Clicky asks: \(choice.question)")
+            VStack(spacing: 10) {
+                ForEach(Array(choice.options.enumerated()), id: \.offset) { index, option in
+                    Button {
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        client.respondChoice(index)
+                        statusText = "Picked \(option)"
+                    } label: {
+                        Text(option)
+                            .font(.system(.title, design: .rounded).weight(.black))
+                            .dynamicTypeSize(.large ... .accessibility5)
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.6)
+                            .foregroundStyle(Color.white)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(RoundedRectangle(cornerRadius: 20).fill(Snes.green))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Pick \(option)")
+                }
+                confirmButton("Cancel", color: Snes.red) {
+                    client.respondChoice(nil)
+                    statusText = "Cancelled"
+                }
+            }
+            .frame(maxHeight: .infinity)
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 20).fill(Snes.bodyDark.opacity(0.6)))
     }
 
     // MARK: - Gmail pad (purpose-built: every button says what it does)
