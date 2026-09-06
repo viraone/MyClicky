@@ -145,6 +145,65 @@ enum MessagesActions {
         return true
     }
 
+    /// Message text visible in the open conversation, top to bottom — what
+    /// Accessibility exposes of the transcript, which is the bubbles' static
+    /// text. Returns [] when Messages shows nothing readable.
+    static func visibleTranscript(limit: Int = 24) -> [String] {
+        guard let (window, _) = conversationWindow() else { return [] }
+        var lines: [String] = []
+        var seen = Set<String>()
+        var budget = 0
+        _ = AccessibilityFinder.search(window, budget: &budget) { element in
+            guard let role = AccessibilityFinder.attribute(element, kAXRoleAttribute) as? String,
+                  role == kAXStaticTextRole,
+                  let value = AccessibilityFinder.attribute(element, kAXValueAttribute) as? String else { return false }
+            let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Timestamps, "Delivered", "iMessage" and the like are short and
+            // aren't the conversation.
+            guard text.count > 2, !["Delivered", "Read", "iMessage", "Text Message", "SMS"].contains(text),
+                  !seen.contains(text) else { return false }
+            seen.insert(text)
+            lines.append(text)
+            return false
+        }
+        return Array(lines.suffix(limit))
+    }
+
+    /// Puts `text` into the compose box of the open conversation without
+    /// sending it, replacing whatever was typed there. Returns false if no
+    /// conversation is open.
+    static func typeIntoOpenConversation(_ text: String) -> Bool {
+        guard let app = running(), openConversation() != nil else { return false }
+        app.activate(options: [.activateAllWindows])
+        usleep(400_000)
+        guard let field = composeField(in: app) else { return false }
+        MouseClicker.click(at: NSPoint(x: field.midX, y: field.midY))
+        usleep(250_000)
+        KeyboardTyper.press(KeyboardTyper.aKey, flags: .maskCommand)
+        usleep(100_000)
+        KeyboardTyper.paste(text)
+        return true
+    }
+
+    /// Sends whatever is typed in the open conversation's compose box.
+    static func sendTyped(status: @escaping (_ message: String, _ ok: Bool) -> Void) {
+        guard let app = running(), let recipient = openConversation() else {
+            status("No conversation open in Messages — open one first.", false)
+            return
+        }
+        app.activate(options: [.activateAllWindows])
+        usleep(400_000)
+        guard let field = composeField(in: app) else {
+            status("Couldn't find the message box in Messages.", false)
+            return
+        }
+        MouseClicker.click(at: NSPoint(x: field.midX, y: field.midY))
+        usleep(250_000)
+        KeyboardTyper.press(KeyboardTyper.returnKey)
+        ActivityLog.recordAction("messages-send", ["to": recipient, "via": "typed"])
+        status("Sent to \(recipient) in Messages", true)
+    }
+
     /// The compose box. Tries the Accessibility tree first, then falls back to
     /// the bottom strip of the window — Messages exposes very little of itself
     /// to Accessibility, and the compose row is reliably the last thing above
