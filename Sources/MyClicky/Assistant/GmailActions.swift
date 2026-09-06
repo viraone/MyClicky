@@ -201,8 +201,7 @@ enum GmailActions {
         }
 
         Task {
-            try? await Task.sleep(for: .milliseconds(1500))
-            if composeIsGone(composeTabsBefore) { status("Sent", true); ActivityLog.recordAction("gmail-sent", ["via": "dom"]); return }
+            if await composeGoes(composeTabsBefore) { status("Sent", true); ActivityLog.recordAction("gmail-sent", ["via": "dom"]); return }
             log.notice("gmail send: DOM click left the compose open, trying a real click")
             clickSendByAccessibility(in: browser, composeTabsBefore: composeTabsBefore, status: status)
         }
@@ -213,6 +212,16 @@ enum GmailActions {
     /// across all windows, because the tab Safari lands on afterwards may
     /// well be another compose. Inline composes fall back to "no message
     /// body visible".
+    /// Gmail needs a moment after Send — server round trip, then the tab
+    /// closes — so give it up to six seconds before calling the attempt failed.
+    private static func composeGoes(_ composeTabsBefore: Int) async -> Bool {
+        for _ in 0..<12 {
+            try? await Task.sleep(for: .milliseconds(500))
+            if composeIsGone(composeTabsBefore) { return true }
+        }
+        return false
+    }
+
     private static func composeIsGone(_ composeTabsBefore: Int) -> Bool {
         if composeTabsBefore > 0 {
             return BrowserTabReader.tabCount(urlContains: "tf=cm") < composeTabsBefore
@@ -234,8 +243,7 @@ enum GmailActions {
                 return
             }
             guard let composeTabsBefore else { status("Sent", true); return }
-            try? await Task.sleep(for: .milliseconds(1500))
-            if composeIsGone(composeTabsBefore) { status("Sent", true); ActivityLog.recordAction("gmail-sent", ["via": "ax-click"]); return }
+            if await composeGoes(composeTabsBefore) { status("Sent", true); ActivityLog.recordAction("gmail-sent", ["via": "ax-click"]); return }
 
             // Last resort: Gmail's own shortcut, with the cursor in the body.
             log.notice("gmail send: real click left the compose open, trying ⌘↩")
@@ -244,8 +252,7 @@ enum GmailActions {
                 inTabMatching: { $0.contains("mail.google.com") })
             try? await Task.sleep(for: .milliseconds(200))
             KeyboardTyper.press(KeyboardTyper.returnKey, flags: .maskCommand) // ⌘ Return
-            try? await Task.sleep(for: .milliseconds(1500))
-            if composeIsGone(composeTabsBefore) { status("Sent", true); ActivityLog.recordAction("gmail-sent", ["via": "cmd-return"]); return }
+            if await composeGoes(composeTabsBefore) { status("Sent", true); ActivityLog.recordAction("gmail-sent", ["via": "cmd-return"]); return }
             ActivityLog.recordAction("gmail-send-stuck")
             status("Couldn't send — the compose is still open. Press Send in Gmail.", false)
         }
