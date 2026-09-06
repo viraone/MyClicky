@@ -137,7 +137,10 @@ enum GmailActions {
         components.percentEncodedQuery = components.percentEncodedQuery?
             .replacingOccurrences(of: "+", with: "%2B")
         guard let url = components.url else { return }
-        if let target = URL(string: url.absoluteString) { NSWorkspace.shared.open(target) }
+        // The user parks Gmail where they want their mail — reuse that tab
+        // (and its window, on its screen) before falling back to a new one.
+        if BrowserTabReader.load(url.absoluteString, inTabContaining: "mail.google.com") != nil { return }
+        NSWorkspace.shared.open(url)
     }
 
     /// Returns to the inbox list.

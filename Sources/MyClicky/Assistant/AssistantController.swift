@@ -1001,6 +1001,10 @@ final class AssistantController {
                 openConversation: { [weak self] app, name in
                     guard let self, id == self.requestID else { return "Cancelled." }
                     return await self.openConversation(app: app, named: name)
+                },
+                composeEmail: { [weak self] recipient in
+                    guard let self, id == self.requestID else { return "Cancelled." }
+                    return await self.composeGmail(to: recipient)
                 }
             )
             await ActionPlanner.run(utterance: utterance, apiKey: apiKey, targetApp: targetApp, screen: screen, callbacks: callbacks) { [capture] in
@@ -1517,27 +1521,10 @@ final class AssistantController {
     /// plainly — never a guess, because the wrong Ben is not a recoverable
     /// mistake.
     private func sendViaGmail(recipient: String, body: String, screen: NSScreen) async -> String? {
-        let contacts = ContactsService(auth: googleAuth)
-        var matches: [ContactsService.Match]
-        do {
-            matches = try await contacts.search(recipient)
-        } catch {
-            return "Couldn't look up \(recipient): \(error.localizedDescription)"
-        }
-        if matches.isEmpty {
-            do {
-                matches = try await MacContactsService.emails(for: recipient)
-            } catch {
-                return "Couldn't look up \(recipient): \(error.localizedDescription)"
-            }
-        }
-        guard let only = matches.first, matches.count == 1 else {
-            if matches.isEmpty {
-                return "No contact with an email matching “\(recipient)”. Try their full name or email address."
-            }
-            let list = matches.prefix(6).map { "• \($0.display)" }.joined(separator: "\n")
-            return "\(matches.count) contacts match “\(recipient)”:\n\(list)\n\n"
-                 + "Say the full name or the email address."
+        let only: ContactsService.Match
+        switch await gmailRecipient(named: recipient) {
+        case .success(let match): only = match
+        case .failure(let reason): return reason.message
         }
         guard await confirmSend(to: only.display, via: "Gmail", body: body, screen: screen) else {
             return "Cancelled — nothing was sent."
@@ -1584,6 +1571,50 @@ final class AssistantController {
                             icon: ok ? "paperplane.fill" : "exclamationmark.triangle.fill",
                             tint: ok ? .green : .orange)
         }
+    }
+
+    /// "Write an email to X" — a blank draft, addressed, nothing sent, so no
+    /// confirmation needed; the user is about to type into it anyway.
+    private func composeGmail(to recipient: String) async -> String? {
+        let only: ContactsService.Match
+        switch await gmailRecipient(named: recipient) {
+        case .success(let match): only = match
+        case .failure(let reason): return reason.message
+        }
+        GmailActions.composeTo(only.email, body: "")
+        gmailDraftOpenedAt = Date()
+        let note = "New email to \(only.display) is open in Gmail — write it, then say “send it”."
+        panel.state.answer = note
+        panel.state.logTalk(.status, note)
+        return nil
+    }
+
+    private struct LookupFailure: Error { let message: String }
+
+    private func gmailRecipient(named recipient: String) async -> Result<ContactsService.Match, LookupFailure> {
+        let contacts = ContactsService(auth: googleAuth)
+        var matches: [ContactsService.Match]
+        do {
+            matches = try await contacts.search(recipient)
+        } catch {
+            return .failure(.init(message: "Couldn't look up \(recipient): \(error.localizedDescription)"))
+        }
+        if matches.isEmpty {
+            do {
+                matches = try await MacContactsService.emails(for: recipient)
+            } catch {
+                return .failure(.init(message: "Couldn't look up \(recipient): \(error.localizedDescription)"))
+            }
+        }
+        guard let only = matches.first, matches.count == 1 else {
+            if matches.isEmpty {
+                return .failure(.init(message: "No contact with an email matching “\(recipient)”. Try their full name or email address."))
+            }
+            let list = matches.prefix(6).map { "• \($0.display)" }.joined(separator: "\n")
+            return .failure(.init(message: "\(matches.count) contacts match “\(recipient)”:\n\(list)\n\n"
+                 + "Say the full name or the email address."))
+        }
+        return .success(only)
     }
 
     private func sendViaWhatsApp(recipient: String, body: String, screen: NSScreen) async -> String? {
