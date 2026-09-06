@@ -268,6 +268,42 @@ enum BrowserTabReader {
         ]
     }
 
+    /// How many tabs, across every window of every running supported
+    /// browser, have a URL containing `needle`.
+    static func tabCount(urlContains needle: String) -> Int {
+        let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
+        var total = 0
+        for (bundleID, script) in tabCountScripts(urlContains: needle) where running.contains(bundleID) {
+            total += Int(run(script: script) ?? "") ?? 0
+        }
+        return total
+    }
+
+    private static func tabCountScripts(urlContains needle: String) -> [(bundleID: String, script: String)] {
+        func script(_ app: String) -> String {
+            #"""
+            tell application "\#(app)"
+                set n to 0
+                repeat with w in windows
+                    try
+                        repeat with t in tabs of w
+                            if (URL of t contains "\#(needle)") then set n to n + 1
+                        end repeat
+                    end try
+                end repeat
+                return n as text
+            end tell
+            """#
+        }
+        return [
+            ("com.google.Chrome", script("Google Chrome")),
+            ("com.apple.Safari", script("Safari")),
+            ("company.thebrowser.Browser", script("Arc")),
+            ("com.microsoft.edgemac", script("Microsoft Edge")),
+            ("com.brave.Browser", script("Brave Browser")),
+        ]
+    }
+
     /// Chromium exposes the selection as a tab index, Safari as the tab
     /// object itself; both raise the window with `set index of w to 1`.
     /// Each script answers "1" when it found and selected a tab.
