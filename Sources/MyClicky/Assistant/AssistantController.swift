@@ -37,6 +37,11 @@ final class AssistantController {
     /// "send it" knows there is something to send.
     private var gmailDraftOpenedAt: Date?
     private var gmailDraftRecipient: String?
+    /// Set when "open X's conversation" succeeds: the next things said are
+    /// the text to X, until sent or ten minutes pass.
+    private var messagesDraftOpenedAt: Date?
+    private var messagesDraftRecipient: String?
+    private var messagesDraftText: String?
     /// The in-flight inventory/flagging pass, so Cancel and a second ⌥⌘D can
     /// stop it rather than stacking a second scan on top.
     private var driveCleanupTask: Task<Void, Never>?
@@ -944,11 +949,13 @@ final class AssistantController {
         ActivityLog.recordAction("do", ["text": utterance])
         panel.state.logTalk(.command, utterance)
         if Self.isSendIt(utterance) {
-            sendOpenGmailDraft()
+            sendOpenDraft()
             return
         }
-        if Self.isNeverMind(utterance), gmailDraftOpenedAt != nil {
+        if Self.isNeverMind(utterance), gmailDraftOpenedAt != nil || messagesDraftOpenedAt != nil {
             gmailDraftOpenedAt = nil
+            messagesDraftOpenedAt = nil
+            messagesDraftText = nil
             let message = "OK — the draft stays as it is; I'm back to taking commands."
             panel.state.status = .answering
             panel.state.answer = message
@@ -967,10 +974,26 @@ final class AssistantController {
         // While a compose Clicky opened is on screen, what the user says next
         // is the email — "tell them I'm interested in the sales role" — not a
         // command. Screen-aware dictation: Claude writes it in their voice.
-        if let opened = gmailDraftOpenedAt, Date().timeIntervalSince(opened) < 10 * 60,
-           let compose = GmailDrafter.openCompose(recipientHint: gmailDraftRecipient) {
-            draftGmail(gist: utterance, compose: compose, apiKey: apiKey)
-            return
+        // Same for a Messages thread Clicky opened. Whichever was opened more
+        // recently is the one being talked to.
+        // …unless it's plainly a command — "actually, open David's
+        // conversation" must not get typed to Dino Dad.
+        let gateBypassed = Self.isAppCommand(utterance)
+        let gmailActive = !gateBypassed && (gmailDraftOpenedAt.map { Date().timeIntervalSince($0) < 10 * 60 } ?? false)
+        let messagesActive = !gateBypassed && (messagesDraftOpenedAt.map { Date().timeIntervalSince($0) < 10 * 60 } ?? false)
+        let messagesFirst = (messagesDraftOpenedAt ?? .distantPast) > (gmailDraftOpenedAt ?? .distantPast)
+        for target in messagesFirst ? ["messages", "gmail"] : ["gmail", "messages"] {
+            if target == "gmail", gmailActive,
+               let compose = GmailDrafter.openCompose(recipientHint: gmailDraftRecipient) {
+                draftGmail(gist: utterance, compose: compose, apiKey: apiKey)
+                return
+            }
+            if target == "messages", messagesActive,
+               let open = MessagesActions.openConversation(),
+               messagesDraftRecipient.map({ MessagesActions.spokenNameMatches($0, conversation: open) }) ?? true {
+                draftMessage(gist: utterance, recipient: open, apiKey: apiKey)
+                return
+            }
         }
         // Drive (and screenshot) the display the target app is actually on —
         // `activeScreen` follows the cursor, which on a multi-display setup
@@ -1475,8 +1498,12 @@ final class AssistantController {
             return "Couldn't get \(only.display) open in Messages."
         }
         ActivityLog.recordAction("messages-open-conversation")
-        panel.state.answer = "Opened \(only.display) in Messages."
-        panel.state.logTalk(.status, "Opened \(only.display) in Messages.")
+        messagesDraftOpenedAt = Date()
+        messagesDraftRecipient = only.name
+        messagesDraftText = nil
+        let note = "Opened \(only.display) in Messages — tell me what to say, then “send it”."
+        panel.state.answer = note
+        panel.state.logTalk(.status, note)
         return nil
     }
 
@@ -1579,6 +1606,29 @@ final class AssistantController {
         return ["never mind", "nevermind", "cancel", "cancel that", "stop", "forget it", "leave it"].contains(t)
     }
 
+    /// Speech that is clearly an instruction to Clicky rather than words for
+    /// the open draft: "actually, let's open up a conversation with David",
+    /// "switch to Safari", "write an email to Sam". Checked after stripping
+    /// lead-ins, so a message that merely *contains* "open" still counts as
+    /// dictation ("tell him the store is open till nine").
+    static func isAppCommand(_ utterance: String) -> Bool {
+        var words = utterance.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted.subtracting(CharacterSet(charactersIn: "'")))
+            .filter { !$0.isEmpty }
+        let leadIns: Set<String> = ["actually", "ok", "okay", "hey", "clicky", "let's", "lets", "can", "could", "you",
+                                    "please", "now", "um", "uh", "so", "and", "then", "wait", "no", "instead", "just", "go"]
+        while let first = words.first, leadIns.contains(first) { words.removeFirst() }
+        guard let verb = words.first else { return false }
+        let commandVerbs: Set<String> = ["open", "switch", "close", "minimize", "minimise", "quit", "launch", "start",
+                                         "show", "bring", "pull", "compose", "screenshot", "search", "google", "copy",
+                                         "paste", "scroll", "click", "focus", "restore", "hide", "maximize", "maximise"]
+        if commandVerbs.contains(verb) { return true }
+        let joined = words.joined(separator: " ")
+        let phrases = ["write an email", "write a new email", "send an email", "new email", "email to ",
+                       "conversation with", "chat with", "thread with", "text conversation", "look up"]
+        return phrases.contains { joined.hasPrefix($0) || joined.hasPrefix("write " + $0) }
+    }
+
     private func draftGmail(gist: String, compose: GmailDrafter.Compose, apiKey: String) {
         busy = true
         synthesizer.stopSpeaking(at: .immediate)
@@ -1609,6 +1659,80 @@ final class AssistantController {
                     message = "Drafted \(words) words — read it over, then say “send it”, or tell me what to change."
                 } else {
                     message = "Wrote it, but couldn't type into the compose window — is it still open?"
+                }
+            } catch {
+                message = "Couldn't write that: \(error.localizedDescription)"
+            }
+            panel.state.status = .answering
+            panel.state.answer = message
+            panel.state.logTalk(ok ? .status : .error, message)
+            remote.broadcast("STATUS \(message)")
+        }
+    }
+
+    private func sendOpenDraft() {
+        let gmail = gmailDraftOpenedAt ?? .distantPast
+        let messages = messagesDraftOpenedAt ?? .distantPast
+        if messages > gmail, Date().timeIntervalSince(messages) < 10 * 60 {
+            sendOpenMessagesDraft()
+        } else {
+            sendOpenGmailDraft()
+        }
+    }
+
+    private func sendOpenMessagesDraft() {
+        guard messagesDraftText != nil, MessagesActions.openConversation() != nil else {
+            let message = "Nothing typed in Messages yet — tell me what to say first."
+            panel.state.status = .answering
+            panel.state.answer = message
+            panel.state.logTalk(.status, message)
+            remote.broadcast("STATUS \(message)")
+            return
+        }
+        panel.state.status = .thinking
+        MessagesActions.sendTyped { [weak self] message, ok in
+            guard let self else { return }
+            if ok { self.messagesDraftOpenedAt = nil; self.messagesDraftText = nil }
+            self.panel.state.status = .answering
+            self.panel.state.answer = message
+            self.panel.state.logTalk(ok ? .status : .error, message)
+            self.remote.broadcast("STATUS \(message)")
+            self.toast.show(message,
+                            icon: ok ? "paperplane.fill" : "exclamationmark.triangle.fill",
+                            tint: ok ? .green : .orange)
+        }
+    }
+
+    private func draftMessage(gist: String, recipient: String, apiKey: String) {
+        busy = true
+        synthesizer.stopSpeaking(at: .immediate)
+        ring.hide()
+        panel.state.status = .thinking
+        panel.state.answer = messagesDraftText == nil ? "Writing it…" : "Rewriting it…"
+        panel.state.errorText = nil
+        remote.broadcast("STATUS \(panel.state.answer)")
+        ActivityLog.recordAction("messages-draft", ["revision": messagesDraftText == nil ? "no" : "yes"])
+
+        requestID += 1
+        let id = requestID
+        let transcript = MessagesActions.visibleTranscript()
+        currentTask = Task {
+            defer { if id == requestID { busy = false; currentTask = nil } }
+            let claude = AnthropicService(apiKey: apiKey)
+            let message: String
+            var ok = false
+            do {
+                let text = try await MessagesDrafter.write(gist: gist, recipient: recipient, transcript: transcript,
+                                                           currentDraft: messagesDraftText,
+                                                           senderName: NSFullUserName(), claude: claude)
+                guard id == requestID else { return }
+                if MessagesActions.typeIntoOpenConversation(text) {
+                    ok = true
+                    messagesDraftText = text
+                    messagesDraftOpenedAt = Date()
+                    message = "“\(text)” — say “send it”, or tell me what to change."
+                } else {
+                    message = "Wrote it, but the conversation isn't open in Messages any more."
                 }
             } catch {
                 message = "Couldn't write that: \(error.localizedDescription)"
