@@ -517,10 +517,15 @@ struct AssistantPanelView: View {
             state.onToggleStrip?()
         } label: {
             Image(systemName: expanded ? "chevron.left" : "chevron.right")
-                .font(.system(size: 12, weight: .heavy))
-                .foregroundStyle(.white.opacity(0.7))
-                .frame(width: 22, height: 40)
-                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Color.white.opacity(0.08)))
+                .font(.system(size: 15, weight: .black))
+                .foregroundStyle(state.accent)
+                .frame(width: 26, height: expanded ? 64 : 40)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(state.accent.opacity(0.18))
+                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(state.accent.opacity(0.6), lineWidth: 1))
+                )
         }
         .buttonStyle(.plain)
         .help(expanded ? "Shrink to a strip" : "Expand the panel")
@@ -574,7 +579,7 @@ struct AssistantPanelView: View {
             bottomBar
         }
         // Extra room on the left for the edge chevron.
-        .padding(.leading, 32)
+        .padding(.leading, 36)
         .padding(.trailing, 18)
         .padding(.vertical, 14)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -614,7 +619,7 @@ struct AssistantPanelView: View {
                 )
         )
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(alignment: .leading) { edgeChevron(expanded: true).padding(.leading, 4) }
+        .overlay(alignment: .leading) { edgeChevron(expanded: true).padding(.leading, 3) }
         .overlay(alignment: .topLeading) { resizeHandle(.topLeading) }
         .overlay(alignment: .topTrailing) { resizeHandle(.topTrailing) }
         .overlay(alignment: .bottomLeading) { resizeHandle(.bottomLeading) }
