@@ -1509,22 +1509,23 @@ struct NumpadView: View {
                          icon: dictateRecording ? "stop.fill" : "mic.fill",
                          tint: Snes.red, lit: true, waveform: dictateRecording),
                      key("-")], h: rowH, gap: gap)
-                // 4 5 6 / 1 2 3 with TALK spanning both rows — the tallest key
-                // on the pad, where "+" (which did nothing) used to sit.
+                // ASK TAB / ASK and 7 8, with TALK spanning both rows and the
+                // two right-hand columns — by far the largest key on the pad,
+                // where 6, 9 and "+" (none of which did anything) used to sit.
                 HStack(alignment: .top, spacing: gap) {
                     VStack(spacing: gap) {
                         row([key("4", label: "ASK TAB", icon: "questionmark.bubble.fill",
                                  tint: Snes.purple, lit: true),
                              key("5", label: askRecording ? "STOP" : "ASK",
                                  icon: askRecording ? "stop.fill" : "mic.fill",
-                                 tint: Snes.purple, lit: true, waveform: askRecording),
-                             key("6")], h: rowH, gap: gap)
-                        row([key("7"), key("8"), key("9")], h: rowH, gap: gap)
+                                 tint: Snes.purple, lit: true, waveform: askRecording)], h: rowH, gap: gap)
+                        row([key("7"), key("8")], h: rowH, gap: gap)
                     }
+                    .frame(width: unit * 2 + gap)
                     key("talk", label: talkRecording ? "STOP" : "TALK",
                         icon: talkRecording ? "stop.fill" : "mic.fill",
                         tint: talkRecording ? Snes.red : Snes.talk, lit: true,
-                        h: rowH * 2 + gap, w: unit, hero: true, waveform: talkRecording) { _ in talkTapped() }
+                        h: rowH * 2 + gap, w: unit * 2 + gap, hero: true, waveform: talkRecording) { _ in talkTapped() }
                         .shadow(color: (talkRecording ? Snes.red : Snes.talk).opacity(0.6), radius: 10, y: 3)
                 }
                 // ".", collapse
