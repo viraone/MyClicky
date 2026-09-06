@@ -92,7 +92,8 @@ final class AssistantController {
     /// True from the first word of a Talk session until its last segment has
     /// run — the copied preview survives across segments while this is set.
     private var talkSession = false
-    private var talkDispatchedWords = 0
+    /// Words already run as segments this session, in transcript order.
+    private var talkDispatched: [String] = []
     private var talkQueue: [String] = []
     /// The screen rect of the last highlight ring, so "click it" knows the target.
     private var lastHighlightRect: CGRect?
@@ -610,7 +611,7 @@ final class AssistantController {
     private func beginTalkStreaming() {
         talkStreaming = true
         talkSession = true
-        talkDispatchedWords = 0
+        talkDispatched = []
         talkQueue = []
         panel.state.copiedPreview = nil
         panel.state.answer = ""
@@ -645,21 +646,50 @@ final class AssistantController {
 
     private func dispatchTalkSegment() {
         let words = Self.words(panel.state.transcript)
+        let pending = pendingTalkWords(in: words)
         // Two words is the shortest real command ("open Messages"); a single
         // stray word is more likely the recognizer catching its breath.
-        guard words.count - talkDispatchedWords >= 2 else { return }
-        let segment = words[talkDispatchedWords...].joined(separator: " ")
-        talkDispatchedWords = words.count
-        enqueueTalk(segment)
+        guard pending.count >= 2 else { return }
+        talkDispatched = words
+        enqueueTalk(pending.joined(separator: " "))
+    }
+
+    /// Words not yet run. The transcript normally grows — "open messages"
+    /// becomes "open messages open dino dad's conversation" — so the new
+    /// command is whatever follows the words already dispatched. But after a
+    /// long pause the phone's recognizer often starts a fresh transcript, and
+    /// skipping by count would then eat the head of the new command ("open
+    /// Dino dad's conversation" arrived as "dad's conversation", observed
+    /// live). So the skip only applies while the transcript still begins with
+    /// what was dispatched; otherwise everything is new.
+    private func pendingTalkWords(in words: [String]) -> [String] {
+        guard !talkDispatched.isEmpty else { return words }
+        let prefix = talkDispatched.map(Self.normalizedWord)
+        let current = words.prefix(prefix.count).map(Self.normalizedWord)
+        if current.count == prefix.count, current == prefix {
+            return Array(words[prefix.count...])
+        }
+        // The recognizer may also revise earlier words ("open" → "Open,"),
+        // so accept a mostly-matching prefix before declaring a restart.
+        let agree = zip(current, prefix).filter { $0 == $1 }.count
+        if current.count == prefix.count, agree * 3 >= prefix.count * 2 {
+            return Array(words[prefix.count...])
+        }
+        ActivityLog.recordAction("talk-transcript-restarted", ["dispatched": "\(prefix.count)", "now": "\(words.count)"])
+        return words
+    }
+
+    private static func normalizedWord(_ word: String) -> String {
+        word.lowercased().filter { $0.isLetter || $0.isNumber }
     }
 
     /// STOP: whatever is left after the last dispatched segment runs too.
     private func finishTalkStreaming(final: String) {
         talkStreaming = false
         let words = Self.words(final)
-        let rest = words.count > talkDispatchedWords ? words[talkDispatchedWords...].joined(separator: " ") : ""
-        let ranSomething = talkDispatchedWords > 0 || !talkQueue.isEmpty || busy
-        talkDispatchedWords = 0
+        let rest = pendingTalkWords(in: words).joined(separator: " ")
+        let ranSomething = !talkDispatched.isEmpty || !talkQueue.isEmpty || busy
+        talkDispatched = []
         if !rest.isEmpty {
             enqueueTalk(rest)
         } else if !ranSomething {
@@ -1083,7 +1113,7 @@ final class AssistantController {
         talkSession = false
         panel.state.chaining = false
         talkQueue = []
-        talkDispatchedWords = 0
+        talkDispatched = []
         if wasStreaming, panel.state.status != .listening {
             remote.broadcast("STOP")
             speech.stop()
