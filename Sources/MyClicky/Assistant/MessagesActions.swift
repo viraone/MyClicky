@@ -132,7 +132,12 @@ enum MessagesActions {
         // usually code, and synthetic Unicode events get mangled by exactly
         // the kind of view Messages uses.
         KeyboardTyper.paste(text)
-        usleep(400_000)
+        // A long multi-line paste makes Messages re-layout the compose box;
+        // a Return that lands during that is dropped. Wait it out, then press
+        // again after a beat — Return on an already-empty box does nothing.
+        usleep(1_200_000)
+        KeyboardTyper.press(KeyboardTyper.returnKey)
+        usleep(700_000)
         KeyboardTyper.press(KeyboardTyper.returnKey)
 
         ActivityLog.recordAction("messages-send", ["to": recipient])
