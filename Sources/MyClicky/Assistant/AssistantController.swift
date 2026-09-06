@@ -387,7 +387,7 @@ final class AssistantController {
         let cursor = NSEvent.mouseLocation
         let screen = NSScreen.screens.first(where: { NSMouseInRect(cursor, $0.frame, false) }) ?? NSScreen.main
         guard let screen else { return }
-        activeScreen = screen
+        activeScreen = panel.screen ?? screen
         if panel.state.status != .thinking {
             panel.state.status = listening ? .listening : .idle
             if listening { panel.state.transcript = "" }
@@ -903,7 +903,11 @@ final class AssistantController {
         // `activeScreen` follows the cursor, which on a multi-display setup
         // can point at a screen the app isn't even visible on, handing the
         // planner a picture with none of the UI it needs to act on.
-        let screen = Self.screenShowing(targetApp) ?? activeScreen ?? NSScreen.main ?? NSScreen.screens[0]
+        // The display Clicky's panel sits on is the one the user is working
+        // on — they put it there. With two Safari windows on two screens,
+        // this is what picks the right one to read.
+        let screen = panel.screen ?? Self.screenShowing(targetApp) ?? activeScreen ?? NSScreen.main ?? NSScreen.screens[0]
+        if let targetApp { AccessibilityFinder.raiseWindow(of: targetApp, on: screen) }
 
         busy = true
         synthesizer.stopSpeaking(at: .immediate)

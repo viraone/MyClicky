@@ -292,9 +292,12 @@ final class AssistantPanelController {
         let panel = ensurePanel()
         if state.collapsed { expand() }
         let visible = screen.visibleFrame
-        // Respect wherever the user dragged the panel: only reposition when
-        // it isn't already visible. A fresh open starts at bottom-center.
-        if !(panel.isVisible && panel.frame.intersects(visible)) {
+        // Respect wherever the user dragged the panel — including onto another
+        // display: only reposition when it isn't visible anywhere. A fresh
+        // open starts at bottom-center of the given screen.
+        let visibleSomewhere = panel.isVisible
+            && NSScreen.screens.contains { panel.frame.intersects($0.visibleFrame) }
+        if !visibleSomewhere {
             panel.setFrameOrigin(NSPoint(
                 x: visible.midX - Self.expandedSize.width / 2,
                 y: visible.minY + 120
@@ -438,6 +441,11 @@ final class AssistantPanelController {
     }
 
     var isVisible: Bool { panel?.isVisible ?? false }
+    /// The display the panel is showing on — where the user has chosen to work.
+    var screen: NSScreen? {
+        guard let panel, panel.isVisible else { return nil }
+        return panel.screen ?? NSScreen.screens.first { $0.frame.intersects(panel.frame) }
+    }
 
     private func ensurePanel() -> NSPanel {
         if let panel { return panel }

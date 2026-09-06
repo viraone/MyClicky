@@ -106,6 +106,27 @@ enum AccessibilityFinder {
         return []
     }
 
+    /// Brings `app`'s window on `screen` to the front of that app's own
+    /// windows (without activating the app), so "front window"/"front
+    /// document" in AppleScript and the focused-window AX lookups all mean
+    /// the window on the display the user is working on. No-op when the
+    /// app's front window is already there, or it has none there.
+    @discardableResult
+    static func raiseWindow(of app: NSRunningApplication, on screen: NSScreen) -> Bool {
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        let all = windows(of: appElement)
+        func isOn(_ window: AXUIElement) -> Bool {
+            guard let frame = frame(of: window) else { return false }
+            return screen.frame.contains(NSPoint(x: frame.midX, y: frame.midY))
+        }
+        if let front = all.first, isOn(front) { return true }
+        guard let target = all.first(where: isOn) else { return false }
+        AXUIElementSetAttributeValue(target, kAXMainAttribute as CFString, kCFBooleanTrue)
+        AXUIElementPerformAction(target, kAXRaiseAction as CFString)
+        usleep(150_000)
+        return true
+    }
+
     /// Focused window first, then the rest.
     static func windows(of appElement: AXUIElement) -> [AXUIElement] {
         var result: [AXUIElement] = []
