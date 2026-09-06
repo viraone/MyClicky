@@ -1528,6 +1528,9 @@ struct NumpadView: View {
                 let text = await recorder.stop()
                 switch recordTarget {
                 case _ where text.isEmpty:
+                    // The Mac is still in its listening state for ask/dictate/talk
+                    // (WhatsApp records locally only) — tell it to stand down.
+                    if recordTarget != .whatsapp { client.stopListening() }
                     switch recordTarget {
                     case .whatsapp: statusText = "Didn't catch that — tap Reply and try again"
                     case .talk: statusText = "Didn't catch that — press TALK and try again"

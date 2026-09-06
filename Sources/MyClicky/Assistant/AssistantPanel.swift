@@ -307,6 +307,26 @@ final class AssistantPanelController {
         panel.orderFrontRegardless()
     }
 
+    /// Opens the panel already shrunk to the one-line strip, parked at the
+    /// bottom-center of `screen` — the resting state for a phone-driven TALK
+    /// session, where the Mac panel is only glanced at, not worked in. The
+    /// chevron on the strip still restores the full card.
+    func showAsStrip(on screen: NSScreen) {
+        let panel = ensurePanel()
+        if state.collapsed { state.collapsed = false }
+        if !state.strip {
+            if panel.isVisible { savedFrame = panel.frame }
+            state.strip = true
+        }
+        let visible = screen.visibleFrame
+        let origin = NSPoint(
+            x: visible.midX - Self.stripSize.width / 2,
+            y: visible.minY + 16
+        )
+        panel.setFrame(NSRect(origin: origin, size: Self.stripSize), display: true, animate: panel.isVisible)
+        panel.orderFrontRegardless()
+    }
+
     // Card is 960x220 by default (960x520 when stretched tall via the header
     // button); the window carries an extra margin so the outer glow isn't
     // clipped. The user can also freely drag any corner — see `resize(_:)`.

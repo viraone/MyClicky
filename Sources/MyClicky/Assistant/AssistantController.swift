@@ -148,10 +148,14 @@ final class AssistantController {
             guard let self else { return }
             self.talkTargetApp = NSWorkspace.shared.frontmostApplication
             self.showPanel(listening: true)
+            // Phone-driven: the Mac panel is just a status readout, so park it
+            // as the thin strip at the bottom of the work screen.
+            if let screen = self.activeScreen { self.panel.showAsStrip(on: screen) }
             self.panel.state.tab = .talk
             self.beginTalkStreaming()
         }
         panel.state.onPause = { [weak self] in self?.talkPaused() }
+        remote.onStop = { [weak self] in self?.stop() }
         remote.onCollapse = { [weak self] in
             guard let self else { return }
             // Enter toggles: collapse if expanded, bring back if collapsed/hidden.

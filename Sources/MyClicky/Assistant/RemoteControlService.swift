@@ -7,6 +7,8 @@ import Network
 ///
 ///   SHOW           – bring up the assistant panel
 ///   LISTEN         – show the panel in listening state (remote mic active)
+///   LISTEN TALK    – same, on the Talk tab, streaming pause-delimited commands
+///   STOP           – phone ended its recording with nothing to send; stop listening
 ///   COLLAPSE       – minimize the panel to its collapsed bubble
 ///   TAB ASK        – switch the panel to the Ask tab
 ///   TAB DICTATE    – switch the panel to the Capture + Dictate tab
@@ -81,6 +83,8 @@ final class RemoteControlService {
     var onShow: (() -> Void)?
     var onListen: (() -> Void)?
     var onListenTalk: (() -> Void)?
+    /// Phone ended a recording with nothing to send; the Mac should stop too.
+    var onStop: (() -> Void)?
     var onCollapse: (() -> Void)?
     var onTab: ((String) -> Void)?
     var onGmail: ((String) -> Void)?
@@ -176,6 +180,8 @@ final class RemoteControlService {
             onListen?()
         } else if line == "LISTEN TALK" {
             onListenTalk?()
+        } else if line == "STOP" {
+            onStop?()
         } else if line == "COLLAPSE" {
             onCollapse?()
         } else if line == "CAPTURE" {

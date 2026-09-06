@@ -284,6 +284,8 @@ final class ClickyClient: ObservableObject {
     func listen() { send("LISTEN") }
     /// A TALK recording: the Mac runs each pause-separated command as it lands.
     func listenTalk() { send("LISTEN TALK") }
+    /// Recording ended with nothing to send — take the Mac out of listening too.
+    func stopListening() { send("STOP") }
     func collapse() { send("COLLAPSE") }
     func tab(_ name: String) { send("TAB \(name)") }
     func capture() { send("CAPTURE") }
