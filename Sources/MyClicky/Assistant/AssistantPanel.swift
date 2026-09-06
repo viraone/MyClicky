@@ -139,7 +139,20 @@ final class AssistantState: ObservableObject {
             try? await Task.sleep(nanoseconds: Self.pauseAfter)
             guard !Task.isCancelled, let self, self.status == .listening else { return }
             self.speechActive = false
+            self.onPause?()
         }
+    }
+
+    /// Fires when speech has stopped for `pauseAfter` while listening — the
+    /// Talk tab runs whatever was said since the last pause.
+    var onPause: (() -> Void)?
+
+    /// Back to listening after a segment ran mid-recording, already in the
+    /// paused (amber) state rather than flashing "recording".
+    func resumeListeningPaused() {
+        status = .listening
+        speechIdleTask?.cancel()
+        speechActive = false
     }
 
     /// The single thing the panel colours itself by.

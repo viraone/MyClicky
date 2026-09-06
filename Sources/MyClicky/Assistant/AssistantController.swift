@@ -83,6 +83,17 @@ final class AssistantController {
     /// The app a Talk command should act on, captured when recording starts —
     /// Clicky's own panel is non-activating, so this stays the real target.
     private var talkTargetApp: NSRunningApplication?
+    /// Talk streaming: while a Talk recording is still running, every pause
+    /// hands the words said since the last pause to the planner, so "copy
+    /// from import to the closing script tag … (pause) … open Dino Dad's
+    /// conversation … (pause) … send that to Dino Dad … STOP" runs as three
+    /// commands, each starting the moment the user stops talking.
+    private var talkStreaming = false
+    /// True from the first word of a Talk session until its last segment has
+    /// run — the copied preview survives across segments while this is set.
+    private var talkSession = false
+    private var talkDispatchedWords = 0
+    private var talkQueue: [String] = []
     /// The screen rect of the last highlight ring, so "click it" knows the target.
     private var lastHighlightRect: CGRect?
     /// Confirmations a DO plan is waiting on, keyed by id — resolved by
@@ -133,6 +144,14 @@ final class AssistantController {
         // Clicky Remote (iOS app) commands over the local network.
         remote.onShow = { [weak self] in self?.showPanel() }
         remote.onListen = { [weak self] in self?.showPanel(listening: true) }
+        remote.onListenTalk = { [weak self] in
+            guard let self else { return }
+            self.talkTargetApp = NSWorkspace.shared.frontmostApplication
+            self.showPanel(listening: true)
+            self.panel.state.tab = .talk
+            self.beginTalkStreaming()
+        }
+        panel.state.onPause = { [weak self] in self?.talkPaused() }
         remote.onCollapse = { [weak self] in
             guard let self else { return }
             // Enter toggles: collapse if expanded, bring back if collapsed/hidden.
@@ -301,8 +320,8 @@ final class AssistantController {
             }
         }
         remote.onPartial = { [weak self] text in
-            guard let self, self.panel.state.status == .listening else { return }
-            self.panel.state.transcript = text
+            guard let self else { return }
+            self.applyPartial(text)
         }
         remote.onDictate = { [weak self] text in
             guard let self else { return }
@@ -328,6 +347,11 @@ final class AssistantController {
             // Capture the real target BEFORE showing our own panel — otherwise
             // if Clicky's panel itself is/becomes frontmost, the planner would
             // read and act on Clicky's own UI instead of the intended app.
+            if self.talkStreaming {
+                self.panel.state.transcript = utterance
+                self.finishTalkStreaming(final: utterance)
+                return
+            }
             let targetApp = NSWorkspace.shared.frontmostApplication
             self.showPanel()
             // DO always answers on the Talk tab; force it so the result is
@@ -521,8 +545,9 @@ final class AssistantController {
         panel.show(near: cursor, on: screen)
 
         speech.onPartial = { [weak self] text in
-            self?.panel.state.transcript = text
+            self?.applyPartial(text)
         }
+        if kind == .talk { beginTalkStreaming() }
 
         Task {
             guard await SpeechService.requestPermissions() else {
@@ -544,6 +569,11 @@ final class AssistantController {
         recordKind = .ask
         Task {
             let heard = await speech.finish()
+            if kind == .talk, talkStreaming {
+                if !heard.isEmpty { panel.state.transcript = heard }
+                finishTalkStreaming(final: heard)
+                return
+            }
             if heard.isEmpty {
                 if panel.state.errorText == nil {
                     panel.state.status = .idle
@@ -565,6 +595,101 @@ final class AssistantController {
             case .morning: handleMorning(heard)
             }
         }
+    }
+
+    // MARK: - Talk streaming (run each command at the pause)
+
+    private func beginTalkStreaming() {
+        talkStreaming = true
+        talkSession = true
+        talkDispatchedWords = 0
+        talkQueue = []
+        panel.state.copiedPreview = nil
+        panel.state.answer = ""
+    }
+
+    /// Live transcript from either recognizer. While streaming, a segment may
+    /// be running (status thinking/answering) — new words switch the panel
+    /// back to listening so the phase shows recording again.
+    private func applyPartial(_ text: String) {
+        if talkStreaming, panel.state.status != .listening, panel.state.status != .thinking,
+           text != panel.state.transcript {
+            panel.state.status = .listening
+        }
+        guard panel.state.status == .listening else { return }
+        panel.state.transcript = text
+    }
+
+    /// The recognizer went quiet: run what was said since the last pause.
+    private func talkPaused() {
+        guard talkStreaming, panel.state.status == .listening else { return }
+        // The panel turns amber at 1.4s; give the sentence another moment
+        // before acting so a mid-command breath doesn't split it in two.
+        let snapshot = panel.state.transcript
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            guard let self, self.talkStreaming, self.panel.state.status == .listening,
+                  self.panel.state.transcript == snapshot else { return }
+            self.dispatchTalkSegment()
+        }
+    }
+
+    private func dispatchTalkSegment() {
+        let words = Self.words(panel.state.transcript)
+        // Two words is the shortest real command ("open Messages"); a single
+        // stray word is more likely the recognizer catching its breath.
+        guard words.count - talkDispatchedWords >= 2 else { return }
+        let segment = words[talkDispatchedWords...].joined(separator: " ")
+        talkDispatchedWords = words.count
+        enqueueTalk(segment)
+    }
+
+    /// STOP: whatever is left after the last dispatched segment runs too.
+    private func finishTalkStreaming(final: String) {
+        talkStreaming = false
+        let words = Self.words(final)
+        let rest = words.count > talkDispatchedWords ? words[talkDispatchedWords...].joined(separator: " ") : ""
+        let ranSomething = talkDispatchedWords > 0 || !talkQueue.isEmpty || busy
+        talkDispatchedWords = 0
+        if !rest.isEmpty {
+            enqueueTalk(rest)
+        } else if !ranSomething {
+            talkSession = false
+            panel.state.status = .idle
+            panel.state.errorText = "Didn't catch that — try again, or type below."
+        } else if !busy, talkQueue.isEmpty {
+            talkSession = false
+            panel.state.status = panel.state.answer.isEmpty ? .idle : .answering
+        }
+    }
+
+    private func enqueueTalk(_ segment: String) {
+        ActivityLog.recordAction("talk-segment", ["text": segment])
+        talkQueue.append(segment)
+        runNextTalk()
+    }
+
+    private func runNextTalk() {
+        guard !busy, !talkQueue.isEmpty else { return }
+        let segment = talkQueue.removeFirst()
+        handleDo(segment, targetApp: talkTargetApp)
+    }
+
+    /// After a Talk plan finishes: next queued segment, or back to listening
+    /// (already paused, so the panel reads "say a command"), or done.
+    private func afterTalkSegment() {
+        if !talkQueue.isEmpty {
+            runNextTalk()
+        } else if talkStreaming {
+            panel.state.resumeListeningPaused()
+        } else {
+            talkSession = false
+            panel.state.status = .idle
+        }
+    }
+
+    private static func words(_ text: String) -> [String] {
+        text.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).map(String.init)
     }
 
     // MARK: - Dictation to clipboard (⌥⌘V)
@@ -776,7 +901,7 @@ final class AssistantController {
         ring.hide()
         panel.state.status = .thinking
         panel.state.answer = ""
-        panel.state.copiedPreview = nil
+        if !talkSession { panel.state.copiedPreview = nil }
         panel.state.errorText = nil
 
         requestID += 1
@@ -818,7 +943,9 @@ final class AssistantController {
                                                      excludingOwnWindows: true)
             }
             guard id == requestID else { return }
-            panel.state.status = .idle
+            busy = false
+            currentTask = nil
+            afterTalkSegment()
         }
     }
 
@@ -903,6 +1030,15 @@ final class AssistantController {
         googleAuth.onStatus = nil
         for continuation in pendingConfirms.values { continuation.resume(returning: false) }
         pendingConfirms.removeAll()
+        let wasStreaming = talkStreaming
+        talkStreaming = false
+        talkSession = false
+        talkQueue = []
+        talkDispatchedWords = 0
+        if wasStreaming, panel.state.status != .listening {
+            remote.broadcast("STOP")
+            speech.stop()
+        }
         if panel.state.status == .listening {
             // Phone-driven listening: tell the phone to drop the recording.
             remote.broadcast("STOP")

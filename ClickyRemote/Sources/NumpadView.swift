@@ -1535,12 +1535,16 @@ struct NumpadView: View {
             do {
                 try recorder.start()
                 recorder.onPartial = { [client] text in client.partial(text) }
-                if recordTarget != .whatsapp { client.listen() }
+                switch recordTarget {
+                case .whatsapp: break
+                case .talk: client.listenTalk()
+                default: client.listen()
+                }
                 switch recordTarget {
                 case .whatsapp: statusText = "Listening… speak your reply, then tap Stop"
                 case .dictate: statusText = "Listening… speak, then tap STOP to copy to your Mac"
                 case .ask: statusText = "Listening… speak, then tap STOP to ask"
-                case .talk: statusText = "Listening… say what you want Clicky to do, then tap Stop"
+                case .talk: statusText = "Listening… say a command, pause and Clicky does it, keep going, then tap Stop"
                 }
             } catch {
                 statusText = "Mic error: \(error.localizedDescription)"

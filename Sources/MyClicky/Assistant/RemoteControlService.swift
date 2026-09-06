@@ -80,6 +80,7 @@ import Network
 final class RemoteControlService {
     var onShow: (() -> Void)?
     var onListen: (() -> Void)?
+    var onListenTalk: (() -> Void)?
     var onCollapse: (() -> Void)?
     var onTab: ((String) -> Void)?
     var onGmail: ((String) -> Void)?
@@ -173,6 +174,8 @@ final class RemoteControlService {
             onShow?()
         } else if line == "LISTEN" {
             onListen?()
+        } else if line == "LISTEN TALK" {
+            onListenTalk?()
         } else if line == "COLLAPSE" {
             onCollapse?()
         } else if line == "CAPTURE" {
