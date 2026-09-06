@@ -11,6 +11,10 @@ struct NumpadView: View {
     @StateObject private var recorder = SpeechRecorder()
     @State private var statusText = "Tap CLICKY to open it on your Mac (tap again to hide)"
     @State private var permissionDenied = false
+    /// Short-lived warning shown in place of the live transcript while a
+    /// recording is running (where `statusText` isn't visible).
+    @State private var recordingNotice: String?
+    @State private var recordingNoticeTask: Task<Void, Never>?
     /// True after tapping "1"/"3": speech goes to the Mac clipboard, not a question.
     @State private var dictateMode = false
     /// Which target the current recording is for.
@@ -777,8 +781,7 @@ struct NumpadView: View {
         if recorder.isListening {
             // Only the row that started the recording can stop it.
             guard whatsappChat == chat else {
-                UINotificationFeedbackGenerator().notificationOccurred(.warning)
-                statusText = "Still recording for \(whatsappChat.label) — tap its Stop first"
+                showRecordingNotice("Still recording for \(whatsappChat.label) — tap its Stop first")
                 return
             }
         } else {
@@ -1306,13 +1309,22 @@ struct NumpadView: View {
             if recorder.isListening {
                 WaveformView(level: recorder.level)
                     .frame(height: 18)
-                Text(recorder.transcript.isEmpty
-                     ? (recordTarget == .whatsapp ? "Listening… tap Stop when done" : "Listening… tap STOP when done")
-                     : recorder.transcript)
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundStyle(Snes.red)
-                    .lineLimit(6)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let notice = recordingNotice {
+                    Label(notice, systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11, design: .monospaced).weight(.bold))
+                        .foregroundStyle(Snes.yellow)
+                        .lineLimit(3)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .transition(.opacity)
+                } else {
+                    Text(recorder.transcript.isEmpty
+                         ? (recordTarget == .whatsapp ? "Listening… tap Stop when done" : "Listening… tap STOP when done")
+                         : recorder.transcript)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(Snes.red)
+                        .lineLimit(6)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             } else {
                 Text(permissionDenied
                      ? "Enable Microphone & Speech Recognition in Settings."
@@ -1523,9 +1535,22 @@ struct NumpadView: View {
         case .ask: running = "ASK"
         case .whatsapp: running = "the WhatsApp reply"
         }
-        UINotificationFeedbackGenerator().notificationOccurred(.warning)
-        statusText = "\(running) is still recording — tap \(running) to stop it first"
+        showRecordingNotice("\(running) is still recording — tap \(running) to stop it first")
         return true
+    }
+
+    /// Error haptic plus a warning shown where the user is actually looking
+    /// while recording, fading out after a couple of seconds.
+    private func showRecordingNotice(_ message: String) {
+        UINotificationFeedbackGenerator().notificationOccurred(.error)
+        statusText = message
+        recordingNoticeTask?.cancel()
+        withAnimation(.easeInOut(duration: 0.15)) { recordingNotice = message }
+        recordingNoticeTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2.5))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: 0.3)) { recordingNotice = nil }
+        }
     }
 
     private func talkTapped() {
