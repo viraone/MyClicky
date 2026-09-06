@@ -658,6 +658,7 @@ final class AssistantController {
             talkSession = false
             panel.state.status = .idle
             panel.state.errorText = "Didn't catch that — try again, or type below."
+            panel.state.logTalk(.error, "Didn't catch that.")
         } else if !busy, talkQueue.isEmpty {
             talkSession = false
             panel.state.chaining = false
@@ -889,8 +890,10 @@ final class AssistantController {
         }
         guard !busy else { return }
         ActivityLog.recordAction("do", ["text": utterance])
+        panel.state.logTalk(.command, utterance)
         guard let apiKey = KeychainService.anthropicAPIKey() else {
             let message = "No Anthropic API key found in Keychain.\n\nRun this once in Terminal:\n\(KeychainService.setupCommand)"
+            panel.state.logTalk(.error, message)
             panel.state.errorText = message
             panel.state.status = .idle
             remote.broadcast("STATUS \(message.replacingOccurrences(of: "\n", with: " "))")
@@ -919,6 +922,7 @@ final class AssistantController {
                     guard let self, id == self.requestID else { return }
                     self.panel.state.status = .answering
                     self.panel.state.answer = text
+                    self.panel.state.logTalk(.status, text)
                     self.remote.broadcast("STATUS \(text.replacingOccurrences(of: "\n", with: " "))")
                 },
                 confirm: { [weak self] question in
@@ -1056,6 +1060,7 @@ final class AssistantController {
             panel.state.status = .idle
             if panel.state.answer.isEmpty || panel.state.answer.hasSuffix("…") {
                 panel.state.answer = "Stopped."
+                panel.state.logTalk(.status, "Stopped.")
             }
         } else if panel.state.status == .answering {
             panel.state.status = .idle
@@ -1353,6 +1358,7 @@ final class AssistantController {
         }
         ActivityLog.recordAction("messages-open-conversation")
         panel.state.answer = "Opened \(only.display) in Messages."
+        panel.state.logTalk(.status, "Opened \(only.display) in Messages.")
         return nil
     }
 
@@ -1401,7 +1407,10 @@ final class AssistantController {
         }
         var failure: String?
         MessagesActions.sendToOpenConversation(body) { [weak self] message, success in
-            if success { self?.panel.state.answer = message } else { failure = message }
+            if success {
+                self?.panel.state.answer = message
+                self?.panel.state.logTalk(.status, message)
+            } else { failure = message }
         }
         return failure
     }
@@ -1430,6 +1439,7 @@ final class AssistantController {
         }
         GmailActions.composeTo(only.email, body: body)
         panel.state.answer = "Drafted to \(only.display) in Gmail — press Send when it looks right."
+        panel.state.logTalk(.status, "Drafted to \(only.display) in Gmail — press Send when it looks right.")
         return nil
     }
 

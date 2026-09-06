@@ -75,6 +75,15 @@ enum AssistantTab: String, CaseIterable {
     }
 }
 
+/// One line of the Talk tab's terminal-style log.
+struct TalkLogEntry: Identifiable, Equatable {
+    enum Kind { case command, status, error }
+    let id = UUID()
+    let time = Date()
+    let kind: Kind
+    let text: String
+}
+
 /// Which corner of the panel is being dragged to resize it.
 enum PanelResizeCorner: Equatable {
     case topLeading, topTrailing, bottomLeading, bottomTrailing
@@ -149,6 +158,25 @@ final class AssistantState: ObservableObject {
     /// A Talk recording is still open after a command ran: the panel stays
     /// green until the next words arrive.
     @Published var chaining = false
+    /// Talk tab log: every command spoken and every line Clicky reported
+    /// back, timestamped. ⌘K clears it like a terminal.
+    @Published var talkLog: [TalkLogEntry] = []
+
+    func logTalk(_ kind: TalkLogEntry.Kind, _ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        // The planner re-posts the same status while it works; one line each.
+        if let last = talkLog.last, last.kind == kind, last.text == trimmed { return }
+        talkLog.append(TalkLogEntry(kind: kind, text: trimmed))
+        if talkLog.count > 400 { talkLog.removeFirst(talkLog.count - 400) }
+    }
+
+    func clearTalkLog() {
+        talkLog = []
+        answer = ""
+        errorText = nil
+        copiedPreview = nil
+    }
 
     /// Back to listening after a segment ran mid-recording, already in the
     /// paused (amber) state rather than flashing "recording".
@@ -604,10 +632,14 @@ struct AssistantPanelView: View {
                     .animation(.easeInOut(duration: 0.25), value: state.coachMessage)
             }
             switch state.tab {
-            case .ask, .talk:
+            case .ask:
                 topInputRow
                 transcriptView
                 answerView
+            case .talk:
+                topInputRow
+                if state.status == .listening { transcriptView }
+                talkLogView
             case .captureDictate:
                 captureDictateTab
             case .morning:
@@ -1097,6 +1129,98 @@ struct AssistantPanelView: View {
         }
         .padding(.top, 4)
     }
+
+    /// Terminal-style log for the Talk tab: `❯ HH:mm:ss command` lines in the
+    /// accent colour, results indented under them. ⌘K clears it.
+    private var talkLogView: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if state.talkLog.isEmpty {
+                Text("Commands and what Clicky did with them show up here, timestamped. ⌘K clears.")
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .padding(.top, 2)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 3) {
+                            ForEach(state.talkLog) { entry in
+                                talkLogLine(entry).id(entry.id)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 2)
+                    }
+                    .onChange(of: state.talkLog.count) { _ in
+                        if let last = state.talkLog.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                    }
+                    .onAppear {
+                        if let last = state.talkLog.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                    }
+                }
+                .frame(maxHeight: (state.copiedPreview ?? "").isEmpty ? .infinity : 150)
+                .overlay(alignment: .topTrailing) {
+                    Button {
+                        state.clearTalkLog()
+                    } label: {
+                        Text("clear ⌘K")
+                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.45))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(Capsule().fill(Color.white.opacity(0.07)))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Clear the log (⌘K)")
+                }
+            }
+            copiedPreviewView
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(
+            // ⌘K, the terminal's "clear", while the panel has the keyboard.
+            Button("") { state.clearTalkLog() }
+                .keyboardShortcut("k", modifiers: .command)
+                .opacity(0)
+                .frame(width: 0, height: 0)
+        )
+    }
+
+    private func talkLogLine(_ entry: TalkLogEntry) -> some View {
+        let stamp = Self.logClock.string(from: entry.time)
+        return HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(stamp)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.35))
+            switch entry.kind {
+            case .command:
+                Text("❯")
+                    .font(.system(size: 14, weight: .heavy, design: .monospaced))
+                    .foregroundStyle(AssistantPhase.working.color)
+                Text(entry.text)
+                    .font(.system(size: 14.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white)
+            case .status:
+                Text(entry.text)
+                    .font(.system(size: 14, design: .monospaced))
+                    .foregroundStyle(entry.text.lowercased().hasPrefix("done") ? AssistantPhase.done.color : .white.opacity(0.78))
+                    .padding(.leading, 18)
+            case .error:
+                Text(entry.text)
+                    .font(.system(size: 14, design: .monospaced))
+                    .foregroundStyle(.orange)
+                    .padding(.leading, 18)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private static let logClock: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f
+    }()
 
     private var phaseHint: String {
         switch state.phase {
