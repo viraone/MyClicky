@@ -260,8 +260,9 @@ final class AssistantPanelController {
     private var resizeStartFrame: NSRect?
 
     /// Shrinks the panel in place to a one-line bar, or restores it. The bar
-    /// keeps the panel's top-left corner so it stays where the eye already
-    /// is; the corner dot (`minimize`) is for getting it out of the way.
+    /// keeps the panel's top-right corner — where the chevron is — so it
+    /// stays under the pointer; the corner dot (`minimize`) is for getting
+    /// it out of the way.
     func toggleStrip() {
         guard let panel, !state.collapsed else { return }
         if state.strip {
@@ -269,14 +270,14 @@ final class AssistantPanelController {
             let size = savedFrame?.size ?? Self.expandedSize
             let screen = panel.screen ?? NSScreen.main
             let visible = screen?.visibleFrame ?? .zero
-            var origin = NSPoint(x: panel.frame.minX, y: panel.frame.maxY - size.height)
+            var origin = NSPoint(x: panel.frame.maxX - size.width, y: panel.frame.maxY - size.height)
             origin.x = min(max(origin.x, visible.minX + 8), visible.maxX - size.width - 8)
             origin.y = min(max(origin.y, visible.minY + 8), visible.maxY - size.height - 8)
             panel.setFrame(NSRect(origin: origin, size: size), display: true, animate: true)
         } else {
             savedFrame = panel.frame
             state.strip = true
-            let origin = NSPoint(x: panel.frame.minX, y: panel.frame.maxY - Self.stripSize.height)
+            let origin = NSPoint(x: panel.frame.maxX - Self.stripSize.width, y: panel.frame.maxY - Self.stripSize.height)
             panel.setFrame(NSRect(origin: origin, size: Self.stripSize), display: true, animate: true)
         }
     }
@@ -454,7 +455,6 @@ struct AssistantPanelView: View {
     private var stripBar: some View {
         let phase = state.phase
         return HStack(spacing: 12) {
-            edgeChevron(expanded: false)
             Group {
                 if phase == .recording {
                     RecordingBars(color: phase.color)
@@ -480,6 +480,7 @@ struct AssistantPanelView: View {
             if state.canStop && state.status != .listening {
                 stopButton
             }
+            edgeChevron(expanded: false)
         }
         .padding(.horizontal, 10)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -510,13 +511,13 @@ struct AssistantPanelView: View {
         .animation(.easeInOut(duration: 0.3), value: phase)
     }
 
-    /// The chevron on the left edge: points inward to shrink the panel to
-    /// its strip, outward to grow it back.
+    /// The chevron on the right edge: points outward to shrink the panel to
+    /// its strip, back inward to grow it again.
     private func edgeChevron(expanded: Bool) -> some View {
         Button {
             state.onToggleStrip?()
         } label: {
-            Image(systemName: expanded ? "chevron.left" : "chevron.right")
+            Image(systemName: expanded ? "chevron.right" : "chevron.left")
                 .font(.system(size: 15, weight: .black))
                 .foregroundStyle(state.accent)
                 .frame(width: 26, height: expanded ? 64 : 40)
@@ -578,9 +579,9 @@ struct AssistantPanelView: View {
             Spacer(minLength: 0)
             bottomBar
         }
-        // Extra room on the left for the edge chevron.
-        .padding(.leading, 36)
-        .padding(.trailing, 18)
+        // Extra room on the right for the edge chevron.
+        .padding(.leading, 18)
+        .padding(.trailing, 36)
         .padding(.vertical, 14)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(.easeInOut(duration: 0.2), value: state.isTall)
@@ -619,7 +620,7 @@ struct AssistantPanelView: View {
                 )
         )
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(alignment: .leading) { edgeChevron(expanded: true).padding(.leading, 3) }
+        .overlay(alignment: .trailing) { edgeChevron(expanded: true).padding(.trailing, 3) }
         .overlay(alignment: .topLeading) { resizeHandle(.topLeading) }
         .overlay(alignment: .topTrailing) { resizeHandle(.topTrailing) }
         .overlay(alignment: .bottomLeading) { resizeHandle(.bottomLeading) }
