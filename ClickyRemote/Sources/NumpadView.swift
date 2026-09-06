@@ -67,7 +67,7 @@ struct NumpadView: View {
 
         var icon: String {
             switch self {
-            case .remote: "desktopcomputer"
+            case .remote: ""
             case .gmail: "envelope.fill"
             case .spotify: "music.note"
             case .whatsapp: "bubble.left.and.bubble.right.fill"
@@ -123,8 +123,8 @@ struct NumpadView: View {
                     case .youtube: youtubePad
                     }
                 }
-                // Talk rides along in the corner of every pad, so you can speak
-                // a command without first hunting for the right mode.
+                // Talk rides along in the corner of every pad but the keypad,
+                // which has a full-size TALK key of its own.
                 // `safeAreaInset` rather than an overlay: it reserves its own
                 // space instead of sitting on top of a key or tile and
                 // swallowing taps meant for what's underneath.
@@ -132,7 +132,7 @@ struct NumpadView: View {
                     // The trailing padding is what holds it off the right
                     // edge — raise it to move Talk further left, lower it to
                     // push it back toward the corner.
-                    cornerTalkButton.padding(.trailing, 44)
+                    if mode != .remote { cornerTalkButton.padding(.trailing, 44) }
                 }
                 // A confirmation is the one thing that must not be missed —
                 // it used to live on the Talk pad, so it now covers whichever
@@ -309,8 +309,10 @@ struct NumpadView: View {
                             action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 8) {
-                Image(systemName: icon)
-                    .font(.system(size: 18, weight: .bold))
+                if !icon.isEmpty {
+                    Image(systemName: icon)
+                        .font(.system(size: 18, weight: .bold))
+                }
                 Text(title)
                     .font(.system(size: 14, design: .monospaced).weight(.black))
                     .kerning(1)
@@ -358,12 +360,12 @@ struct NumpadView: View {
         Button(action: talkTapped) {
             VStack(spacing: 1) {
                 Image(systemName: talkRecording ? "stop.fill" : "mic.fill")
-                    .font(.system(size: 20, weight: .black))
+                    .font(.system(size: 26, weight: .black))
                 Text(talkRecording ? "STOP" : "TALK")
-                    .font(.system(size: 9, weight: .black, design: .rounded))
+                    .font(.system(size: 11, weight: .black, design: .rounded))
             }
             .foregroundStyle(.white)
-            .frame(width: 58, height: 58)
+            .frame(width: 74, height: 74)
             .background(
                 Circle()
                     .fill(talkRecording ? Snes.red : Snes.talk)
@@ -1323,7 +1325,8 @@ struct NumpadView: View {
                 }
                 row([key("⌫"), key("="), key("/"), key("*")], h: rowH, gap: gap)
                 row([key("7"), key("8"), key("9"), key("-")], h: rowH, gap: gap)
-                // 4 5 6 / 1 2 3 with "+" spanning both rows.
+                // 4 5 6 / 1 2 3 with TALK spanning both rows — the tallest key
+                // on the pad, where "+" (which did nothing) used to sit.
                 HStack(alignment: .top, spacing: gap) {
                     VStack(spacing: gap) {
                         row([key("4", label: "ASK TAB", icon: "questionmark.bubble.fill",
@@ -1338,7 +1341,11 @@ struct NumpadView: View {
                                  icon: dictateRecording ? "stop.fill" : "mic.fill",
                                  tint: Snes.red, lit: true, waveform: dictateRecording)], h: rowH, gap: gap)
                     }
-                    key("+", h: rowH * 2 + gap, w: unit)
+                    key("talk", label: talkRecording ? "STOP" : "TALK",
+                        icon: talkRecording ? "stop.fill" : "mic.fill",
+                        tint: talkRecording ? Snes.red : Snes.talk, lit: true,
+                        h: rowH * 2 + gap, w: unit, hero: true, waveform: talkRecording) { _ in talkTapped() }
+                        .shadow(color: (talkRecording ? Snes.red : Snes.talk).opacity(0.6), radius: 10, y: 3)
                 }
                 // ".", collapse
                 HStack(spacing: gap) {
@@ -1360,7 +1367,7 @@ struct NumpadView: View {
     /// A `tint` makes it one of the coloured controller buttons; `lit` toggles
     /// between the saturated gem colour and a dimmed version.
     private func key(_ id: String, label: String? = nil, icon: String? = nil, tint: Color? = nil, lit: Bool = false,
-                     h: CGFloat? = nil, w: CGFloat? = nil, small: Bool = false,
+                     h: CGFloat? = nil, w: CGFloat? = nil, small: Bool = false, hero: Bool = false,
                      waveform: Bool = false,
                      action: ((String) -> Void)? = nil) -> some View {
         let colored = tint != nil
@@ -1381,9 +1388,9 @@ struct NumpadView: View {
                 if captioned {
                     VStack(spacing: 3) {
                         Image(systemName: icon ?? "")
-                            .font(.system(size: small ? 18 : 22, weight: .bold))
+                            .font(.system(size: hero ? 46 : small ? 18 : 22, weight: .bold))
                         Text(label ?? id)
-                            .font(.system(size: small ? 11 : 12, design: .monospaced).weight(.black))
+                            .font(.system(size: hero ? 20 : small ? 11 : 12, design: .monospaced).weight(.black))
                             .kerning(0.5)
                             .lineLimit(1)
                             .minimumScaleFactor(0.6)
