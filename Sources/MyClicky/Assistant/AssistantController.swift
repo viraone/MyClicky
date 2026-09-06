@@ -1504,20 +1504,29 @@ final class AssistantController {
         return failure
     }
 
-    /// Gmail resolves the name against real contacts. One match proceeds,
-    /// several stop and ask, none says so plainly — never a guess, because
-    /// the wrong Ben is not a recoverable mistake.
+    /// Gmail resolves the name against real contacts — Google Contacts first,
+    /// then the Mac address book, which is where the people Messages knows
+    /// actually live. One match proceeds, several stop and ask, none says so
+    /// plainly — never a guess, because the wrong Ben is not a recoverable
+    /// mistake.
     private func sendViaGmail(recipient: String, body: String, screen: NSScreen) async -> String? {
         let contacts = ContactsService(auth: googleAuth)
-        let matches: [ContactsService.Match]
+        var matches: [ContactsService.Match]
         do {
             matches = try await contacts.search(recipient)
         } catch {
             return "Couldn't look up \(recipient): \(error.localizedDescription)"
         }
+        if matches.isEmpty {
+            do {
+                matches = try await MacContactsService.emails(for: recipient)
+            } catch {
+                return "Couldn't look up \(recipient): \(error.localizedDescription)"
+            }
+        }
         guard let only = matches.first, matches.count == 1 else {
             if matches.isEmpty {
-                return "No contact matching “\(recipient)”. Try their full name or email address."
+                return "No contact with an email matching “\(recipient)”. Try their full name or email address."
             }
             let list = matches.prefix(6).map { "• \($0.display)" }.joined(separator: "\n")
             return "\(matches.count) contacts match “\(recipient)”:\n\(list)\n\n"
