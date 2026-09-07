@@ -28,8 +28,16 @@ final class ClickyClient: ObservableObject {
     /// Progress of an in-flight DO command, or a READ description — shown in
     /// large text and spoken aloud by TALK mode.
     @Published var talkMessage = ""
-    /// An irreversible DO step waiting on a yes/no answer.
-    @Published var pendingConfirm: (id: String, question: String)?
+    /// An irreversible DO step waiting on a yes/no answer. `sendTo` is set
+    /// when the step is a message about to go out — the card then reads
+    /// Cancel / Send and names the recipient.
+    @Published var pendingConfirm: PendingConfirm?
+
+    struct PendingConfirm: Equatable {
+        let id: String
+        let question: String
+        var sendTo: String? = nil
+    }
     /// A pick-one prompt from the Mac (e.g. two contacts match a spoken name).
     @Published var pendingChoice: PendingChoice?
 
@@ -156,10 +164,18 @@ final class ClickyClient: ObservableObject {
                             self.talkMessage = text
                             self.speak(text)
                         } else if line.hasPrefix("CONFIRM ") {
-                            let parts = line.dropFirst(8).split(separator: "\t", maxSplits: 1).map(String.init)
-                            if parts.count == 2 {
-                                self.pendingConfirm = (id: parts[0], question: parts[1])
-                                self.speak(parts[1])
+                            // CONFIRM <id>\t<question>[\tSEND\t<recipient>]; newlines
+                            // inside a field arrive folded as U+2028.
+                            let parts = line.dropFirst(8).split(separator: "\t", omittingEmptySubsequences: false)
+                                .map { String($0).replacingOccurrences(of: "\u{2028}", with: "\n") }
+                            if parts.count >= 2 {
+                                let sendTo = (parts.count >= 4 && parts[2] == "SEND") ? parts[3] : nil
+                                self.pendingConfirm = PendingConfirm(id: parts[0], question: parts[1], sendTo: sendTo)
+                                if let sendTo {
+                                    self.speak("Send this message to \(sendTo)?")
+                                } else {
+                                    self.speak(parts[1].components(separatedBy: "\n\n").first ?? parts[1])
+                                }
                             }
                         } else if line.hasPrefix("CONFIRM_DONE ") {
                             // Resolved elsewhere (e.g. answered on the Mac's own

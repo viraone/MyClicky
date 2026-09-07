@@ -2508,7 +2508,7 @@ final class AssistantController {
             screen: screen,
             kind: .send(recipient: recipient)
         )
-        ActivityLog.recordAction("send-confirm", ["app": app, "ok": confirmed ? "yes" : "no"])
+        ActivityLog.recordAction("send-confirm", ["via": app, "ok": confirmed ? "yes" : "no"])
         return confirmed
     }
 
