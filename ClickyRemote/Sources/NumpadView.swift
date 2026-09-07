@@ -1590,27 +1590,22 @@ struct NumpadView: View {
                     key("→").frame(height: heroH)
                 }
                 row([key("⌫"), key("="), key("/"), key("*")], h: rowH, gap: gap)
-                // Capture controls sit up on the 7 8 9 row, above the Ask row,
-                // so the two voice rows read top-down: capture, then ask.
+                // Capture tab and dictate sit up on the 7 8 9 row; CAPTURE
+                // itself is the hero key below (it used to be a small key here).
                 row([key("1", label: "CAPTURE TAB", icon: "rectangle.on.rectangle", tint: Snes.yellow, lit: true),
-                     key("2", label: "CAPTURE", icon: "camera.viewfinder", tint: Snes.blue, lit: true),
+                     key("9"),
                      key("3", label: dictateRecording ? "STOP" : "DICTATE",
                          icon: dictateRecording ? "stop.fill" : "mic.fill",
                          tint: Snes.red, lit: true, waveform: dictateRecording),
                      key("-")], h: rowH, gap: gap)
-                // ASK TAB / ASK and 7 8, with TALK spanning both rows and the
-                // two right-hand columns — by far the largest key on the pad,
-                // where 6, 9 and "+" (none of which did anything) used to sit.
+                // CAPTURE and TALK: two hero keys side by side, each spanning
+                // both rows and two columns. CAPTURE replaced ASK TAB / ASK and
+                // 7 8 (asking is the Mac's ⌥⌘C hotkey; the pad is for hands-off
+                // capture and talk).
                 HStack(alignment: .top, spacing: gap) {
-                    VStack(spacing: gap) {
-                        row([key("4", label: "ASK TAB", icon: "questionmark.bubble.fill",
-                                 tint: Snes.purple, lit: true),
-                             key("5", label: askRecording ? "STOP" : "ASK",
-                                 icon: askRecording ? "stop.fill" : "mic.fill",
-                                 tint: Snes.purple, lit: true, waveform: askRecording)], h: rowH, gap: gap)
-                        row([key("7"), key("8")], h: rowH, gap: gap)
-                    }
-                    .frame(width: unit * 2 + gap)
+                    key("2", label: "CAPTURE", icon: "camera.viewfinder", tint: Snes.blue, lit: true,
+                        h: rowH * 2 + gap, w: unit * 2 + gap, hero: true)
+                        .shadow(color: Snes.blue.opacity(0.6), radius: 10, y: 3)
                     key("talk", label: talkRecording ? "STOP" : "TALK",
                         icon: talkRecording ? "stop.fill" : "mic.fill",
                         tint: talkRecording ? Snes.red : Snes.talk, lit: true,
