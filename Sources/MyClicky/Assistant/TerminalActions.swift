@@ -106,7 +106,11 @@ enum TerminalActions {
     /// The spoken agent, normalised to the name `agentName` produces; nil
     /// for "the agent" (any of them).
     nonisolated static func agentName(spoken: String) -> String? {
+        // What the recognizer tends to hear for each name.
         let lowered = spoken.lowercased()
+            .replacingOccurrences(of: "cloud", with: "claude")
+            .replacingOccurrences(of: "co-pilot", with: "copilot")
+            .replacingOccurrences(of: "co pilot", with: "copilot")
         return knownAgents.first { lowered.contains($0.pattern) }?.name
     }
 

@@ -2707,7 +2707,7 @@ final class AssistantController {
     }
 
     private static let terminalNouns = "(?:terminal|shell|console|command line|prompt)"
-    private static let agentNouns = "(?:claude(?:\\s+code)?|copilot|codex|cursor|gemini|the agent|the ai|the assistant|the bot|the coding agent)"
+    private static let agentNouns = "(?:claude(?:\\s+code)?|cloud(?:\\s+code)?|co-?\\s?pilot|codex|cursor|gemini|aider|the agent|the ai|the assistant|the bot|the coding agent)"
 
     /// "Tell the terminal to run the tests" → "run the tests" typed at the
     /// prompt. Only explicit addressing counts; nothing is typed into a
@@ -2737,9 +2737,14 @@ final class AssistantController {
             "^(?:type|enter|write|put|run|execute)\\s+(.+?)\\s+(?:in|into|on|at)\\s+(?:the\\s+)?\(T)$",
             "^\(T)[,:]\\s+(.+)$",
         ]
+        // Only real agent names can be addressed directly ("Claude, what does
+        // this do?") — "the agent" needs a verb, or every sentence starting
+        // with "the" would be a candidate.
+        let named = "(?:claude(?:\\s+code)?|cloud(?:\\s+code)?|co-?\\s?pilot|codex|cursor|gemini|aider)"
         let agentPatterns = [
             "^(?:tell|ask)\\s+(\(A))\\s+(?:to\\s+)?(.+)$",
             "^(?:say|send)\\s+(?:this\\s+)?to\\s+(\(A))[,:]?\\s+(.+)$",
+            "^(?:hey\\s+|ok\\s+|okay\\s+)?(\(named))[,:]?\\s+(.{4,})$",
         ]
         func capture(_ pattern: String) -> String? {
             guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
