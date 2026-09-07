@@ -1645,47 +1645,38 @@ struct NumpadView: View {
 
     private var keypad: some View {
         GeometryReader { geo in
-            let gap: CGFloat = 8
-            let cols: CGFloat = 4
-            let topInset: CGFloat = 16
-            // Fill the height: 4 equal rows; keys stretch as wide as the
-            // column allows. Four hero keys (CLICKY, DICTATE, CAPTURE, TALK)
-            // each span two rows and two columns.
-            let rowH = (geo.size.height - topInset - gap * 3) / 4
-            let unit = (geo.size.width - gap * (cols - 1)) / cols
+            let gap: CGFloat = 12
+            let topInset: CGFloat = 12
+            // Five equal rows: a one-row CLICKY bar across the top (it only
+            // shows/hides the Mac panel, so it doesn't need a hero tile), then
+            // a 2×2 grid of hero keys each two rows tall — ASK | DICTATE over
+            // CAPTURE | TALK — so the four mic/capture actions line up exactly.
+            let rowH = (geo.size.height - topInset - gap * 4) / 5
+            let heroH = rowH * 2 + gap
+            let heroW = (geo.size.width - gap) / 2
             VStack(spacing: gap) {
-                // CLICKY sits in the 2×2 block that held ⌫ = / CAPTURE TAB 9
-                // (only CAPTURE TAB did anything; CAPTURE itself covers it —
-                // the Mac switches to the Capture tab when the grab lands).
+                key("0", label: "CLICKY", icon: "sparkles", tint: Snes.purple, lit: true,
+                    h: rowH, w: geo.size.width, banner: true)
                 HStack(alignment: .top, spacing: gap) {
-                    key("0", label: "CLICKY", icon: "sparkles", tint: Snes.purple, lit: true,
-                        h: rowH * 2 + gap, w: unit * 2 + gap, hero: true)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 10)
-                                .strokeBorder(.white.opacity(0.5), lineWidth: 1)
-                        )
-                        .shadow(color: Snes.purple.opacity(0.55), radius: 10, y: 3)
-                    // DICTATE fills the 2×2 to the right (← → and − were
-                    // decorative), so the pad is four equal hero keys.
+                    // ASK records on the phone and sends `ASK <text>`: the Mac
+                    // answers exactly as it does for ⌥⌘C (screenshot of the
+                    // display under the pointer, or the focused editor file).
+                    key("5", label: askRecording ? "STOP" : "ASK",
+                        icon: askRecording ? "stop.fill" : "questionmark.bubble.fill",
+                        tint: askRecording ? Snes.red : Snes.green, lit: true,
+                        h: heroH, w: heroW, hero: true, waveform: askRecording)
                     key("3", label: dictateRecording ? "STOP" : "DICTATE",
                         icon: dictateRecording ? "stop.fill" : "mic.fill",
                         tint: Snes.red, lit: true,
-                        h: rowH * 2 + gap, w: unit * 2 + gap, hero: true, waveform: dictateRecording)
-                        .shadow(color: Snes.red.opacity(0.6), radius: 10, y: 3)
+                        h: heroH, w: heroW, hero: true, waveform: dictateRecording)
                 }
-                // CAPTURE and TALK: two hero keys side by side, each spanning
-                // both rows and two columns. CAPTURE replaced ASK TAB / ASK and
-                // 7 8 (asking is the Mac's ⌥⌘C hotkey; the pad is for hands-off
-                // capture and talk).
                 HStack(alignment: .top, spacing: gap) {
                     key("2", label: "CAPTURE", icon: "camera.viewfinder", tint: Snes.blue, lit: true,
-                        h: rowH * 2 + gap, w: unit * 2 + gap, hero: true)
-                        .shadow(color: Snes.blue.opacity(0.6), radius: 10, y: 3)
+                        h: heroH, w: heroW, hero: true)
                     key("talk", label: talkRecording ? "STOP" : "TALK",
                         icon: talkRecording ? "stop.fill" : "mic.fill",
                         tint: talkRecording ? Snes.red : Snes.talk, lit: true,
-                        h: rowH * 2 + gap, w: unit * 2 + gap, hero: true, waveform: talkRecording) { _ in talkTapped() }
-                        .shadow(color: (talkRecording ? Snes.red : Snes.talk).opacity(0.6), radius: 10, y: 3)
+                        h: heroH, w: heroW, hero: true, waveform: talkRecording) { _ in talkTapped() }
                 }
             }
             .padding(.top, topInset)
@@ -1700,15 +1691,18 @@ struct NumpadView: View {
 
     /// SNES-style key. `id` is what the key *does*; `label` is what it shows.
     /// A `tint` makes it one of the coloured controller buttons; `lit` toggles
-    /// between the saturated gem colour and a dimmed version.
+    /// between the saturated gem colour and a dimmed version. `hero` keys are
+    /// the big pad tiles; `banner` is the full-width one-row bar variant.
     private func key(_ id: String, label: String? = nil, icon: String? = nil, tint: Color? = nil, lit: Bool = false,
                      h: CGFloat? = nil, w: CGFloat? = nil, small: Bool = false, hero: Bool = false,
-                     waveform: Bool = false,
+                     banner: Bool = false, waveform: Bool = false,
                      action: ((String) -> Void)? = nil) -> some View {
         let colored = tint != nil
         let face: Color = tint.map { lit ? $0 : $0.opacity(0.45) } ?? Snes.key
         // Keys with an icon show icon + short caption; the rest show a big glyph.
         let captioned = icon != nil
+        let big = hero || banner
+        let radius: CGFloat = big ? 22 : 10
         return Button {
             (action ?? tapped)(id)
         } label: {
@@ -1720,13 +1714,27 @@ struct NumpadView: View {
                         .padding(.horizontal, 10)
                         .allowsHitTesting(false)
                 }
-                if captioned {
-                    VStack(spacing: 3) {
+                if banner {
+                    HStack(spacing: 10) {
                         Image(systemName: icon ?? "")
-                            .font(.system(size: hero ? 46 : small ? 18 : 22, weight: .bold))
+                            .font(.system(size: 22, weight: .bold))
                         Text(label ?? id)
-                            .font(.system(size: hero ? 20 : small ? 11 : 12, design: .monospaced).weight(.black))
-                            .kerning(0.5)
+                            .font(.system(size: 18, design: .monospaced).weight(.black))
+                            .kerning(1.5)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.6)
+                    }
+                    .padding(.horizontal, 12)
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.4), radius: 1, y: 1)
+                } else if captioned {
+                    VStack(spacing: hero ? 10 : 3) {
+                        Image(systemName: icon ?? "")
+                            .font(.system(size: hero ? 48 : small ? 18 : 22, weight: .bold))
+                            .frame(height: hero ? 56 : nil)
+                        Text(label ?? id)
+                            .font(.system(size: hero ? 21 : small ? 11 : 12, design: .monospaced).weight(.black))
+                            .kerning(hero ? 1.5 : 0.5)
                             .lineLimit(1)
                             .minimumScaleFactor(0.6)
                     }
@@ -1746,23 +1754,38 @@ struct NumpadView: View {
             }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(
-                    RoundedRectangle(cornerRadius: 10)
+                    RoundedRectangle(cornerRadius: radius, style: .continuous)
                         .fill(LinearGradient(
-                            colors: [face.opacity(colored ? 1 : 1).lighter(colored ? 0.18 : 0.10), face],
+                            colors: [face.lighter(colored ? 0.22 : 0.10), face, face.darker(big ? 0.10 : 0)],
                             startPoint: .top, endPoint: .bottom))
-                        .overlay(RoundedRectangle(cornerRadius: 10)
+                        .overlay(RoundedRectangle(cornerRadius: radius, style: .continuous)
                             .strokeBorder(Color.black.opacity(0.25), lineWidth: 1))
                         .overlay(
                             // Glossy highlight along the top edge, like moulded plastic.
-                            RoundedRectangle(cornerRadius: 10)
-                                .fill(LinearGradient(colors: [.white.opacity(0.35), .clear],
+                            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                                .fill(LinearGradient(colors: [.white.opacity(big ? 0.30 : 0.35), .clear],
                                                      startPoint: .top, endPoint: .center))
                                 .padding(1)
                         )
-                        .shadow(color: .black.opacity(0.45), radius: 2, y: 3)
+                        .overlay(
+                            // Thin inner rim so every big tile reads as one set.
+                            RoundedRectangle(cornerRadius: radius - 1, style: .continuous)
+                                .strokeBorder(.white.opacity(big ? 0.35 : 0), lineWidth: 1)
+                                .padding(1)
+                        )
+                        .overlay(
+                            // Pulsing white ring while this key is recording.
+                            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                                .strokeBorder(.white.opacity(waveform ? 0.9 : 0), lineWidth: 3)
+                                .animation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true),
+                                           value: waveform)
+                        )
+                        .shadow(color: .black.opacity(0.35), radius: 2, y: 3)
+                        // Coloured glow, identical for all big tiles.
+                        .shadow(color: (big && colored) ? face.opacity(0.55) : .clear, radius: 12, y: 5)
                 )
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PadKeyStyle())
         .frame(width: w, height: h)
     }
 
@@ -1961,6 +1984,16 @@ enum Snes {
     static let whatsapp = Color(red: 0.07, green: 0.55, blue: 0.40)
     static let youtube = Color(red: 0.94, green: 0.13, blue: 0.13)
     static let talk = Color(red: 0.98, green: 0.55, blue: 0.05)
+}
+
+/// Pad keys sink slightly under the finger, like a real controller button.
+private struct PadKeyStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .brightness(configuration.isPressed ? -0.06 : 0)
+            .animation(.spring(response: 0.22, dampingFraction: 0.7), value: configuration.isPressed)
+    }
 }
 
 extension Color {

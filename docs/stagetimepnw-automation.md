@@ -88,10 +88,12 @@ chat. Escape cancels.
   cleaned-up text is on the clipboard. Paste into Xcode or `git commit -m`.
 - **Type a question instead of speaking** — the Ask panel has a text field, useful
   when pasting an exact error string.
-- **Clicky Remote (iPhone)** — with the phone on the desk: `0` shows Ask, `1`
-  toggles the mic, `2` Dictate, `3` Capture, Enter collapses the panel. Lets
-  you trigger Clicky without touching the Mac keyboard, so pytest/Xcode keep
-  keyboard focus.
+- **Clicky Remote (iPhone)** — with the phone on the desk, tap **ASK**, speak,
+  tap STOP: the Mac answers exactly as for ⌥⌘C (the pointer still decides which
+  display is screenshotted). **CAPTURE** triggers the region grab, **DICTATE**
+  goes to the clipboard, **CLICKY** shows/hides the panel. **TALK** is action
+  mode (`DO …` — click/type in the frontmost app), not for questions. Hands
+  never leave the keyboard, so pytest/Xcode keep focus.
 - **Ask "click it"** — after Clicky highlights something in an answer, "click
   it" moves the mouse there after a confirm dialog. Handy for "click the Rerun
   button in Appium Inspector" while your hands are on the phone.

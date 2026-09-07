@@ -99,8 +99,9 @@ panel's **Dictate** tab. The panel has three tabs: Ask, Dictate, Capture.
 `ClickyRemote/` is a companion iPhone numpad app (open `ClickyRemote.xcodeproj`
 in Xcode, run on the phone with ⌘R after any change). It finds the Mac via
 Bonjour (`_clicky._tcp`) and sends newline-terminated text commands
-(`RemoteControlService`). Keys: 0 = show Ask tab, 1 = mic toggle,
-2 = Dictate mode, 3 = Capture, enter = collapse panel.
+(`RemoteControlService`). Pad: CLICKY = show/hide the Mac panel; ASK = record
+a question on the phone and send it (answered like ⌥⌘C); DICTATE = clean-up to
+the Mac clipboard; CAPTURE = region grab; TALK = "do it" action mode.
 
 ## ClickyLogs (weekly dashboard)
 
