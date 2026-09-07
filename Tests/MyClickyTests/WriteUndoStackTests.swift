@@ -262,3 +262,32 @@ final class UndoPhraseTests: XCTestCase {
         }
     }
 }
+
+@MainActor
+final class ConversationOpenPhraseTests: XCTestCase {
+    func testOpenPhrasesYieldTheName() {
+        let cases: [(String, String)] = [
+            ("Can you bring up a text message with Jason Katz", "Jason Katz"),
+            ("Open up a text message with Jason Katz", "Jason Katz"),
+            ("Open up a message with Dino Dan", "Dino Dan"),
+            ("open Dino Dad's conversation", "Dino Dad"),
+            ("pull up my chat with Ben", "Ben"),
+            ("Actually, open up a text with Dave please", "Dave"),
+            ("show me the conversation with David Babu", "David Babu"),
+            ("start a new message to Sam", "Sam"),
+            ("hey clicky open the thread with mom", "Mom"),
+        ]
+        for (phrase, name) in cases {
+            XCTAssertEqual(AssistantController.conversationOpenRequest(phrase), name, phrase)
+        }
+    }
+
+    func testOtherCommandsAndDictationDoNotMatch() {
+        for phrase in ["open Safari", "open Messages", "text him I'm running late", "send it",
+                       "tell her the store is open till nine", "bring up the calendar",
+                       "open the message and read it to me", "undo that", "erase that",
+                       "show me my messages", "open a new tab"] {
+            XCTAssertNil(AssistantController.conversationOpenRequest(phrase), "should not match: \(phrase)")
+        }
+    }
+}

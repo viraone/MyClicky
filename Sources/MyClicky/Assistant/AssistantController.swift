@@ -1105,6 +1105,14 @@ final class AssistantController {
             remote.broadcast("STATUS \(message)")
             return
         }
+        // "Bring up a text message with Jason Katz" went to the planner and
+        // came back without an open_conversation step (observed live) — the
+        // phrasing is deterministic enough to route here without Claude.
+        if let name = Self.conversationOpenRequest(utterance) {
+            ghost?.clear()
+            openConversationDirect(named: name)
+            return
+        }
         guard let apiKey = KeychainService.anthropicAPIKey() else {
             ghost?.clear()
             let message = "No Anthropic API key found in Keychain.\n\nRun this once in Terminal:\n\(KeychainService.setupCommand)"
@@ -1591,6 +1599,86 @@ final class AssistantController {
         // A copied passage is for reading, and the default panel height only
         // has room for the status line above it.
         panel.growIfNeeded()
+    }
+
+    /// The name in "open Dino Dad's conversation", "bring up a text message
+    /// with Jason Katz", "pull up my chat with Ben", "open up a text with
+    /// Dave" — or nil when the utterance isn't plainly a request to bring a
+    /// Messages thread on screen. Kept narrow: the verb must lead (after
+    /// lead-ins) and the thing opened must be a message/conversation noun,
+    /// so "open Safari" and "text him I'm late" don't match.
+    static func conversationOpenRequest(_ utterance: String) -> String? {
+        var words = utterance.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted.subtracting(CharacterSet(charactersIn: "'’-")))
+            .filter { !$0.isEmpty }
+        let leadIns: Set<String> = ["actually", "ok", "okay", "hey", "clicky", "can", "could", "would", "you", "please",
+                                    "now", "um", "uh", "so", "and", "then", "wait", "no", "instead", "just", "go", "let's", "lets"]
+        while let first = words.first, leadIns.contains(first) { words.removeFirst() }
+        let verbs: Set<String> = ["open", "bring", "pull", "show", "start", "switch", "get"]
+        guard let verb = words.first, verbs.contains(verb) else { return nil }
+        words.removeFirst()
+        let particles: Set<String> = ["up", "me", "to", "a", "an", "the", "my", "new", "our"]
+        while let first = words.first, particles.contains(first) { words.removeFirst() }
+        let nouns: Set<String> = ["text", "texts", "message", "messages", "imessage", "conversation", "convo", "chat", "thread", "sms"]
+        // "… a text message with X" / "… the conversation with X" / "… chat to X"
+        if let noun = words.first, nouns.contains(noun) {
+            words.removeFirst()
+            if let second = words.first, nouns.contains(second) { words.removeFirst() } // "text message"
+            guard let joiner = words.first, ["with", "to", "for", "from"].contains(joiner) else { return nil }
+            words.removeFirst()
+            return cleanedContactName(words)
+        }
+        // "… X's conversation" / "… X's thread"
+        if let index = words.firstIndex(where: { nouns.contains($0) }), index > 0,
+           words[(index + 1)...].allSatisfy({ ["please", "now", "in", "messages"].contains($0) }) {
+            var name = Array(words[..<index])
+            if let last = name.last {
+                name[name.count - 1] = last.replacingOccurrences(of: "'s", with: "").replacingOccurrences(of: "’s", with: "")
+            }
+            return cleanedContactName(name)
+        }
+        return nil
+    }
+
+    private static func cleanedContactName(_ words: [String]) -> String? {
+        var name = words
+        let trailing: Set<String> = ["please", "now", "in", "messages", "on", "imessage", "for", "me", "thanks"]
+        while let last = name.last, trailing.contains(last) { name.removeLast() }
+        guard !name.isEmpty, name.count <= 5 else { return nil }
+        return name.map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
+    }
+
+    /// Fast path for `conversationOpenRequest`: the same opener the planner
+    /// would have called, without the round-trip (or the risk of a plan that
+    /// omits it).
+    private func openConversationDirect(named name: String) {
+        busy = true
+        synthesizer.stopSpeaking(at: .immediate)
+        ring.hide()
+        panel.state.status = .thinking
+        panel.state.answer = "Opening \(name)…"
+        panel.state.errorText = nil
+        remote.broadcast("STATUS \(panel.state.answer)")
+        ActivityLog.recordAction("messages-open-direct", ["name": name])
+        requestID += 1
+        let id = requestID
+        currentTask = Task {
+            defer { if id == requestID { busy = false; currentTask = nil } }
+            let reason = await openConversation(app: "Messages", named: name)
+            guard id == requestID else { return }
+            if let reason {
+                panel.state.status = .answering
+                panel.state.answer = reason
+                panel.state.logTalk(.error, reason)
+                remote.broadcast("STATUS \(reason.replacingOccurrences(of: "\n", with: " "))")
+            } else {
+                panel.state.status = .answering
+                remote.broadcast("STATUS \(panel.state.answer)")
+            }
+            busy = false
+            currentTask = nil
+            afterTalkSegment()
+        }
     }
 
     /// Brings a named conversation on screen — the spoken alternative to
