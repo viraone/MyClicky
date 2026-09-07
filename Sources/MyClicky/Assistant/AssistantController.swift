@@ -165,7 +165,9 @@ final class AssistantController {
         }
         remote.onListen = { [weak self] in
             guard let self else { return }
-            self.showPanel(listening: true)
+            // Phone ASK: open the full card while the user is still speaking,
+            // so the answer never lands in a corner dot or the one-line strip.
+            self.showPanel(listening: true, full: self.panel.state.tab == .ask)
             if self.panel.state.tab == .ask { self.beginTalkStreaming(questionsOnly: true) }
         }
         remote.onListenTalk = { [weak self] in
@@ -364,7 +366,7 @@ final class AssistantController {
         }
         remote.onAsk = { [weak self] question in
             guard let self else { return }
-            self.showPanel()
+            self.showPanel(full: true)
             self.panel.state.transcript = question
             if self.talkStreaming, self.streamQuestionsOnly {
                 self.finishTalkStreaming(final: question)
@@ -428,8 +430,10 @@ final class AssistantController {
     }
 
     /// Brings up the assistant panel without starting local speech capture
-    /// (used by the iOS remote, which records on the phone).
-    private func showPanel(listening: Bool = false) {
+    /// (used by the iOS remote, which records on the phone). `full` also
+    /// restores the whole card (no dot, no strip, stretched tall) so an
+    /// answer asked from the phone is readable the moment it lands.
+    private func showPanel(listening: Bool = false, full: Bool = false) {
         let cursor = NSEvent.mouseLocation
         let screen = NSScreen.screens.first(where: { NSMouseInRect(cursor, $0.frame, false) }) ?? NSScreen.main
         guard let screen else { return }
@@ -439,7 +443,11 @@ final class AssistantController {
             if listening { panel.state.transcript = "" }
             panel.state.errorText = nil
         }
-        panel.show(near: cursor, on: screen)
+        if full {
+            panel.presentFull(near: cursor, on: screen)
+        } else {
+            panel.show(near: cursor, on: screen)
+        }
     }
 
     // MARK: - Break coach
