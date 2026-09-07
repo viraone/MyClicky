@@ -153,3 +153,16 @@ The dashboard lives at
 This is an MVP foundation. A hardened distribution should add an app target
 with sandbox entitlements, code signing, a settings UI for the destination
 folder and hotkey, and multi-display selection support.
+
+## Inspiration and attribution
+
+MyClicky is inspired by **[HeyClicky](https://www.heyclicky.com)**, the
+on-screen voice assistant for the Mac created by **Farza Majeed** (founder of
+buildspace; Founders, Inc.). The idea of an assistant that sits near your
+cursor, sees your screen, and talks you through tasks comes from there.
+
+MyClicky is an independent implementation written from scratch in Swift. It is
+a personal project, is **not affiliated with, endorsed by, or derived from**
+HeyClicky or its authors, and shares no code with it. "HeyClicky" is the
+property of its respective owner; the name "MyClicky" is used only to mark this
+as a personal take on the same idea.
