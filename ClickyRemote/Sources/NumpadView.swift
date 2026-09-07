@@ -1566,38 +1566,32 @@ struct NumpadView: View {
             let gap: CGFloat = 8
             let cols: CGFloat = 4
             let topInset: CGFloat = 16
-            // The CLICKY row is the one that gets reached for most, so it
-            // stands taller than an ordinary key row.
-            let heroScale: CGFloat = 1.6
-            // Fill the height: 6 rows, the first of them `heroScale` tall;
-            // keys stretch as wide as the column allows.
-            let rowH = (geo.size.height - topInset - gap * 5) / (5 + heroScale)
-            let heroH = rowH * heroScale
+            // Fill the height: 5 equal rows; keys stretch as wide as the
+            // column allows. Three hero keys (CLICKY, CAPTURE, TALK) each span
+            // two rows and two columns.
+            let rowH = (geo.size.height - topInset - gap * 4) / 5
             let unit = (geo.size.width - gap * (cols - 1)) / cols
             VStack(spacing: gap) {
-                // CLICKY show / hide sits in the two cells the ↑/↓ arrows used
-                // to fill (both were decorative — they fell through `tapped`
-                // doing nothing), so the pad is a row shorter and keys grow.
-                HStack(spacing: gap) {
-                    key("0", label: "CLICKY  show / hide", icon: "sparkles", tint: Snes.purple,
-                        lit: true, h: heroH, w: unit * 2 + gap, small: true)
+                // CLICKY sits in the 2×2 block that held ⌫ = / CAPTURE TAB 9
+                // (only CAPTURE TAB did anything; CAPTURE itself covers it —
+                // the Mac switches to the Capture tab when the grab lands).
+                HStack(alignment: .top, spacing: gap) {
+                    key("0", label: "CLICKY", icon: "sparkles", tint: Snes.purple, lit: true,
+                        h: rowH * 2 + gap, w: unit * 2 + gap, hero: true)
                         .overlay(
                             RoundedRectangle(cornerRadius: 10)
                                 .strokeBorder(.white.opacity(0.5), lineWidth: 1)
                         )
-                        .shadow(color: Snes.purple.opacity(0.55), radius: 8, y: 3)
-                    key("←").frame(height: heroH)
-                    key("→").frame(height: heroH)
+                        .shadow(color: Snes.purple.opacity(0.55), radius: 10, y: 3)
+                    VStack(spacing: gap) {
+                        row([key("←"), key("→")], h: rowH, gap: gap)
+                        row([key("3", label: dictateRecording ? "STOP" : "DICTATE",
+                                 icon: dictateRecording ? "stop.fill" : "mic.fill",
+                                 tint: Snes.red, lit: true, waveform: dictateRecording),
+                             key("-")], h: rowH, gap: gap)
+                    }
+                    .frame(width: unit * 2 + gap)
                 }
-                row([key("⌫"), key("="), key("/"), key("*")], h: rowH, gap: gap)
-                // Capture tab and dictate sit up on the 7 8 9 row; CAPTURE
-                // itself is the hero key below (it used to be a small key here).
-                row([key("1", label: "CAPTURE TAB", icon: "rectangle.on.rectangle", tint: Snes.yellow, lit: true),
-                     key("9"),
-                     key("3", label: dictateRecording ? "STOP" : "DICTATE",
-                         icon: dictateRecording ? "stop.fill" : "mic.fill",
-                         tint: Snes.red, lit: true, waveform: dictateRecording),
-                     key("-")], h: rowH, gap: gap)
                 // CAPTURE and TALK: two hero keys side by side, each spanning
                 // both rows and two columns. CAPTURE replaced ASK TAB / ASK and
                 // 7 8 (asking is the Mac's ⌥⌘C hotkey; the pad is for hands-off
