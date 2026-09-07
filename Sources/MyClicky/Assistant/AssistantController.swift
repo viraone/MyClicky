@@ -104,6 +104,13 @@ final class AssistantController {
     /// Words already run as segments this session, in transcript order.
     private var talkDispatched: [String] = []
     private var talkQueue: [String] = []
+    /// Live preview of the words being said into an open Messages thread —
+    /// see `streamGhostDraft`. Consumed by `handleDo` when the segment runs.
+    private var ghostDraft: MessagesActions.ComposeStream?
+    /// The segment (by dispatched-word count) the ghost decision was made
+    /// for, so the "is the box empty?" AX read happens once per segment, not
+    /// once per partial.
+    private var ghostDecidedFor: Int?
     /// The screen rect of the last highlight ring, so "click it" knows the target.
     private var lastHighlightRect: CGRect?
     /// Confirmations a DO plan is waiting on, keyed by id — resolved by
@@ -637,6 +644,45 @@ final class AssistantController {
         }
         guard panel.state.status == .listening else { return }
         panel.state.transcript = text
+        streamGhostDraft(text)
+    }
+
+    /// Streaming dictation insert: while the user is talking to a Messages
+    /// thread Clicky opened, the words appear in the compose box as they're
+    /// said — written in the background, so the app they're working in keeps
+    /// focus — and Claude's polished version replaces them when the sentence
+    /// ends. Only on an empty compose box: with a draft already there the
+    /// words are a revision or "send it", and previewing *those* over the
+    /// draft would be exactly wrong. Command-shaped partials ("open David's
+    /// conversation", "erase that") are never previewed.
+    private func streamGhostDraft(_ transcript: String) {
+        guard talkStreaming, messagesDraftOpenedAt.map({ Date().timeIntervalSince($0) < 10 * 60 }) ?? false else { return }
+        let pending = pendingTalkWords(in: Self.words(transcript), quiet: true)
+        // A single word is the recognizer clearing its throat; two words
+        // ("send it") are more likely a command than the start of a message.
+        guard pending.count >= 3 else { return }
+        let utterance = pending.joined(separator: " ")
+        if Self.isSendIt(utterance) || Self.isEraseIt(utterance) || Self.isNeverMind(utterance) || Self.isAppCommand(utterance) {
+            ghostDraft?.clear()
+            return
+        }
+        if ghostDraft == nil {
+            guard ghostDecidedFor != talkDispatched.count else { return }
+            ghostDecidedFor = talkDispatched.count
+            guard let stream = MessagesActions.ComposeStream.begin() else { return }
+            ghostDraft = stream
+            ActivityLog.recordAction("messages-ghost-start")
+        }
+        if ghostDraft?.update(utterance) == false {
+            ghostDraft = nil
+        }
+    }
+
+    /// Hands the live preview (if any) to whatever runs the segment: the
+    /// drafter replaces it with Claude's text; anything else clears it.
+    private func takeGhostDraft() -> MessagesActions.ComposeStream? {
+        defer { ghostDraft = nil; ghostDecidedFor = nil }
+        return ghostDraft
     }
 
     /// The recognizer went quiet: run what was said since the last pause.
@@ -671,7 +717,7 @@ final class AssistantController {
     /// Dino dad's conversation" arrived as "dad's conversation", observed
     /// live). So the skip only applies while the transcript still begins with
     /// what was dispatched; otherwise everything is new.
-    private func pendingTalkWords(in words: [String]) -> [String] {
+    private func pendingTalkWords(in words: [String], quiet: Bool = false) -> [String] {
         guard !talkDispatched.isEmpty else { return words }
         let prefix = talkDispatched.map(Self.normalizedWord)
         let current = words.prefix(prefix.count).map(Self.normalizedWord)
@@ -684,7 +730,9 @@ final class AssistantController {
         if current.count == prefix.count, agree * 3 >= prefix.count * 2 {
             return Array(words[prefix.count...])
         }
-        ActivityLog.recordAction("talk-transcript-restarted", ["dispatched": "\(prefix.count)", "now": "\(words.count)"])
+        if !quiet {
+            ActivityLog.recordAction("talk-transcript-restarted", ["dispatched": "\(prefix.count)", "now": "\(words.count)"])
+        }
         return words
     }
 
@@ -702,6 +750,7 @@ final class AssistantController {
         if !rest.isEmpty {
             enqueueTalk(rest)
         } else if !ranSomething {
+            takeGhostDraft()?.clear()
             talkSession = false
             panel.state.status = .idle
             panel.state.errorText = "Didn't catch that — try again, or type below."
@@ -948,15 +997,21 @@ final class AssistantController {
         guard !busy else { return }
         ActivityLog.recordAction("do", ["text": utterance])
         panel.state.logTalk(.command, utterance)
+        // A live preview of these words may already be in the Messages
+        // compose box. It stays only if this segment becomes the message.
+        let ghost = takeGhostDraft()
         if Self.isSendIt(utterance) {
+            ghost?.clear()
             sendOpenDraft()
             return
         }
         if Self.isEraseIt(utterance), messagesDraftOpenedAt.map({ Date().timeIntervalSince($0) < 10 * 60 }) ?? false {
+            ghost?.clear()
             eraseOpenMessagesDraft()
             return
         }
         if Self.isNeverMind(utterance), gmailDraftOpenedAt != nil || messagesDraftOpenedAt != nil {
+            ghost?.clear()
             gmailDraftOpenedAt = nil
             messagesDraftOpenedAt = nil
             messagesDraftText = nil
@@ -968,6 +1023,7 @@ final class AssistantController {
             return
         }
         guard let apiKey = KeychainService.anthropicAPIKey() else {
+            ghost?.clear()
             let message = "No Anthropic API key found in Keychain.\n\nRun this once in Terminal:\n\(KeychainService.setupCommand)"
             panel.state.logTalk(.error, message)
             panel.state.errorText = message
@@ -983,22 +1039,25 @@ final class AssistantController {
         // …unless it's plainly a command — "actually, open David's
         // conversation" must not get typed to Dino Dad.
         let gateBypassed = Self.isAppCommand(utterance)
+        if gateBypassed { ghost?.clear() }
         let gmailActive = !gateBypassed && (gmailDraftOpenedAt.map { Date().timeIntervalSince($0) < 10 * 60 } ?? false)
         let messagesActive = !gateBypassed && (messagesDraftOpenedAt.map { Date().timeIntervalSince($0) < 10 * 60 } ?? false)
         let messagesFirst = (messagesDraftOpenedAt ?? .distantPast) > (gmailDraftOpenedAt ?? .distantPast)
         for target in messagesFirst ? ["messages", "gmail"] : ["gmail", "messages"] {
             if target == "gmail", gmailActive,
                let compose = GmailDrafter.openCompose(recipientHint: gmailDraftRecipient) {
+                ghost?.clear()
                 draftGmail(gist: utterance, compose: compose, apiKey: apiKey)
                 return
             }
             if target == "messages", messagesActive,
                let open = MessagesActions.openConversation(),
                messagesDraftRecipient.map({ MessagesActions.spokenNameMatches($0, conversation: open) }) ?? true {
-                draftMessage(gist: utterance, recipient: open, apiKey: apiKey)
+                draftMessage(gist: utterance, recipient: open, apiKey: apiKey, previewed: ghost != nil)
                 return
             }
         }
+        ghost?.clear()
         // Drive (and screenshot) the display the target app is actually on —
         // `activeScreen` follows the cursor, which on a multi-display setup
         // can point at a screen the app isn't even visible on, handing the
@@ -1176,6 +1235,7 @@ final class AssistantController {
         pendingChoices.removeAll()
         let wasStreaming = talkStreaming
         talkStreaming = false
+        takeGhostDraft()?.clear()
         talkSession = false
         panel.state.chaining = false
         talkQueue = []
@@ -1768,19 +1828,22 @@ final class AssistantController {
         }
     }
 
-    private func draftMessage(gist: String, recipient: String, apiKey: String) {
+    /// `previewed`: the raw words are already showing in the compose box as a
+    /// live preview — they are *not* an existing draft to revise, and Claude's
+    /// text simply takes their place.
+    private func draftMessage(gist: String, recipient: String, apiKey: String, previewed: Bool = false) {
         busy = true
         synthesizer.stopSpeaking(at: .immediate)
         ring.hide()
         // What's really in the compose box counts as the draft — text left
         // there from before Clicky opened this thread included — so "erase
         // that" / "make it shorter" have something to act on.
-        let currentDraft = messagesDraftText ?? MessagesActions.currentComposeText()
+        let currentDraft = previewed ? nil : (messagesDraftText ?? MessagesActions.currentComposeText())
         panel.state.status = .thinking
         panel.state.answer = currentDraft == nil ? "Writing it…" : "Rewriting it…"
         panel.state.errorText = nil
         remote.broadcast("STATUS \(panel.state.answer)")
-        ActivityLog.recordAction("messages-draft", ["revision": currentDraft == nil ? "no" : "yes"])
+        ActivityLog.recordAction("messages-draft", ["revision": currentDraft == nil ? "no" : "yes", "previewed": previewed ? "yes" : "no"])
 
         requestID += 1
         let id = requestID
