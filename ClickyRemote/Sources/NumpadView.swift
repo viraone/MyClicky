@@ -1583,14 +1583,13 @@ struct NumpadView: View {
                                 .strokeBorder(.white.opacity(0.5), lineWidth: 1)
                         )
                         .shadow(color: Snes.purple.opacity(0.55), radius: 10, y: 3)
-                    VStack(spacing: gap) {
-                        row([key("←"), key("→")], h: rowH, gap: gap)
-                        row([key("3", label: dictateRecording ? "STOP" : "DICTATE",
-                                 icon: dictateRecording ? "stop.fill" : "mic.fill",
-                                 tint: Snes.red, lit: true, waveform: dictateRecording),
-                             key("-")], h: rowH, gap: gap)
-                    }
-                    .frame(width: unit * 2 + gap)
+                    // DICTATE fills the 2×2 to the right (← → and − were
+                    // decorative), so the pad is four equal hero keys.
+                    key("3", label: dictateRecording ? "STOP" : "DICTATE",
+                        icon: dictateRecording ? "stop.fill" : "mic.fill",
+                        tint: Snes.red, lit: true,
+                        h: rowH * 2 + gap, w: unit * 2 + gap, hero: true, waveform: dictateRecording)
+                        .shadow(color: Snes.red.opacity(0.6), radius: 10, y: 3)
                 }
                 // CAPTURE and TALK: two hero keys side by side, each spanning
                 // both rows and two columns. CAPTURE replaced ASK TAB / ASK and
