@@ -67,7 +67,23 @@ final class AssistantController {
     /// puts it on the clipboard alongside the latest dictation. Also the
     /// landing point for files added via the + menu, which set `kind`.
     func showCapture(image: NSImage, url: URL, kind: AssistantState.AttachmentKind = .capture) {
-        showPanel()
+        if kind == .capture {
+            // A region grab: the mouse is where the drag ended, so that's the
+            // display the capture came from. Park the preview in its top-right
+            // corner rather than wherever the panel last sat.
+            let cursor = NSEvent.mouseLocation
+            let screen = NSScreen.screens.first(where: { NSMouseInRect(cursor, $0.frame, false) }) ?? NSScreen.main
+            if let screen {
+                activeScreen = screen
+                if panel.state.status != .thinking {
+                    panel.state.status = .idle
+                    panel.state.errorText = nil
+                }
+                panel.showInCorner(on: screen)
+            }
+        } else {
+            showPanel()
+        }
         panel.state.tab = .captureDictate
         panel.state.attachmentKind = kind
         panel.state.captureImage = image

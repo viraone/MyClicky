@@ -309,6 +309,36 @@ final class AssistantPanelController {
         panel.orderFrontRegardless()
     }
 
+    /// Parks the panel in the top-right corner of `screen` — the resting spot
+    /// for a fresh region capture, so the preview lands somewhere predictable
+    /// and out of the way of what was just captured. Leaves the dot/strip
+    /// states, keeps the current card size, and never shrinks a tall panel.
+    func showInCorner(on screen: NSScreen) {
+        let panel = ensurePanel()
+        // Flip the flags directly instead of expand()/toggleStrip(), which
+        // each animate — one instant frame change covers every start state.
+        let wasSmall = state.collapsed || state.strip
+        state.collapsed = false
+        state.strip = false
+        let visible = screen.visibleFrame
+        let size: NSSize
+        if !panel.isVisible || wasSmall {
+            size = savedFrame?.size ?? (state.isTall ? Self.tallSize : Self.expandedSize)
+        } else {
+            size = panel.frame.size
+        }
+        savedFrame = nil
+        let margin: CGFloat = 12 - Self.glowMargin
+        let origin = NSPoint(
+            x: visible.maxX - size.width - margin,
+            y: visible.maxY - size.height - margin
+        )
+        // Snap, don't glide — the preview should be in the corner the instant
+        // the mouse is released.
+        panel.setFrame(NSRect(origin: origin, size: size), display: true, animate: false)
+        panel.orderFrontRegardless()
+    }
+
     /// Opens the panel already shrunk to the one-line strip, parked at the
     /// bottom-center of `screen` — the resting state for a phone-driven TALK
     /// session, where the Mac panel is only glanced at, not worked in. The
