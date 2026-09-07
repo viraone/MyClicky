@@ -10,6 +10,7 @@ targets:
     sources: [Sources]
     settings:
       base:
+        DEVELOPMENT_TEAM: V9MXHWMVTM
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_CFBundleDisplayName: Peeky Remote
         INFOPLIST_KEY_NSCameraUsageDescription: Peeky Remote uses the camera to snap a photo and send it to WhatsApp on your Mac.
