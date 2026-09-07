@@ -1566,10 +1566,10 @@ struct NumpadView: View {
             let gap: CGFloat = 8
             let cols: CGFloat = 4
             let topInset: CGFloat = 16
-            // Fill the height: 5 equal rows; keys stretch as wide as the
-            // column allows. Three hero keys (CLICKY, CAPTURE, TALK) each span
-            // two rows and two columns.
-            let rowH = (geo.size.height - topInset - gap * 4) / 5
+            // Fill the height: 4 equal rows; keys stretch as wide as the
+            // column allows. Four hero keys (CLICKY, DICTATE, CAPTURE, TALK)
+            // each span two rows and two columns.
+            let rowH = (geo.size.height - topInset - gap * 3) / 4
             let unit = (geo.size.width - gap * (cols - 1)) / cols
             VStack(spacing: gap) {
                 // CLICKY sits in the 2×2 block that held ⌫ = / CAPTURE TAB 9
@@ -1604,11 +1604,6 @@ struct NumpadView: View {
                         tint: talkRecording ? Snes.red : Snes.talk, lit: true,
                         h: rowH * 2 + gap, w: unit * 2 + gap, hero: true, waveform: talkRecording) { _ in talkTapped() }
                         .shadow(color: (talkRecording ? Snes.red : Snes.talk).opacity(0.6), radius: 10, y: 3)
-                }
-                // ".", collapse
-                HStack(spacing: gap) {
-                    key(".", h: rowH, w: unit)
-                    key("enter", label: "COLLAPSE", icon: "chevron.down.circle", h: rowH, w: unit, small: true)
                 }
             }
             .padding(.top, topInset)
