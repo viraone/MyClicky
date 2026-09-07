@@ -169,6 +169,19 @@ enum MessagesActions {
         return Array(lines.suffix(limit))
     }
 
+    /// Background counterpart of `typeIntoOpenConversation`: sets the compose
+    /// box's value through Accessibility without activating Messages, so the
+    /// app the user is working in keeps focus. Any `needsFallback` result
+    /// means nothing was written — call `typeIntoOpenConversation` instead.
+    static func writeIntoOpenConversationInBackground(_ text: String) -> BackgroundWriteResult {
+        guard let app = running(), openConversation() != nil else { return .elementNotWritable }
+        guard let field = composeElement(in: app) else {
+            log.notice("background write: compose field not in the AX tree")
+            return .elementNotWritable
+        }
+        return AXActions.writeTextInBackground(to: field, text: text)
+    }
+
     /// Puts `text` into the compose box of the open conversation without
     /// sending it, replacing whatever was typed there. Returns false if no
     /// conversation is open.
@@ -220,6 +233,20 @@ enum MessagesActions {
         guard let window = windowFrame(of: app) else { return nil }
         log.notice("compose field not in the AX tree — falling back to the window's bottom strip")
         return NSRect(x: window.midX - 40, y: window.minY + 34, width: 80, height: 12)
+    }
+
+    /// The compose box's AX element, when Messages exposes it at all (see
+    /// `composeField` for why it often doesn't).
+    private static func composeElement(in app: NSRunningApplication) -> AXUIElement? {
+        for placeholder in ["iMessage", "Text Message", "SMS", "Message"] {
+            if let element = AccessibilityFinder.element(
+                in: app, roles: [kAXTextAreaRole, kAXTextFieldRole],
+                matching: placeholder, exact: false, onScreenOnly: true, quick: true
+            ) {
+                return element
+            }
+        }
+        return nil
     }
 
     /// The conversation window's frame in AppKit coordinates (origin

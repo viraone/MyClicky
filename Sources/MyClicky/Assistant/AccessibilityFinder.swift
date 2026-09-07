@@ -63,13 +63,6 @@ enum AccessibilityFinder {
         // Chromium browsers only expose web content once an assistive client
         // asks, and do so a beat later — so poll briefly before giving up.
         AXUIElementSetAttributeValue(appElement, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
-        let lowered = needle.lowercased()
-        let textMatches: (String) -> Bool = { text in
-            // Some apps (WhatsApp) prefix labels with invisible bidi marks.
-            let t = String(text.unicodeScalars.filter { !$0.properties.isDefaultIgnorableCodePoint })
-                .lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            return exact ? t == lowered : t.contains(lowered)
-        }
         for attempt in 0..<(quick ? 1 : 8) {
             if attempt > 0 { Thread.sleep(forTimeInterval: 0.25) }
             for window in windows(of: appElement) {
@@ -78,19 +71,9 @@ enum AccessibilityFinder {
                 var found: [NSRect] = []
                 _ = search(window, budget: &visited, matches: { element in
                     guard let role = attribute(element, kAXRoleAttribute) as? String,
-                          roles.contains(role) else { return false }
-                    var labelled = false
-                    for key in [kAXTitleAttribute, kAXDescriptionAttribute, kAXPlaceholderValueAttribute, kAXHelpAttribute, kAXValueAttribute] {
-                        if let text = attribute(element, key) as? String, textMatches(text) { labelled = true; break }
-                    }
-                    // Links often carry their label only as a static-text child.
-                    if !labelled, exact, let children = attribute(element, kAXChildrenAttribute) as? [AXUIElement] {
-                        labelled = children.contains { child in
-                            guard let value = attribute(child, kAXValueAttribute) as? String else { return false }
-                            return textMatches(value)
-                        }
-                    }
-                    guard labelled, let f = frame(of: element) else { return false }
+                          roles.contains(role),
+                          isLabelled(element, needle: needle, exact: exact),
+                          let f = frame(of: element) else { return false }
                     if onScreenOnly, let windowFrame,
                        !windowFrame.insetBy(dx: 2, dy: 2).contains(NSPoint(x: f.midX, y: f.midY)) {
                         return false
@@ -104,6 +87,61 @@ enum AccessibilityFinder {
         }
         axlog.notice("no match for \(needle, privacy: .public) roles=\(roles.joined(separator: ","), privacy: .public)")
         return []
+    }
+
+    /// The first element (not just its frame) with one of `roles` whose
+    /// label matches `needle` — for callers that need to read or set
+    /// attributes on it directly rather than click it. Same matching and
+    /// polling rules as `elementFrames`.
+    @MainActor
+    static func element(in app: NSRunningApplication, roles: Set<String>, matching needle: String,
+                        exact: Bool = false, onScreenOnly: Bool = false, quick: Bool = false) -> AXUIElement? {
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetAttributeValue(appElement, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+        for attempt in 0..<(quick ? 1 : 8) {
+            if attempt > 0 { Thread.sleep(forTimeInterval: 0.25) }
+            for window in windows(of: appElement) {
+                let windowFrame = frame(of: window)
+                var visited = 0
+                if let found = search(window, budget: &visited, matches: { element in
+                    guard let role = attribute(element, kAXRoleAttribute) as? String,
+                          roles.contains(role),
+                          isLabelled(element, needle: needle, exact: exact) else { return false }
+                    if onScreenOnly {
+                        guard let f = frame(of: element), let windowFrame,
+                              windowFrame.insetBy(dx: 2, dy: 2).contains(NSPoint(x: f.midX, y: f.midY)) else { return false }
+                    }
+                    return true
+                }) {
+                    return found
+                }
+            }
+        }
+        axlog.notice("no element for \(needle, privacy: .public) roles=\(roles.joined(separator: ","), privacy: .public)")
+        return nil
+    }
+
+    /// Whether any of the element's label-bearing attributes (or, for exact
+    /// matches, a static-text child's value — links often carry their label
+    /// only there) matches `needle`, case-insensitively.
+    private static func isLabelled(_ element: AXUIElement, needle: String, exact: Bool) -> Bool {
+        let lowered = needle.lowercased()
+        let textMatches: (String) -> Bool = { text in
+            // Some apps (WhatsApp) prefix labels with invisible bidi marks.
+            let t = String(text.unicodeScalars.filter { !$0.properties.isDefaultIgnorableCodePoint })
+                .lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            return exact ? t == lowered : t.contains(lowered)
+        }
+        for key in [kAXTitleAttribute, kAXDescriptionAttribute, kAXPlaceholderValueAttribute, kAXHelpAttribute, kAXValueAttribute] {
+            if let text = attribute(element, key) as? String, textMatches(text) { return true }
+        }
+        if exact, let children = attribute(element, kAXChildrenAttribute) as? [AXUIElement] {
+            return children.contains { child in
+                guard let value = attribute(child, kAXValueAttribute) as? String else { return false }
+                return textMatches(value)
+            }
+        }
+        return false
     }
 
     /// Brings `app`'s window on `screen` to the front of that app's own

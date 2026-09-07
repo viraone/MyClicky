@@ -1650,6 +1650,9 @@ final class AssistantController {
                 let draft = try await GmailDrafter.write(gist: gist, compose: compose,
                                                          senderName: NSFullUserName(), claude: claude)
                 guard id == requestID else { return }
+                // Gmail is web content: `writeTextInBackground` would return
+                // `.unsupportedTarget`, so the compose is filled via in-page
+                // insertText (the existing path) rather than an AX value set.
                 if GmailDrafter.fill(draft, replaceSubject: compose.subject.isEmpty) {
                     ok = true
                     // Still working on it — keep the compose in dictation
@@ -1726,7 +1729,15 @@ final class AssistantController {
                                                            currentDraft: messagesDraftText,
                                                            senderName: NSFullUserName(), claude: claude)
                 guard id == requestID else { return }
-                if MessagesActions.typeIntoOpenConversation(text) {
+                // Prefer writing into the compose box without taking focus
+                // from whatever the user is working in; only activate
+                // Messages (focus-and-return path) if that verifiably fails.
+                let background = MessagesActions.writeIntoOpenConversationInBackground(text)
+                if background.needsFallback {
+                    log.notice("messages draft: background write \(String(describing: background), privacy: .public) — falling back to focus-and-type")
+                }
+                ActivityLog.recordAction("messages-draft-insert", ["via": background == .success ? "background" : "foreground"])
+                if background == .success || MessagesActions.typeIntoOpenConversation(text) {
                     ok = true
                     messagesDraftText = text
                     messagesDraftOpenedAt = Date()
