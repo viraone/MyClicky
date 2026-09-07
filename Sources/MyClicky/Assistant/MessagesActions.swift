@@ -67,10 +67,13 @@ enum MessagesActions {
         let frontBefore = NSWorkspace.shared.frontmostApplication
         guard await openInBackground(url) else { return false }
 
-        // Messages takes a moment to switch threads, and reporting success
-        // before it has would let a send land in the previous conversation.
+        // Messages takes a moment to switch threads — in the background it
+        // tears its window down and rebuilds it, so the window list is empty
+        // for ~2s and the new title appears at ~2.5s (measured); allow well
+        // over that. Reporting success before it has would let a send land in
+        // the previous conversation.
         var opened = false
-        for _ in 0..<12 {
+        for _ in 0..<32 {
             try? await Task.sleep(nanoseconds: 250_000_000)
             if let open = openConversation(), !open.isEmpty {
                 let openDigits = open.filter(\.isNumber)
@@ -83,8 +86,20 @@ enum MessagesActions {
                 }
             }
         }
+        if opened { unminimizeConversationWindow() }
         restoreFocus(to: frontBefore)
         return opened
+    }
+
+    /// A thread switched to inside a minimized window is invisible — the
+    /// user sees nothing happen. Activation used to restore it as a side
+    /// effect; without activation, do it explicitly (AX, no focus change).
+    private static func unminimizeConversationWindow() {
+        guard let window = conversationWindow()?.element,
+              (AccessibilityFinder.attribute(window, kAXMinimizedAttribute) as? Bool) == true else { return }
+        log.notice("open conversation: window was minimized — restoring it")
+        AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+        usleep(300_000)
     }
 
     /// Hands `url` to Messages with `activates = false`. Falls back to a plain
