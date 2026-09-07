@@ -1028,6 +1028,28 @@ final class AssistantController {
         // A live preview of these words may already be in the Messages
         // compose box. It stays only if this segment becomes the message.
         let ghost = takeGhostDraft()
+        // A box in edit mode on the study site takes whatever is said as an
+        // edit to that box — checked before the Messages matchers so "delete
+        // the last sentence" edits the box rather than erasing a draft.
+        if let context = SiteEditActions.editContext() {
+            ghost?.clear()
+            if Self.isPublishIt(utterance) {
+                publishSite()
+            } else if Self.isDoneEditing(utterance) {
+                SiteEditActions.finishEditOnPage()
+                finishSiteEdit("Done editing — say “publish it” to push, or click another pencil.", ok: true)
+            } else if let apiKey = KeychainService.anthropicAPIKey() {
+                editSiteBox(context, instruction: utterance, apiKey: apiKey)
+            } else {
+                finishSiteEdit("No Anthropic API key found in Keychain.", ok: false)
+            }
+            return
+        }
+        if Self.isPublishIt(utterance), SiteEditActions.siteTabURL() != nil {
+            ghost?.clear()
+            publishSite()
+            return
+        }
         if Self.isSendIt(utterance) {
             ghost?.clear()
             sendOpenDraft()
@@ -1867,6 +1889,100 @@ final class AssistantController {
     /// `previewed`: the raw words are already showing in the compose box as a
     /// live preview — they are *not* an existing draft to revise, and Claude's
     /// text simply takes their place.
+    // MARK: - Study site editing
+
+    /// "Publish it", "push that", "deploy the site" — commit and push the
+    /// study site. Only consulted when the site is open in a browser.
+    private static func isPublishIt(_ utterance: String) -> Bool {
+        var words = utterance.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+        let leadIns: Set<String> = ["ok", "okay", "looks", "good", "great", "and", "now", "please", "then", "just",
+                                    "can", "could", "you", "let's", "lets", "hey", "clicky", "go", "ahead", "alright"]
+        while let first = words.first, leadIns.contains(first) { words.removeFirst() }
+        guard let verb = words.first, ["publish", "deploy", "push"].contains(verb), words.count <= 6 else { return false }
+        let filler: Set<String> = ["it", "that", "this", "the", "site", "page", "edit", "edits", "change", "changes",
+                                   "now", "please", "up", "out", "live", "to", "prod", "production", "github"]
+        return words.dropFirst().allSatisfy { filler.contains($0) }
+    }
+
+    private static func isDoneEditing(_ utterance: String) -> Bool {
+        let joined = utterance.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }.joined(separator: " ")
+        return ["done editing", "finish editing", "finished editing", "stop editing", "close the editor",
+                "exit edit mode", "leave edit mode", "i'm done", "im done", "that's done", "thats done"]
+            .contains { joined.hasSuffix($0) || joined == $0 }
+    }
+
+    /// Rewrites the box in edit mode per the spoken instruction: Claude
+    /// produces the new content, which lands in the live page (so it shows
+    /// on the other screen at once) and in the HTML file on disk (the copy
+    /// that persists). Focus never leaves the app the user is in.
+    private func editSiteBox(_ context: SiteEditActions.Context, instruction: String, apiKey: String) {
+        busy = true
+        synthesizer.stopSpeaking(at: .immediate)
+        ring.hide()
+        panel.state.status = .thinking
+        panel.state.answer = "Editing that box…"
+        panel.state.errorText = nil
+        remote.broadcast("STATUS \(panel.state.answer)")
+        ActivityLog.recordAction("site-edit", ["box": context.boxID, "text": instruction])
+        guard let box = SiteEditActions.box(context.boxID) else {
+            busy = false
+            finishSiteEdit("I see a box in edit mode but can't read it — turn on “Allow JavaScript from Apple Events” "
+                           + "in the browser's Develop menu, then try again.", ok: false)
+            return
+        }
+        requestID += 1
+        let id = requestID
+        currentTask = Task {
+            defer { if id == requestID { busy = false; currentTask = nil } }
+            var message: String
+            var ok = false
+            do {
+                let result = try await SiteEditDrafter.rewrite(box: box, instruction: instruction,
+                                                               claude: AnthropicService(apiKey: apiKey))
+                guard id == requestID else { return }
+                let onPage = SiteEditActions.setBoxOnPage(box.id, html: result.html)
+                try SiteEditActions.writeBoxToFile(box.id, html: result.html, in: context.file)
+                ok = true
+                ActivityLog.recordAction("site-edit-applied", ["box": box.id, "page": onPage ? "yes" : "no"])
+                message = result.summary
+                    + (onPage ? "" : " Saved to the file, but the page didn't update — reload to see it.")
+                    + " Keep going, or say “publish it”."
+            } catch {
+                message = "Couldn't make that edit: \(error.localizedDescription)"
+            }
+            finishSiteEdit(message, ok: ok)
+        }
+    }
+
+    private func publishSite() {
+        busy = true
+        panel.state.status = .thinking
+        panel.state.answer = "Publishing…"
+        remote.broadcast("STATUS Publishing…")
+        ActivityLog.recordAction("site-publish")
+        Task {
+            defer { busy = false }
+            // Publish the working copy the open page came from.
+            let repo = SiteEditActions.editContext().map { SiteEditActions.repo(containing: $0.file) } ?? SiteEditActions.repoURL
+            let result = await SiteEditActions.publish(repo: repo)
+            ActivityLog.recordAction("site-publish-done", ["ok": result.ok ? "yes" : "no"])
+            finishSiteEdit(result.message, ok: result.ok)
+            toast.show(result.message, icon: result.ok ? "arrow.up.circle.fill" : "exclamationmark.triangle.fill",
+                       tint: result.ok ? .green : .orange)
+        }
+    }
+
+    private func finishSiteEdit(_ message: String, ok: Bool) {
+        panel.state.status = .answering
+        panel.state.answer = message
+        panel.state.logTalk(ok ? .status : .error, message)
+        remote.broadcast("STATUS \(message)")
+    }
+
     private func draftMessage(gist: String, recipient: String, apiKey: String, previewed: Bool = false) {
         busy = true
         synthesizer.stopSpeaking(at: .immediate)
