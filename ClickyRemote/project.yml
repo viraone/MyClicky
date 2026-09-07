@@ -11,10 +11,11 @@ targets:
     settings:
       base:
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
-        INFOPLIST_KEY_NSCameraUsageDescription: Clicky Remote uses the camera to snap a photo and send it to WhatsApp on your Mac.
-        INFOPLIST_KEY_NSMicrophoneUsageDescription: Clicky Remote uses the microphone so you can speak questions to your Mac.
+        INFOPLIST_KEY_CFBundleDisplayName: Peeky Remote
+        INFOPLIST_KEY_NSCameraUsageDescription: Peeky Remote uses the camera to snap a photo and send it to WhatsApp on your Mac.
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: Peeky Remote uses the microphone so you can speak questions to your Mac.
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: Your speech is transcribed on-device before being sent to your Mac.
-        INFOPLIST_KEY_NSLocalNetworkUsageDescription: Clicky Remote connects to the MyClicky app running on your Mac over your local network.
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: Peeky Remote connects to the Peeky app running on your Mac over your local network.
         INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait"
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait"
         GENERATE_INFOPLIST_FILE: YES
@@ -25,8 +26,8 @@ targets:
       path: Info.plist
       properties:
         NSBonjourServices: [_clicky._tcp]
-        NSCameraUsageDescription: Clicky Remote uses the camera to snap a photo and send it to WhatsApp on your Mac.
-        NSMicrophoneUsageDescription: Clicky Remote uses the microphone so you can speak questions to your Mac.
+        NSCameraUsageDescription: Peeky Remote uses the camera to snap a photo and send it to WhatsApp on your Mac.
+        NSMicrophoneUsageDescription: Peeky Remote uses the microphone so you can speak questions to your Mac.
         NSSpeechRecognitionUsageDescription: Your speech is transcribed on-device before being sent to your Mac.
-        NSLocalNetworkUsageDescription: Clicky Remote connects to the MyClicky app running on your Mac over your local network.
+        NSLocalNetworkUsageDescription: Peeky Remote connects to the Peeky app running on your Mac over your local network.
         UILaunchScreen: {}

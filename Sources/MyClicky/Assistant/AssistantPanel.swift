@@ -38,7 +38,7 @@ enum AssistantPhase: Equatable {
         case .ready: "press TALK, or click the mic"
         case .recording: "listening — keep talking"
         case .paused: "say a command (“open Dino Dad’s conversation”), or press STOP"
-        case .working: "Clicky is on it"
+        case .working: "Peeky is on it"
         case .done: "finished — press TALK for the next one"
         }
     }
@@ -55,7 +55,7 @@ enum AssistantPhase: Equatable {
 }
 
 /// The three card shapes. `half` is a narrow column — half the tall card's
-/// width at its full height — for parking Clicky down one side of the
+/// width at its full height — for parking Peeky down one side of the
 /// screen next to what's being worked on. Tabs go icon-only to fit.
 enum PanelSize: Int, CaseIterable, Comparable {
     case half, normal, tall
@@ -81,7 +81,7 @@ enum AssistantTab: String, CaseIterable {
     /// Listed first so it's the default, leftmost tab.
     case captureDictate = "Capture + Dictate"
     case ask = "Ask / Question Only"
-    /// Voice/typed commands Clicky *acts on* (e.g. "create a calendar event
+    /// Voice/typed commands Peeky *acts on* (e.g. "create a calendar event
     /// at 2pm"), same plan-and-do flow as the phone's TALK button.
     case talk = "Talk / Request"
 
@@ -192,7 +192,7 @@ final class AssistantState: ObservableObject {
     /// A Talk recording is still open after a command ran: the panel stays
     /// green until the next words arrive.
     @Published var chaining = false
-    /// Talk tab log: every command spoken and every line Clicky reported
+    /// Talk tab log: every command spoken and every line Peeky reported
     /// back, timestamped. ⌘K clears it like a terminal.
     @Published var talkLog: [TalkLogEntry] = []
 
@@ -265,7 +265,7 @@ final class AssistantState: ObservableObject {
     var imageForClipboard: NSImage? {
         clipboardChoice == .edited ? (editedCaptureImage ?? captureImage) : captureImage
     }
-    /// True while Clicky is reading an answer aloud.
+    /// True while Peeky is reading an answer aloud.
     @Published var isSpeaking = false
     /// Break coach: whether it's on, the countdown label, and the check-in
     /// text while one is waiting to be answered.
@@ -276,7 +276,7 @@ final class AssistantState: ObservableObject {
     var onCoachBreak: (() -> Void)?
     var onCoachSnooze: (() -> Void)?
     /// Whether the Ask tab shows replies as text instead of speaking them
-    /// (⌥⌘C questions land here too). Off by default — Clicky reads replies
+    /// (⌥⌘C questions land here too). Off by default — Peeky reads replies
     /// aloud unless the user turns "Read Response" on to read them itself.
     /// Persisted so the choice sticks between launches.
     @Published var textOnlyMode: Bool = UserDefaults.standard.object(forKey: AssistantState.textOnlyModeKey) as? Bool ?? false {
@@ -293,7 +293,7 @@ final class AssistantState: ObservableObject {
     /// the Stop button should be shown.
     var canStop: Bool { status == .thinking || status == .listening || isSpeaking }
     var onSubmit: ((String) -> Void)?
-    /// Talk tab: a command for Clicky to carry out on the Mac.
+    /// Talk tab: a command for Peeky to carry out on the Mac.
     var onDo: ((String) -> Void)?
     var onStop: (() -> Void)?
     /// Re-copies the current capture + dictation pair to the clipboard.
@@ -942,7 +942,7 @@ struct AssistantPanelView: View {
     /// The one line that tells the user where they are in the voice flow —
     /// and, above all, when they may speak a command. Red with moving bars
     /// while words are coming in; amber the moment they stop; purple while
-    /// Clicky works; green when it's finished. The whole panel shifts hue
+    /// Peeky works; green when it's finished. The whole panel shifts hue
     /// with it, but this strip says so in words.
     private var phaseStrip: some View {
         let phase = state.phase
@@ -1381,7 +1381,7 @@ struct AssistantPanelView: View {
     private var talkLogView: some View {
         VStack(alignment: .leading, spacing: 4) {
             if state.talkLog.isEmpty {
-                Text("Commands and what Clicky did with them show up here, timestamped. ⌘K clears.")
+                Text("Commands and what Peeky did with them show up here, timestamped. ⌘K clears.")
                     .font(.system(size: 13, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.4))
                     .padding(.top, 2)
@@ -1564,7 +1564,7 @@ struct AssistantPanelView: View {
     private var inputPlaceholder: String {
         switch state.tab {
         case .talk: ""
-        default: "Ask Clicky anything…"
+        default: "Ask Peeky anything…"
         }
     }
 
@@ -1576,7 +1576,7 @@ struct AssistantPanelView: View {
         let listening = state.status == .listening
         let idleHelp: String = switch state.tab {
         case .ask: "Ask by voice"
-        case .talk: "Say what you want Clicky to do"
+        case .talk: "Say what you want Peeky to do"
         case .captureDictate: "Start dictation"
         }
         return Button {
@@ -1596,7 +1596,7 @@ struct AssistantPanelView: View {
     }
 
     /// Labeled toggle in the bottom bar: on the Ask tab, switches whether the
-    /// user reads replies as text (on) or Clicky speaks them aloud (off, the
+    /// user reads replies as text (on) or Peeky speaks them aloud (off, the
     /// default, matching the ⌥⌘C flow).
     private var readAloudToggle: some View {
         Button {
@@ -1621,7 +1621,7 @@ struct AssistantPanelView: View {
         }
         .buttonStyle(.plain)
         .help(state.textOnlyMode
-              ? "Text only — click to have Clicky read replies aloud instead"
+              ? "Text only — click to have Peeky read replies aloud instead"
               : "Reading replies aloud — click to read them as text instead")
     }
 
@@ -1630,14 +1630,14 @@ struct AssistantPanelView: View {
             if state.tab == .captureDictate {
                 addMenu
             }
-            // Shell-prompt readout: `clicky on talk ❯` — the segments coloured
+            // Shell-prompt readout: `peeky on talk ❯` — the segments coloured
             // as a prompt colours them, the chevron in the phase colour.
             // Each word is pinned to one line so a narrow panel never breaks
-            // "clicky" into "cli / cky"; in the half column the two constant
+            // "peeky" into "cli / cky"; in the half column the two constant
             // words drop out and only `talk ❯ ready` remains.
             HStack(spacing: 6) {
                 if state.size != .half {
-                    Text("clicky")
+                    Text("peeky")
                         .foregroundStyle(Color(red: 0.35, green: 0.78, blue: 0.98))
                     Text("on")
                         .foregroundStyle(.white.opacity(0.6))
@@ -1664,7 +1664,7 @@ struct AssistantPanelView: View {
             Spacer()
             if state.size != .half {
             VStack(alignment: .trailing, spacing: 1) {
-                Text("CLICKY")
+                Text("PEEKY")
                     .font(.system(size: 10, weight: .heavy, design: .rounded))
                     .kerning(2)
                     .foregroundStyle(
@@ -1763,11 +1763,11 @@ struct AssistantPanelView: View {
             )
         }
         .buttonStyle(.plain)
-        .help(on ? "Break coach is on — Clicky checks in after 25 minutes at the computer. Click to turn off."
+        .help(on ? "Break coach is on — Peeky checks in after 25 minutes at the computer. Click to turn off."
                  : "Break coach is off. Click to turn on.")
     }
 
-    /// Clicky's check-in, with the two honest answers to it.
+    /// Peeky's check-in, with the two honest answers to it.
     private func coachCard(_ message: String) -> some View {
         let tint = Color(red: 0.35, green: 0.85, blue: 0.45)
         return VStack(alignment: .leading, spacing: 10) {
@@ -1849,7 +1849,7 @@ struct AssistantPanelView: View {
         .help("Send")
     }
 
-    /// Red stop button shown while Clicky is thinking or speaking.
+    /// Red stop button shown while Peeky is thinking or speaking.
     private var stopButton: some View {
         Button {
             state.onStop?()
@@ -1974,10 +1974,10 @@ struct AssistantPanelView: View {
                         replayButton
                     }
                 }
-                // "Read Response" on means the user reads the text — Clicky
-                // stays silent. Off means Clicky speaks it, so showing the
+                // "Read Response" on means the user reads the text — Peeky
+                // stays silent. Off means Peeky speaks it, so showing the
                 // text too would defeat the point of the toggle. Talk is
-                // always text: its answer is a running log of what Clicky is
+                // always text: its answer is a running log of what Peeky is
                 // doing, which is never spoken.
                 if state.textOnlyMode || state.tab == .talk {
                     // With a copied passage underneath, the answer (often just

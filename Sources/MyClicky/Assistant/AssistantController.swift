@@ -30,7 +30,7 @@ final class AssistantController {
     /// The passage a copy verb last put on the clipboard — what "that" means
     /// in "text that to Noah". Kept apart from `NSPasteboard.general` on
     /// purpose: the system clipboard is shared with every app on the Mac and
-    /// with Clicky's own paste-based typing, so it can change out from under
+    /// with Peeky's own paste-based typing, so it can change out from under
     /// a sentence that's still being spoken.
     private var lastCopiedText: String?
     /// Set when "email that to X" leaves a Gmail draft open, so a follow-up
@@ -102,7 +102,7 @@ final class AssistantController {
     /// brought forward for the picker to take keyboard focus.
     private func attachFileFromMac() {
         let open = NSOpenPanel()
-        open.title = "Add to Clicky"
+        open.title = "Add to Peeky"
         open.message = "Choose a file or folder to show in the capture preview."
         open.prompt = "Add"
         open.canChooseFiles = true
@@ -155,7 +155,7 @@ final class AssistantController {
     private enum RecordKind { case ask, dictate, talk }
     private var recordKind: RecordKind = .ask
     /// The app a Talk command should act on, captured when recording starts —
-    /// Clicky's own panel is non-activating, so this stays the real target.
+    /// Peeky's own panel is non-activating, so this stays the real target.
     private var talkTargetApp: NSRunningApplication?
     /// Talk streaming: while a Talk recording is still running, every pause
     /// hands the words said since the last pause to the planner, so "copy
@@ -221,7 +221,7 @@ final class AssistantController {
         driveCleanupHotkey.onHoldBegan = { [weak self] in self?.beginDriveCleanup() }
         driveCleanupHotkey.start()
 
-        // Clicky Remote (iOS app) commands over the local network.
+        // Peeky Remote (iOS app) commands over the local network.
         remote.onShow = { [weak self] in
             guard let self else { return }
             // A finished TALK leaves `talkStreaming` set (holding its green
@@ -458,8 +458,8 @@ final class AssistantController {
         remote.onDo = { [weak self] utterance in
             guard let self else { return }
             // Capture the real target BEFORE showing our own panel — otherwise
-            // if Clicky's panel itself is/becomes frontmost, the planner would
-            // read and act on Clicky's own UI instead of the intended app.
+            // if Peeky's panel itself is/becomes frontmost, the planner would
+            // read and act on Peeky's own UI instead of the intended app.
             if self.talkStreaming {
                 self.panel.state.transcript = utterance
                 self.finishTalkStreaming(final: utterance)
@@ -723,7 +723,7 @@ final class AssistantController {
     }
 
     /// Streaming dictation insert: while the user is talking to a Messages
-    /// thread Clicky opened, the words appear in the compose box as they're
+    /// thread Peeky opened, the words appear in the compose box as they're
     /// said — written in the background, so the app they're working in keeps
     /// focus — and Claude's polished version replaces them when the sentence
     /// ends. Only on an empty compose box: with a draft already there the
@@ -875,8 +875,8 @@ final class AssistantController {
         // outlives a single app: start talking with VS Code focused, click
         // into Safari on the other screen, and "copy the paragraph…" should
         // read Safari — not the app that was in front minutes ago (observed
-        // live: it read Clicky's own transcript back). Follow focus, unless
-        // focus is on Clicky's panel, in which case the last real app stands.
+        // live: it read Peeky's own transcript back). Follow focus, unless
+        // focus is on Peeky's panel, in which case the last real app stands.
         if let front = NSWorkspace.shared.frontmostApplication,
            front.bundleIdentifier != Bundle.main.bundleIdentifier {
             talkTargetApp = front
@@ -1171,7 +1171,7 @@ final class AssistantController {
             sendOpenDraft()
             return
         }
-        // A line Clicky typed at a terminal prompt is the most recent draft:
+        // A line Peeky typed at a terminal prompt is the most recent draft:
         // "run it" / "hit enter" presses Return (behind a confirm); "erase
         // that" backspaces it out.
         if terminalDraftIsCurrent {
@@ -1199,16 +1199,16 @@ final class AssistantController {
             eraseOpenMessagesDraft()
             return
         }
-        // "Undo that" reverts Clicky's last background write wherever it went
+        // "Undo that" reverts Peeky's last background write wherever it went
         // — not gated on a Messages thread, so an empty stack still gets a
         // spoken "nothing to undo" rather than being dictated somewhere.
         if Self.isUndoIt(utterance) {
             // A preview holding only the command's own words ("un undo that",
             // previewed before the phrase was recognisable) isn't something
-            // Clicky started writing — clear it silently and undo for real.
+            // Peeky started writing — clear it silently and undo for real.
             let previewIsCommand = ghost.map { Self.isUndoIt($0.written) } ?? false
             if let ghost, !ghost.written.isEmpty, !previewIsCommand {
-                // The last thing Clicky put on screen is the live preview
+                // The last thing Peeky put on screen is the live preview
                 // itself — that's what "undo that" means here, not the
                 // landed write before it.
                 ghost.clear()
@@ -1249,17 +1249,17 @@ final class AssistantController {
             remote.broadcast("STATUS \(message.replacingOccurrences(of: "\n", with: " "))")
             return
         }
-        // While a compose Clicky opened is on screen, what the user says next
+        // While a compose Peeky opened is on screen, what the user says next
         // is the email — "tell them I'm interested in the sales role" — not a
         // command. Screen-aware dictation: Claude writes it in their voice.
-        // Same for a Messages thread Clicky opened. Whichever was opened more
+        // Same for a Messages thread Peeky opened. Whichever was opened more
         // recently is the one being talked to.
         // …unless it's plainly a command — "actually, open David's
         // conversation" must not get typed to Dino Dad.
         let gateBypassed = Self.isAppCommand(utterance) || Self.isTerminalCommand(utterance)
         if gateBypassed { ghost?.clear() }
         let gmailActive = !gateBypassed && (gmailDraftOpenedAt.map { Date().timeIntervalSince($0) < 10 * 60 } ?? false)
-        // A thread Clicky opened, or one the user is simply looking at: with
+        // A thread Peeky opened, or one the user is simply looking at: with
         // Messages in front and a conversation showing, the next sentence is
         // the message. (Seen live: "open Messages" via the planner, then "I
         // will see you later today" — the planner typed it and proposed
@@ -1288,7 +1288,7 @@ final class AssistantController {
         // `activeScreen` follows the cursor, which on a multi-display setup
         // can point at a screen the app isn't even visible on, handing the
         // planner a picture with none of the UI it needs to act on.
-        // The display Clicky's panel sits on is the one the user is working
+        // The display Peeky's panel sits on is the one the user is working
         // on — they put it there. With two Safari windows on two screens,
         // this is what picks the right one to read.
         let screen = panel.screen ?? Self.screenShowing(targetApp) ?? activeScreen ?? NSScreen.main ?? NSScreen.screens[0]
@@ -1418,7 +1418,7 @@ final class AssistantController {
             .replacingOccurrences(of: "'", with: "")
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { !$0.isEmpty }
-        let leadIns: Set<String> = ["ok", "okay", "hey", "clicky", "please", "just", "um", "uh", "and", "so", "well"]
+        let leadIns: Set<String> = ["ok", "okay", "hey", "peeky", "clicky", "please", "just", "um", "uh", "and", "so", "well"]
         while let first = words.first, leadIns.contains(first), words.count > 1 { words.removeFirst() }
         words = stripStutters(words)
         guard !words.isEmpty, words.count <= 5 else { return nil }
@@ -1505,7 +1505,7 @@ final class AssistantController {
         }
     }
 
-    /// Stops whatever Clicky is doing right now: cancels the in-flight
+    /// Stops whatever Peeky is doing right now: cancels the in-flight
     /// request, silences speech, and returns the panel to Ready.
     private func stop() {
         requestID += 1
@@ -1860,7 +1860,7 @@ final class AssistantController {
         var words = utterance.lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted.subtracting(CharacterSet(charactersIn: "'’-")))
             .filter { !$0.isEmpty }
-        let leadIns: Set<String> = ["actually", "ok", "okay", "hey", "clicky", "can", "could", "would", "you", "please",
+        let leadIns: Set<String> = ["actually", "ok", "okay", "hey", "peeky", "clicky", "can", "could", "would", "you", "please",
                                     "now", "um", "uh", "so", "and", "then", "wait", "no", "instead", "just", "go", "let's", "lets"]
         while let first = words.first, leadIns.contains(first) { words.removeFirst() }
         let verbs: Set<String> = ["open", "bring", "pull", "show", "start", "switch", "get"]
@@ -2077,7 +2077,7 @@ final class AssistantController {
     }
 
     /// "Send it", "send the email", "send that" — a handful of words, no
-    /// planner round trip. Only fires while a Gmail draft Clicky opened is
+    /// planner round trip. Only fires while a Gmail draft Peeky opened is
     /// plausibly still on screen, so a stray "send" in normal speech won't
     /// mail a half-written message.
     private static func isSendIt(_ utterance: String) -> Bool {
@@ -2088,7 +2088,7 @@ final class AssistantController {
         let approval: Set<String> = ["ok", "okay", "looks", "good", "great", "perfect", "yes", "yeah", "yep",
                                      "alright", "all", "right", "and", "now", "go", "ahead", "please", "then",
                                      "that", "that's", "thats", "it's", "its", "fine", "cool", "nice", "to", "me", "just",
-                                     "can", "could", "would", "you", "let's", "lets", "hey", "clicky", "hit", "press"]
+                                     "can", "could", "would", "you", "let's", "lets", "hey", "peeky", "clicky", "hit", "press"]
         // "sent" is a common transcription of "send"; "fire/shoot it off" are colloquial sends.
         let sendVerbs: Set<String> = ["send", "sent", "fire", "shoot", "ship"]
         guard let sendAt = words.firstIndex(where: { sendVerbs.contains($0) }), words.count - sendAt <= 6,
@@ -2116,7 +2116,7 @@ final class AssistantController {
         var words = utterance.lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { !$0.isEmpty }
-        let leadIns: Set<String> = ["actually", "ok", "okay", "hey", "clicky", "no", "wait", "please", "just", "can", "you", "let's", "lets", "and", "now"]
+        let leadIns: Set<String> = ["actually", "ok", "okay", "hey", "peeky", "clicky", "no", "wait", "please", "just", "can", "you", "let's", "lets", "and", "now"]
         while let first = words.first, leadIns.contains(first) { words.removeFirst() }
         words = stripStutters(words)
         let joined = words.joined(separator: " ")
@@ -2136,13 +2136,13 @@ final class AssistantController {
     }
 
     /// "Undo that", "undo", "put it back", "revert that", "never mind, undo"
-    /// — revert Clicky's last background write. Kept tight (a verb plus
+    /// — revert Peeky's last background write. Kept tight (a verb plus
     /// filler) so "undo the second sentence" stays a revision for the drafter.
     static func isUndoIt(_ utterance: String) -> Bool {
         var words = utterance.lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { !$0.isEmpty }
-        let leadIns: Set<String> = ["actually", "ok", "okay", "hey", "clicky", "no", "wait", "please", "just", "can", "you",
+        let leadIns: Set<String> = ["actually", "ok", "okay", "hey", "peeky", "clicky", "no", "wait", "please", "just", "can", "you",
                                     "let's", "lets", "and", "now", "never", "mind", "nevermind", "oops", "uh", "um", "sorry"]
         while let first = words.first, leadIns.contains(first) { words.removeFirst() }
         words = stripStutters(words)
@@ -2162,7 +2162,7 @@ final class AssistantController {
         return words.dropFirst().allSatisfy { filler.contains($0) }
     }
 
-    /// Speech that is clearly an instruction to Clicky rather than words for
+    /// Speech that is clearly an instruction to Peeky rather than words for
     /// the open draft: "actually, let's open up a conversation with David",
     /// "switch to Safari", "write an email to Sam". Checked after stripping
     /// lead-ins, so a message that merely *contains* "open" still counts as
@@ -2171,7 +2171,7 @@ final class AssistantController {
         var words = utterance.lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted.subtracting(CharacterSet(charactersIn: "'")))
             .filter { !$0.isEmpty }
-        let leadIns: Set<String> = ["actually", "ok", "okay", "hey", "clicky", "let's", "lets", "can", "could", "you",
+        let leadIns: Set<String> = ["actually", "ok", "okay", "hey", "peeky", "clicky", "let's", "lets", "can", "could", "you",
                                     "please", "now", "um", "uh", "so", "and", "then", "wait", "no", "instead", "just", "go"]
         while let first = words.first, leadIns.contains(first) { words.removeFirst() }
         guard let verb = words.first else { return false }
@@ -2251,7 +2251,7 @@ final class AssistantController {
             } else if recent(gmail) {
                 await self.sendOpenGmailDraft()
             } else if MessagesActions.currentComposeText() != nil {
-                // Nothing Clicky drafted itself is current, but there's text
+                // Nothing Peeky drafted itself is current, but there's text
                 // sitting in an open Messages thread — typed by the planner
                 // ("open Messages", then dictating straight in) or by hand.
                 // Seen live: "looks good, send a text" after exactly that fell
@@ -2433,7 +2433,7 @@ final class AssistantController {
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { !$0.isEmpty }
         let leadIns: Set<String> = ["ok", "okay", "looks", "good", "great", "and", "now", "please", "then", "just",
-                                    "can", "could", "you", "let's", "lets", "hey", "clicky", "go", "ahead", "alright"]
+                                    "can", "could", "you", "let's", "lets", "hey", "peeky", "clicky", "go", "ahead", "alright"]
         while let first = words.first, leadIns.contains(first) { words.removeFirst() }
         guard let verb = words.first, ["publish", "deploy", "push"].contains(verb), words.count <= 6 else { return false }
         let filler: Set<String> = ["it", "that", "this", "the", "site", "page", "edit", "edits", "change", "changes",
@@ -2452,7 +2452,7 @@ final class AssistantController {
                                       "put", "write", "delete", "remove", "shorten", "expand", "fix", "update", "swap",
                                       "make", "turn", "edit", "correct"]
         if words.contains(where: { editVerbs.contains($0) }) { return false }
-        let leadIns: Set<String> = ["hey", "clicky", "ok", "okay", "so", "um", "uh", "can", "could", "would", "you",
+        let leadIns: Set<String> = ["hey", "peeky", "clicky", "ok", "okay", "so", "um", "uh", "can", "could", "would", "you",
                                     "please", "quick", "question", "i", "have", "a", "wanted", "to", "ask", "just"]
         while let first = words.first, leadIns.contains(first) { words.removeFirst() }
         guard let first = words.first else { return false }
@@ -2549,7 +2549,7 @@ final class AssistantController {
         synthesizer.stopSpeaking(at: .immediate)
         ring.hide()
         // What's really in the compose box counts as the draft — text left
-        // there from before Clicky opened this thread included — so "erase
+        // there from before Peeky opened this thread included — so "erase
         // that" / "make it shorter" have something to act on.
         let currentDraft = previewed ? nil : (messagesDraftText ?? MessagesActions.currentComposeText())
         panel.state.status = .thinking
@@ -2707,7 +2707,7 @@ final class AssistantController {
     // MARK: - Terminal as a write target
 
     /// The terminal line is the draft "send it" / "erase that" act on when
-    /// it's the most recent thing Clicky opened and it's still fresh.
+    /// it's the most recent thing Peeky opened and it's still fresh.
     private var terminalDraftIsCurrent: Bool {
         guard let opened = terminalDraftOpenedAt, Date().timeIntervalSince(opened) < 10 * 60 else { return false }
         return opened > (messagesDraftOpenedAt ?? .distantPast) && opened > (gmailDraftOpenedAt ?? .distantPast)
@@ -2769,7 +2769,7 @@ final class AssistantController {
     /// terminal because it happens to be open.
     static func terminalDictation(_ utterance: String, terminalActive: Bool) -> TerminalDictation? {
         var text = utterance.trimmingCharacters(in: .whitespacesAndNewlines)
-        let leadIns = ["actually", "ok", "okay", "hey", "clicky", "please", "now", "um", "uh", "so", "and then", "then",
+        let leadIns = ["actually", "ok", "okay", "hey", "peeky", "clicky", "please", "now", "um", "uh", "so", "and then", "then",
                        "can you", "could you", "would you", "let's", "lets", "just", "go ahead and"]
         var stripped = true
         while stripped {
@@ -2859,7 +2859,7 @@ final class AssistantController {
         var words = stripStutters(utterance.lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { !$0.isEmpty })
-        let leadIns: Set<String> = ["ok", "okay", "hey", "clicky", "please", "now", "and", "then", "just", "go", "ahead", "yes", "yeah"]
+        let leadIns: Set<String> = ["ok", "okay", "hey", "peeky", "clicky", "please", "now", "and", "then", "just", "go", "ahead", "yes", "yeah"]
         while words.count > 1, let first = words.first, leadIns.contains(first) { words.removeFirst() }
         guard !words.isEmpty, words.count <= 4 else { return false }
         let verbs: Set<String> = ["run", "execute", "enter", "return", "go", "fire", "submit"]
@@ -2875,7 +2875,7 @@ final class AssistantController {
 
     private func typeIntoTerminal(_ dictation: TerminalDictation) {
         let text = dictation.text, append = dictation.append, agent = dictation.agent
-        // The display you're working on: where Clicky's panel is, else the
+        // The display you're working on: where Peeky's panel is, else the
         // frontmost app's window, else the cursor.
         let working = panel.screen ?? Self.screenShowing(NSWorkspace.shared.frontmostApplication) ?? activeScreen
         var request = TerminalActions.Request(agent: dictation.agentName, anyAgent: agent && dictation.agentName == nil)
@@ -3188,7 +3188,7 @@ final class AssistantController {
 }
 
 /// Mirrors AVSpeechSynthesizer's speaking state onto the main actor so the
-/// panel can show a Stop button while Clicky is talking.
+/// panel can show a Stop button while Peeky is talking.
 private final class SpeechDelegate: NSObject, AVSpeechSynthesizerDelegate {
     var onSpeakingChanged: (@MainActor (Bool) -> Void)?
 

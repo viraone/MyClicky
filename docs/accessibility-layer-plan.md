@@ -1,4 +1,4 @@
-# Clicky as the Mac's accessibility layer — build plan
+# Peeky as the Mac's accessibility layer — build plan
 
 Goal: any app, controlled by voice from an iPhone, for people who can't use a
 mouse/keyboard well (ALS, stroke, arthritis, low vision, elderly).
@@ -56,7 +56,7 @@ email, and book a calendar event in under 60 seconds.
       Yes/No buttons, "What does it say?" sends `READ`
 - [x] Ran the iOS build on-device and tried the full demo flow for real —
       found and fixed three real bugs along the way: DO results invisible on
-      the Mac panel unless the Ask tab was forced, Clicky's own panel
+      the Mac panel unless the Ask tab was forced, Peeky's own panel
       self-targeting when it became frontmost, and a confirmed irreversible
       step (press return / type) misfiring into the wrong window because
       confirming steals keyboard focus — all fixed in `ActionPlanner.swift`
@@ -86,8 +86,8 @@ email, and book a calendar event in under 60 seconds.
   app the plan is for. Focus drifts constantly (user clicks, windows opening).
   `Cmd+N` was landing in Chrome for several runs. Every input step now
   reactivates the target app first.
-- Never screenshot with Clicky's own panel visible: it contains an empty
-  "Ask Clicky anything…" field, which is a perfect decoy when asking Claude to
+- Never screenshot with Peeky's own panel visible: it contains an empty
+  "Ask Peeky anything…" field, which is a perfect decoy when asking Claude to
   find "the empty text field". The DO capture excludes our own windows.
 - Screenshot the display the *target app* is on, not `activeScreen` (which
   follows the cursor). On two monitors these differ and you photograph the

@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The floating heads-up display: a click-through strip at the top of the
 /// screen you're working on that shows the words as they're heard, what
-/// Clicky decided they meant, and whether it went through (green), is
+/// Peeky decided they meant, and whether it went through (green), is
 /// waiting on you (amber), or was taken back / refused (red). It never takes
 /// focus and never takes a click; it fades a few seconds after the last thing
 /// happened.

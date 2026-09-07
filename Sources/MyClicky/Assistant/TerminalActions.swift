@@ -16,7 +16,7 @@ import os
 /// events posted to its process are dropped; and `TIOCSTI` on the tab's tty
 /// is root-only on macOS. iTerm can `write text … newline NO`, so there the
 /// staged line is really at the prompt; Terminal.app can only `do script`,
-/// so Clicky holds the line itself and it appears when it runs.
+/// so Peeky holds the line itself and it appears when it runs.
 @MainActor
 enum TerminalActions {
     private static let log = Logger(subsystem: "com.local.MyClicky", category: "TerminalActions")
@@ -368,7 +368,7 @@ enum TerminalActions {
 @MainActor
 final class TerminalLineTarget: WriteUndoTarget {
     let session: TerminalActions.Session
-    /// What Clicky has staged at this prompt and not yet run or erased.
+    /// What Peeky has staged at this prompt and not yet run or erased.
     private(set) var typed: String
 
     init(session: TerminalActions.Session, typed: String) {

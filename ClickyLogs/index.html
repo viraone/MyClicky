@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ClickyLogs — Weekly Observability</title>
+<title>PeekyLogs — Weekly Observability</title>
 <style>
   :root {
     --bg: #12141c;
@@ -126,7 +126,7 @@
 <body>
 <header>
   <div class="logo">🖱️</div>
-  <h1>Clicky<span>Logs</span></h1>
+  <h1>Peeky<span>Logs</span></h1>
   <span class="live">LOCAL · PRIVATE</span>
   <div class="range">
     <b id="rangeLabel">—</b>
@@ -152,7 +152,7 @@
 
   <div class="grid cols">
     <div class="card">
-      <h2>Top sites you used Clicky on</h2>
+      <h2>Top sites you used Peeky on</h2>
       <div id="topSites"></div>
     </div>
     <div class="card">
@@ -171,7 +171,7 @@
     </div>
   </div>
 
-  <footer>ClickyLogs · single pane of glass for your Clicky assistant · data stays on this Mac</footer>
+  <footer>PeekyLogs · single pane of glass for your Peeky assistant · data stays on this Mac</footer>
 </main>
 
 <script src="data.js"></script>
@@ -207,7 +207,7 @@ $("kpis").innerHTML = kpis.map(([c, n, l]) =>
 // Stacked per-day bar chart (SVG)
 (function () {
   const days = D.perDay || [];
-  if (!days.length) { $("perDayChart").innerHTML = `<div class="empty">No events yet — use Clicky and re-run the report.</div>`; return; }
+  if (!days.length) { $("perDayChart").innerHTML = `<div class="empty">No events yet — use Peeky and re-run the report.</div>`; return; }
   const W = 560, H = 190, pad = 30, bw = Math.min(52, (W - pad * 2) / days.length * 0.6);
   const max = Math.max(1, ...days.map(d => TYPES.reduce((s, k) => s + (d[k] || 0), 0)));
   let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%">`;
@@ -248,7 +248,7 @@ $("kpis").innerHTML = kpis.map(([c, n, l]) =>
 
 // Horizontal bar lists
 function barList(el, rows, fmt) {
-  if (!rows.length) { el.innerHTML = `<div class="empty">Nothing tracked yet — data appears as you use your Mac with Clicky running.</div>`; return; }
+  if (!rows.length) { el.innerHTML = `<div class="empty">Nothing tracked yet — data appears as you use your Mac with Peeky running.</div>`; return; }
   const max = Math.max(...rows.map(r => r.value));
   el.innerHTML = rows.map(r => `
     <div class="barrow">

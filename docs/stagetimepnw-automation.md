@@ -1,10 +1,10 @@
-# StageTimePNW automation — working with Clicky, Appium, and a mock backend
+# StageTimePNW automation — working with Peeky, Appium, and a mock backend
 
 Repos:
 - App: https://github.com/viraone/StageTimePNW (SwiftUI + Supabase Auth)
 - Tests: https://github.com/viraone/StageTimePNW_Automation (pytest + Appium-Python-Client, XCUITest)
 
-## 1. Two-screen layout + Clicky
+## 1. Two-screen layout + Peeky
 
 **Screen 1 (main):** Xcode with `StageTimePNW.xcodeproj` open, iOS Simulator
 (iPhone 17 Pro Max, iOS 26.5) next to it.
@@ -29,17 +29,17 @@ Inspector). On one screen you alt-tab between them and lose the traceback the
 moment you switch to Xcode. With two screens nothing ever hides: Screen 1 is
 "what the app is/does", Screen 2 is "what the tests say about it".
 
-### How Clicky picks what to look at
+### How Peeky picks what to look at
 
 Two rules from `AssistantController` / `EditorContextReader` decide what
-Clicky sends to Claude when you hold ⌥⌘C:
+Peeky sends to Claude when you hold ⌥⌘C:
 
 1. **Which display?** The one the *mouse cursor* is on, not the one with the
-   active window. Move the pointer onto Screen 2 and Clicky screenshots Screen 2
+   active window. Move the pointer onto Screen 2 and Peeky screenshots Screen 2
    even if Xcode on Screen 1 is still the active app.
 2. **Editor override.** If the *frontmost app* is Xcode (or VS Code, Cursor,
    Android Studio, JetBrains, Sublime, Zed) **and** the keyboard focus is in the
-   editor text area, Clicky skips the screenshot and sends the focused file's
+   editor text area, Peeky skips the screenshot and sends the focused file's
    full text via the Accessibility API. Focus in the navigator or console
    doesn't count — click inside the code first.
 
@@ -51,7 +51,7 @@ target.** The four moves below all follow from that.
 **1. Ask about a failure (cursor on Screen 2, ⌥⌘C).**
 pytest prints a red traceback in pane B. Click nothing — just move the pointer
 over the terminal, hold ⌥⌘C, say "why did this test fail and what predicate
-should I use instead?", release. Clicky screenshots Screen 2 (traceback +
+should I use instead?", release. Peeky screenshots Screen 2 (traceback +
 Appium log + Inspector tree if visible), sends it with your question, speaks
 the answer and shows it in the floating panel. The panel appears near the
 cursor, so it lands on Screen 2 and doesn't cover the simulator. Works for
@@ -62,9 +62,9 @@ cursor, so it lands on Screen 2 and doesn't cover the simulator. Works for
 Click inside `AuthView.swift` in Xcode's editor so it has focus, hold ⌥⌘C,
 say "list every TextField, SecureField and Button in this file and give me an
 accessibilityIdentifier for each, matching the signin_ naming in LoginView".
-Clicky sends the real file text, so the answer references exact lines, not
-guessed pixels. Clicky **shows** the code in its panel; you paste it into
-Xcode yourself (Clicky doesn't type into Xcode). Also good for "what does
+Peeky sends the real file text, so the answer references exact lines, not
+guessed pixels. Peeky **shows** the code in its panel; you paste it into
+Xcode yourself (Peeky doesn't type into Xcode). Also good for "what does
 handleSignUp validate before calling the network" — the answer is exactly what
 your negative tests should assert.
 
@@ -88,13 +88,13 @@ chat. Escape cancels.
   cleaned-up text is on the clipboard. Paste into Xcode or `git commit -m`.
 - **Type a question instead of speaking** — the Ask panel has a text field, useful
   when pasting an exact error string.
-- **Clicky Remote (iPhone)** — with the phone on the desk, tap **ASK**, speak,
+- **Peeky Remote (iPhone)** — with the phone on the desk, tap **ASK**, speak,
   tap STOP: the Mac answers exactly as for ⌥⌘C (the pointer still decides which
   display is screenshotted). **CAPTURE** triggers the region grab, **DICTATE**
-  goes to the clipboard, **CLICKY** shows/hides the panel. **TALK** is action
+  goes to the clipboard, **PEEKY** shows/hides the panel. **TALK** is action
   mode (`DO …` — click/type in the frontmost app), not for questions. Hands
   never leave the keyboard, so pytest/Xcode keep focus.
-- **Ask "click it"** — after Clicky highlights something in an answer, "click
+- **Ask "click it"** — after Peeky highlights something in an answer, "click
   it" moves the mouse there after a confirm dialog. Handy for "click the Rerun
   button in Appium Inspector" while your hands are on the phone.
 
@@ -291,7 +291,7 @@ TextField("", text: $email)
 ```
 
 Tip: with `AuthView.swift` open in Xcode, hold ⌥⌘C and say "add these
-accessibility identifiers" while this table is on Screen 2 — Clicky reads the
+accessibility identifiers" while this table is on Screen 2 — Peeky reads the
 file text directly.
 
 ## 4. First test: user sign-up

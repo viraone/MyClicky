@@ -6,7 +6,7 @@ private let log = Logger(subsystem: "com.myclicky", category: "siteedit")
 /// Editing the Mobile SDET study site (sdet-master-tracker) by voice.
 ///
 /// The page puts a box into edit mode when the user clicks its pencil, and
-/// records that in the URL as `#edit=<data-clicky-id>`. Clicky reads that
+/// records that in the URL as `#edit=<data-clicky-id>`. Peeky reads that
 /// from the browser tab — the browser needn't be frontmost — asks Claude for
 /// the rewrite, then lands the result in two places: the live DOM through
 /// the page's `window.clickyEdit` API (so it appears on the other screen
@@ -109,14 +109,14 @@ enum SiteEditActions {
 
     // MARK: - Answer card on the page
 
-    /// Shows the "Clicky is thinking" card on the site tab, quoting the question.
+    /// Shows the "Peeky is thinking" card on the site tab, quoting the question.
     static func showThinking(_ question: String) {
         _ = BrowserTabReader.runJavaScript(
             "window.clickyEdit && window.clickyEdit.thinking && window.clickyEdit.thinking(\(jsString(question)))",
             inTabMatching: isSite)
     }
 
-    /// Renders Clicky's answer on the site tab (under the box in edit mode,
+    /// Renders Peeky's answer on the site tab (under the box in edit mode,
     /// else floating), so it can be read there rather than only in the panel.
     @discardableResult
     static func showReply(_ answer: String, question: String) -> Bool {
@@ -234,7 +234,7 @@ enum SiteEditActions {
     private enum SaveError: LocalizedError {
         case conflict
         var errorDescription: String? {
-            "This box changed on disk, or Clicky lost access to the tab. Copy your edit before refreshing; it was not overwritten."
+            "This box changed on disk, or Peeky lost access to the tab. Copy your edit before refreshing; it was not overwritten."
         }
     }
     private static var publishing = false
@@ -243,13 +243,13 @@ enum SiteEditActions {
 
     /// Commits every change in the site repo and pushes. Returns a sentence
     /// for the user.
-    static func publish(repo: URL = repoURL, message: String = "Edit via Clicky") async -> (ok: Bool, message: String) {
+    static func publish(repo: URL = repoURL, message: String = "Edit via Peeky") async -> (ok: Bool, message: String) {
         guard !publishing else { return (false, "Another publish is running. Try saving again in a moment.") }
         publishing = true
         defer { publishing = false }
         let steps: [[String]] = [
             ["git", "add", "--", "cs198-analogy.html"],
-            ["git", "-c", "user.name=Clicky", "-c", "user.email=clicky@local", "commit", "--only", "-q", "-m", message, "--", "cs198-analogy.html"],
+            ["git", "-c", "user.name=Peeky", "-c", "user.email=peeky@local", "commit", "--only", "-q", "-m", message, "--", "cs198-analogy.html"],
             ["git", "push", "-q", "origin", "HEAD"],
         ]
         for step in steps {

@@ -23,11 +23,11 @@
 		<string>_clicky._tcp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Clicky Remote connects to the MyClicky app running on your Mac over your local network.</string>
+	<string>Peeky Remote connects to the Peeky app running on your Mac over your local network.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Clicky Remote uses the camera to snap a photo and send it to WhatsApp on your Mac.</string>
+	<string>Peeky Remote uses the camera to snap a photo and send it to WhatsApp on your Mac.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Clicky Remote uses the microphone so you can speak questions to your Mac.</string>
+	<string>Peeky Remote uses the microphone so you can speak questions to your Mac.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Your speech is transcribed on-device before being sent to your Mac.</string>
 	<key>UILaunchScreen</key>

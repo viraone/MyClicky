@@ -9,7 +9,7 @@ final class TerminalDictationTests: XCTestCase {
 
     func testShellPhrasings() {
         XCTAssertEqual(text("tell the terminal to run the tests"), "run the tests")
-        XCTAssertEqual(text("Clicky, tell the terminal npm test"), "npm test")
+        XCTAssertEqual(text("Peeky, tell the terminal npm test"), "npm test")
         XCTAssertEqual(text("in the terminal, type git status"), "git status")
         XCTAssertEqual(text("in the terminal run swift build"), "swift build")
         XCTAssertEqual(text("type make in the terminal"), "make")

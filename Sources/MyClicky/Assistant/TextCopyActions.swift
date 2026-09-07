@@ -183,7 +183,7 @@ enum TextCopyActions {
     }
 
     /// Puts the passage on the system clipboard so ⌘V works normally. The
-    /// copy Clicky remembers is held separately by the controller — the
+    /// copy Peeky remembers is held separately by the controller — the
     /// system clipboard is shared with everything else on the Mac and can be
     /// overwritten a second later.
     static func put(_ text: String, onClipboard: Bool) {

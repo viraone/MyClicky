@@ -38,8 +38,8 @@ actor ScreenCaptureService {
 
     /// Captures the full display and returns a downscaled JPEG suitable for
     /// sending to a vision model.
-    /// `excludingOwnWindows` leaves Clicky's own panels out of the shot. The
-    /// assistant panel contains a big empty "Ask Clicky anything…" field, so
+    /// `excludingOwnWindows` leaves Peeky's own panels out of the shot. The
+    /// assistant panel contains a big empty "Ask Peeky anything…" field, so
     /// a screenshot including it hands the planner a perfect decoy when it's
     /// asked to find "the empty text field to type into".
     func captureDisplayJPEG(screen: NSScreen, maxDimension: CGFloat = 1600, quality: CGFloat = 0.7,

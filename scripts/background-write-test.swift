@@ -20,7 +20,7 @@
 import AppKit
 import ApplicationServices
 
-let marker = "Clicky background write \(Int(Date().timeIntervalSince1970))\n\nSecond paragraph — should land too."
+let marker = "Peeky background write \(Int(Date().timeIntervalSince1970))\n\nSecond paragraph — should land too."
 var failures = 0
 
 func check(_ ok: Bool, _ what: String) {
@@ -67,7 +67,7 @@ guard let mail = NSRunningApplication.runningApplications(withBundleIdentifier: 
 
 // A compose window via a mailto: URL opened in the background (no Apple
 // Events → no Automation permission prompt, and Mail is not activated).
-let subject = "Clicky background write test"
+let subject = "Peeky background write test"
 var components = URLComponents(string: "mailto:")!
 components.queryItems = [URLQueryItem(name: "subject", value: subject)]
 let openConfig = NSWorkspace.OpenConfiguration()

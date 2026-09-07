@@ -178,8 +178,8 @@ final class WriteUndoStackTests: XCTestCase {
     func testUserTypedSinceIsForcedRevert() {
         let stack = WriteUndoStack()
         let field = FakeField("f", value: "before")
-        field.write("clicky wrote this", on: stack)
-        field.value = "clicky wrote this and then I typed more"
+        field.write("peeky wrote this", on: stack)
+        field.value = "peeky wrote this and then I typed more"
 
         let outcome = stack.undoLast()
         XCTAssertEqual(outcome, .restored(label: "f", previousValue: "before", forced: true))
@@ -248,7 +248,7 @@ final class BackgroundWriteResultTests: XCTestCase {
 final class UndoPhraseTests: XCTestCase {
     func testUndoPhrasesMatch() {
         for phrase in ["undo", "Undo that", "undo it", "put it back", "put that back", "revert that", "revert",
-                       "never mind, undo", "Clicky, undo that", "actually undo that", "oops undo", "take it back",
+                       "never mind, undo", "Peeky, undo that", "actually undo that", "oops undo", "take it back",
                        "change it back", "undo the last one", "Okay, undo that please.", "Un Undo that", "undo undo that", "Un— undo"] {
             XCTAssertTrue(AssistantController.isUndoIt(phrase), "should match: \(phrase)")
         }
@@ -275,7 +275,7 @@ final class ConversationOpenPhraseTests: XCTestCase {
             ("Actually, open up a text with Dave please", "Dave"),
             ("show me the conversation with David Babu", "David Babu"),
             ("start a new message to Sam", "Sam"),
-            ("hey clicky open the thread with mom", "Mom"),
+            ("hey peeky open the thread with mom", "Mom"),
         ]
         for (phrase, name) in cases {
             XCTAssertEqual(AssistantController.conversationOpenRequest(phrase), name, phrase)

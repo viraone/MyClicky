@@ -52,7 +52,7 @@ enum GmailDrafter {
               let data = raw.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: String] else { return nil }
         let chips = json["to"] ?? ""
-        // Chips often carry only the address; the name Clicky resolved reads better in a greeting.
+        // Chips often carry only the address; the name Peeky resolved reads better in a greeting.
         let to = (recipientHint?.isEmpty == false && !chips.contains("<")) ? recipientHint! : chips
         return Compose(to: to, subject: json["subject"] ?? "",
                        body: (json["body"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
