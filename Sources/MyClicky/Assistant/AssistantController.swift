@@ -1782,14 +1782,18 @@ final class AssistantController {
                                     "let's", "lets", "and", "now", "never", "mind", "nevermind", "oops", "uh", "um", "sorry"]
         while let first = words.first, leadIns.contains(first) { words.removeFirst() }
         guard !words.isEmpty else { return false }
-        let joined = words.joined(separator: " ")
-        let phrases = ["put it back", "put that back", "put the text back", "put my text back", "take that back", "take it back",
-                       "bring it back", "bring that back", "change it back", "go back to what it was", "go back to how it was"]
-        if phrases.contains(where: { joined.hasPrefix($0) }) { return true }
-        let verbs: Set<String> = ["undo", "revert", "unsend"]
-        guard let verb = words.first, verbs.contains(verb), words.count <= 6 else { return false }
         let filler: Set<String> = ["it", "that", "this", "the", "last", "one", "thing", "write", "change", "edit",
                                    "message", "text", "draft", "please", "now", "again"]
+        let phrases = ["put it back", "put that back", "put the text back", "put my text back", "take that back", "take it back",
+                       "bring it back", "bring that back", "change it back", "go back to what it was", "go back to how it was"]
+        for phrase in phrases.map({ $0.split(separator: " ").map(String.init) })
+        where words.count <= phrase.count + 3 && words.starts(with: phrase) {
+            // "Put it back on the shelf tomorrow" is dictation; only the bare
+            // phrase (plus filler) is the command.
+            return words.dropFirst(phrase.count).allSatisfy { filler.contains($0) }
+        }
+        let verbs: Set<String> = ["undo", "revert", "unsend"]
+        guard let verb = words.first, verbs.contains(verb), words.count <= 6 else { return false }
         return words.dropFirst().allSatisfy { filler.contains($0) }
     }
 
