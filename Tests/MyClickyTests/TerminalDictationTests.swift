@@ -104,3 +104,29 @@ final class TerminalTargetingTests: XCTestCase {
         XCTAssertEqual(t?.screen, .index(2))
     }
 }
+
+@MainActor
+final class DirectAddressTests: XCTestCase {
+    func testAddressingTheAgentByName() {
+        let d = AssistantController.terminalDictation("Claude, what does this function do?", terminalActive: false)
+        XCTAssertEqual(d?.agent, true)
+        XCTAssertEqual(d?.agentName, "Claude Code")
+        XCTAssertEqual(d?.text, "what does this function do?")
+
+        let c = AssistantController.terminalDictation("hey copilot explain the failing test", terminalActive: false)
+        XCTAssertEqual(c?.agentName, "Copilot CLI")
+        XCTAssertEqual(c?.text, "explain the failing test")
+    }
+
+    func testRecognizerMishearings() {
+        XCTAssertEqual(AssistantController.terminalDictation("cloud what does this do", terminalActive: false)?.agentName, "Claude Code")
+        XCTAssertEqual(AssistantController.terminalDictation("tell co-pilot to run the tests", terminalActive: false)?.agentName, "Copilot CLI")
+        XCTAssertEqual(TerminalActions.agentName(spoken: "Co Pilot"), "Copilot CLI")
+    }
+
+    func testOrdinaryQuestionsAreNotAgentCommands() {
+        XCTAssertNil(AssistantController.terminalDictation("what does this function do?", terminalActive: false))
+        XCTAssertNil(AssistantController.terminalDictation("the agent is slow today", terminalActive: false))
+        XCTAssertNil(AssistantController.terminalDictation("open the cursor settings", terminalActive: false))
+    }
+}
