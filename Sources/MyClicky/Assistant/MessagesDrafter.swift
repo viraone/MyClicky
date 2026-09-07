@@ -53,7 +53,9 @@ enum MessagesDrafter {
             payload += "\nRecent messages on screen, oldest first (the sender's own may be among them):\n<messages>\n"
                      + transcript.joined(separator: "\n") + "\n</messages>\n"
         }
-        let json = try await claude.requestJSON(system: system, userText: payload, maxTokens: 600, timeout: 45)
+        // A one-line text in the sender's voice doesn't need deep thought, and the
+        // user is watching the compose box wait: low effort is the latency knob.
+        let json = try await claude.requestJSON(system: system, userText: payload, maxTokens: 600, timeout: 45, effort: "low")
         if (json["action"] as? String)?.lowercased() == "erase" { return .erase }
         guard let text = (json["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
             throw AnthropicService.ServiceError.emptyAnswer
