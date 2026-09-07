@@ -14,12 +14,21 @@ struct AXElement {
     let enabled: Bool
 }
 
-/// Outcome of `AXActions.writeTextInBackground`. Anything but `.success`
-/// means the text is NOT in the field and the caller should fall back to the
+/// Outcome of `AXActions.writeTextInBackground`. Tri-state on the happy
+/// side — `.success` (the field really changed) vs `.suspectedNoop` (the
+/// field already held that text) — and anything with `needsFallback` means
+/// the text is NOT in the field and the caller should fall back to the
 /// focus-and-return path (activate → click → paste).
 enum BackgroundWriteResult: Equatable {
-    /// The value was set and read back identical.
+    /// The value was set, read back identical, and differs from what the
+    /// field held before — a real change (and an undoable one).
     case success
+    /// The set call returned success and the read-back matches, but the
+    /// field already held exactly this text before the write: nothing
+    /// actually changed. The text *is* in the field, so no fallback is
+    /// needed, but there is nothing to undo and callers shouldn't announce
+    /// it as a fresh write.
+    case suspectedNoop
     /// The set call returned success but the value read back differs — the
     /// target accepted the call and ignored it (typical of web `contenteditable`
     /// boxes, whose real state lives in the DOM and only moves on input events).
@@ -32,7 +41,10 @@ enum BackgroundWriteResult: Equatable {
     /// known-unreliable target that is never attempted; go straight to fallback.
     case unsupportedTarget
 
-    var needsFallback: Bool { self != .success }
+    /// The text is in the field (either we put it there or it was already
+    /// there). Use this, not `== .success`, to decide whether to fall back.
+    var landed: Bool { self == .success || self == .suspectedNoop }
+    var needsFallback: Bool { !landed }
 }
 
 /// Generic verbs over the frontmost (or a given) app, built entirely on top
@@ -309,8 +321,21 @@ enum AXActions {
     /// detected first and returned as `.unsupportedTarget` without trying,
     /// since `contenteditable` editors ignore raw AX sets. Callers should treat
     /// any `needsFallback` result as "use the focus-and-return path instead".
+    ///
+    /// **No-op detection.** The value is also read *before* the set; when it
+    /// already equalled `text`, the result is `.suspectedNoop` rather than
+    /// `.success` — the text is there, but nothing changed.
+    ///
+    /// **Undo.** Every real change (`.success`) with `undoable` left on is
+    /// snapshotted onto `WriteUndoStack.shared` so "undo that" can put the
+    /// previous value back. Streaming previews pass `undoable: false` and
+    /// coalesce through `WriteUndoStack.beginCoalescing` instead, so a dozen
+    /// partial-transcript writes don't become a dozen undo steps. `label` is
+    /// what undo will call the field ("Messages · Dino Dad"); defaults to the
+    /// owning app's name.
     @MainActor
-    static func writeTextInBackground(to element: AXUIElement, text: String, quiet: Bool = false) -> BackgroundWriteResult {
+    static func writeTextInBackground(to element: AXUIElement, text: String, quiet: Bool = false,
+                                      undoable: Bool = true, label: String? = nil) -> BackgroundWriteResult {
         guard AXIsProcessTrusted() else {
             log.notice("bgwrite: accessibility not granted")
             return .permissionDenied
@@ -327,6 +352,7 @@ enum AXActions {
             log.notice("bgwrite: AXValue not settable (\(settableStatus.rawValue))")
             return .elementNotWritable
         }
+        let previous = (AccessibilityFinder.attribute(element, kAXValueAttribute) as? String) ?? ""
         let setStatus = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFString)
         switch setStatus {
         case .success: break
@@ -345,8 +371,31 @@ enum AXActions {
             // Can't happen from this code path; logged so a regression is loud.
             log.error("bgwrite: frontmost app changed during write (\(frontBefore?.localizedName ?? "?", privacy: .public) → \(frontAfter?.localizedName ?? "?", privacy: .public))")
         }
-        if !quiet { log.notice("bgwrite: ok (\(text.count) chars)") }
+        if normalizedLines(previous) == normalizedLines(text) {
+            if !quiet { log.notice("bgwrite: suspected no-op — field already held this text (\(text.count) chars)") }
+            // A coalesced preview may still have moved the field from its
+            // original value to here; the stack decides whether that counts.
+            if undoable {
+                WriteUndoStack.shared.record(target: AXWriteTarget(element: element), previousValue: previous,
+                                             newValue: text, label: label ?? ownerName(of: element))
+            }
+            return .suspectedNoop
+        }
+        if !quiet { log.notice("bgwrite: ok (\(previous.count) → \(text.count) chars)") }
+        if undoable {
+            WriteUndoStack.shared.record(target: AXWriteTarget(element: element), previousValue: previous,
+                                         newValue: text, label: label ?? ownerName(of: element))
+        }
         return .success
+    }
+
+    /// The name of the app that owns `element`, for undo's "restored X in
+    /// Messages" line.
+    static func ownerName(of element: AXUIElement) -> String {
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(element, &pid) == .success,
+              let name = NSRunningApplication(processIdentifier: pid)?.localizedName else { return "the field" }
+        return name
     }
 
     /// Finds the editable field in `app` whose label/placeholder contains
@@ -385,7 +434,7 @@ enum AXActions {
     }
 
     /// Text views may normalise line endings on the way in; compare on `\n`.
-    private static func normalizedLines(_ text: String) -> String {
+    static func normalizedLines(_ text: String) -> String {
         text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
     }
 

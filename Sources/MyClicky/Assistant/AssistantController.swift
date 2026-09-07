@@ -662,7 +662,7 @@ final class AssistantController {
         // ("send it") are more likely a command than the start of a message.
         guard pending.count >= 3 else { return }
         let utterance = pending.joined(separator: " ")
-        if Self.isSendIt(utterance) || Self.isEraseIt(utterance) || Self.isNeverMind(utterance) || Self.isAppCommand(utterance) {
+        if Self.isSendIt(utterance) || Self.isEraseIt(utterance) || Self.isUndoIt(utterance) || Self.isNeverMind(utterance) || Self.isAppCommand(utterance) {
             ghostDraft?.clear()
             return
         }
@@ -715,10 +715,10 @@ final class AssistantController {
         guard ghostDraft != nil || messagesActive else { return nil }
         let pending = pendingTalkWords(in: Self.words(transcript), quiet: true)
         guard let last = pending.last.map(Self.normalizedWord) else { return nil }
-        // Commands to the thread ("send it", "erase that") and thread switches
-        // should still run promptly.
+        // Commands to the thread ("send it", "erase that", "undo") and thread
+        // switches should still run promptly.
         let utterance = pending.joined(separator: " ")
-        if Self.isSendIt(utterance) || Self.isEraseIt(utterance) || Self.isNeverMind(utterance) || Self.isAppCommand(utterance) {
+        if Self.isSendIt(utterance) || Self.isEraseIt(utterance) || Self.isUndoIt(utterance) || Self.isNeverMind(utterance) || Self.isAppCommand(utterance) {
             return nil
         }
         let dangling: Set<String> = ["a", "an", "the", "and", "or", "but", "so", "to", "at", "in", "on", "of", "for",
@@ -1075,6 +1075,14 @@ final class AssistantController {
         if Self.isEraseIt(utterance), messagesDraftOpenedAt.map({ Date().timeIntervalSince($0) < 10 * 60 }) ?? false {
             ghost?.clear()
             eraseOpenMessagesDraft()
+            return
+        }
+        // "Undo that" reverts Clicky's last background write wherever it went
+        // — not gated on a Messages thread, so an empty stack still gets a
+        // spoken "nothing to undo" rather than being dictated somewhere.
+        if Self.isUndoIt(utterance) {
+            ghost?.clear()
+            undoLastWrite()
             return
         }
         if Self.isNeverMind(utterance), gmailDraftOpenedAt != nil || messagesDraftOpenedAt != nil {
@@ -1763,6 +1771,28 @@ final class AssistantController {
         return ["never mind", "nevermind", "cancel", "cancel that", "stop", "forget it", "leave it"].contains(t)
     }
 
+    /// "Undo that", "undo", "put it back", "revert that", "never mind, undo"
+    /// — revert Clicky's last background write. Kept tight (a verb plus
+    /// filler) so "undo the second sentence" stays a revision for the drafter.
+    static func isUndoIt(_ utterance: String) -> Bool {
+        var words = utterance.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+        let leadIns: Set<String> = ["actually", "ok", "okay", "hey", "clicky", "no", "wait", "please", "just", "can", "you",
+                                    "let's", "lets", "and", "now", "never", "mind", "nevermind", "oops", "uh", "um", "sorry"]
+        while let first = words.first, leadIns.contains(first) { words.removeFirst() }
+        guard !words.isEmpty else { return false }
+        let joined = words.joined(separator: " ")
+        let phrases = ["put it back", "put that back", "put the text back", "put my text back", "take that back", "take it back",
+                       "bring it back", "bring that back", "change it back", "go back to what it was", "go back to how it was"]
+        if phrases.contains(where: { joined.hasPrefix($0) }) { return true }
+        let verbs: Set<String> = ["undo", "revert", "unsend"]
+        guard let verb = words.first, verbs.contains(verb), words.count <= 6 else { return false }
+        let filler: Set<String> = ["it", "that", "this", "the", "last", "one", "thing", "write", "change", "edit",
+                                   "message", "text", "draft", "please", "now", "again"]
+        return words.dropFirst().allSatisfy { filler.contains($0) }
+    }
+
     /// Speech that is clearly an instruction to Clicky rather than words for
     /// the open draft: "actually, let's open up a conversation with David",
     /// "switch to Safari", "write an email to Sam". Checked after stripping
@@ -1864,13 +1894,14 @@ final class AssistantController {
         if background.needsFallback {
             log.notice("messages erase: background write \(String(describing: background), privacy: .public) — falling back to focus-and-type")
         }
-        let ok = background == .success || MessagesActions.typeIntoOpenConversation("")
-        ActivityLog.recordAction("messages-draft-erase", ["via": background == .success ? "background" : "foreground", "ok": ok ? "yes" : "no"])
+        let ok = background.landed || MessagesActions.typeIntoOpenConversation("")
+        ActivityLog.recordAction("messages-draft-erase", ["via": background.landed ? "background" : "foreground",
+                                                          "result": String(describing: background), "ok": ok ? "yes" : "no"])
         let message: String
         if ok {
             messagesDraftText = nil
             messagesDraftOpenedAt = Date() // still talking to this thread
-            message = "Erased — tell me what to say instead."
+            message = background == .suspectedNoop ? "Already empty — tell me what to say." : "Erased — tell me what to say instead."
         } else {
             message = "Couldn't clear the message box in Messages."
         }
@@ -1878,6 +1909,36 @@ final class AssistantController {
         panel.state.answer = message
         panel.state.logTalk(ok ? .status : .error, message)
         remote.broadcast("STATUS \(message)")
+    }
+
+    /// "Undo that": pops the last background write off `WriteUndoStack` and
+    /// puts the previous text back through the same no-focus path, then
+    /// confirms on the panel/phone and out loud, with the ring on the field.
+    private func undoLastWrite() {
+        synthesizer.stopSpeaking(at: .immediate)
+        let target = WriteUndoStack.shared.last?.target
+        let outcome = WriteUndoStack.shared.undoLast()
+        let message = outcome.message
+        var details: [String: String] = ["ok": outcome.ok ? "yes" : "no", "remaining": String(WriteUndoStack.shared.count)]
+        if case .restored(let label, _, let forced) = outcome {
+            details["label"] = label
+            details["forced"] = forced ? "yes" : "no"
+            if let frame = target?.frame { ring.show(over: frame, duration: 2.5) }
+            // The compose box is the draft again — whatever it now holds is
+            // what "make it shorter" / "send it" act on.
+            if messagesDraftOpenedAt != nil {
+                messagesDraftText = MessagesActions.currentComposeText()
+                messagesDraftOpenedAt = Date()
+            }
+        }
+        ActivityLog.recordAction("write-undo", details)
+        panel.state.status = .answering
+        panel.state.answer = message
+        panel.state.logTalk(outcome.ok ? .status : .error, message)
+        remote.broadcast("STATUS \(message)")
+        toast.show(message, icon: outcome.ok ? "arrow.uturn.backward.circle.fill" : "exclamationmark.triangle.fill",
+                   tint: outcome.ok ? .cyan : .orange)
+        if !panel.state.textOnlyMode { speak(message) }
     }
 
     private func sendOpenMessagesDraft() {
@@ -2054,7 +2115,7 @@ final class AssistantController {
                                                               senderName: NSFullUserName(), claude: claude)
                 guard id == requestID else { return }
                 guard case .write(let text) = outcome else {
-                    eraseOpenMessagesDraft()
+                    if outcome == .undo { undoLastWrite() } else { eraseOpenMessagesDraft() }
                     return
                 }
                 // Prefer writing into the compose box without taking focus
@@ -2064,12 +2125,15 @@ final class AssistantController {
                 if background.needsFallback {
                     log.notice("messages draft: background write \(String(describing: background), privacy: .public) — falling back to focus-and-type")
                 }
-                ActivityLog.recordAction("messages-draft-insert", ["via": background == .success ? "background" : "foreground"])
-                if background == .success || MessagesActions.typeIntoOpenConversation(text) {
+                ActivityLog.recordAction("messages-draft-insert", ["via": background.landed ? "background" : "foreground",
+                                                                   "result": String(describing: background)])
+                if background.landed || MessagesActions.typeIntoOpenConversation(text) {
                     ok = true
                     messagesDraftText = text
                     messagesDraftOpenedAt = Date()
-                    message = "“\(text)” — say “send it”, or tell me what to change."
+                    message = background == .suspectedNoop
+                        ? "It already says “\(text)” — say “send it”, or tell me what to change."
+                        : "“\(text)” — say “send it”, or tell me what to change."
                 } else {
                     message = "Wrote it, but the conversation isn't open in Messages any more."
                 }
