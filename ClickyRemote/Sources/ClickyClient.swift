@@ -37,6 +37,8 @@ final class ClickyClient: ObservableObject {
         let id: String
         let question: String
         var sendTo: String? = nil
+        /// Set for a staged terminal line: the card reads Cancel / Run.
+        var runIn: String? = nil
     }
     /// A pick-one prompt from the Mac (e.g. two contacts match a spoken name).
     @Published var pendingChoice: PendingChoice?
@@ -170,9 +172,12 @@ final class ClickyClient: ObservableObject {
                                 .map { String($0).replacingOccurrences(of: "\u{2028}", with: "\n") }
                             if parts.count >= 2 {
                                 let sendTo = (parts.count >= 4 && parts[2] == "SEND") ? parts[3] : nil
-                                self.pendingConfirm = PendingConfirm(id: parts[0], question: parts[1], sendTo: sendTo)
+                                let runIn = (parts.count >= 4 && parts[2] == "RUN") ? parts[3] : nil
+                                self.pendingConfirm = PendingConfirm(id: parts[0], question: parts[1], sendTo: sendTo, runIn: runIn)
                                 if let sendTo {
                                     self.speak("Send this message to \(sendTo)?")
+                                } else if let runIn {
+                                    self.speak("Run this in \(runIn)?")
                                 } else {
                                     self.speak(parts[1].components(separatedBy: "\n\n").first ?? parts[1])
                                 }

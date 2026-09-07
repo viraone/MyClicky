@@ -174,6 +174,14 @@ final class WriteUndoStack {
         entries.removeAll()
         coalescing.removeAll()
     }
+
+    /// Drops every entry for one field — used when the field's content has
+    /// been committed some other way (a terminal line that was run), so
+    /// "undo" doesn't try to take back something that's already gone.
+    func forget(key: AnyHashable) {
+        entries.removeAll { $0.target.undoKey == key }
+        coalescing.removeValue(forKey: key)
+    }
 }
 
 // MARK: - AXUIElement target

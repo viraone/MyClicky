@@ -42,6 +42,11 @@ final class AssistantController {
     private var messagesDraftOpenedAt: Date?
     private var messagesDraftRecipient: String?
     private var messagesDraftText: String?
+    /// Set when "tell the terminal …" typed a line at a prompt and stopped
+    /// short of Return: "run it" runs it, "erase that" / "undo that" take it
+    /// back, for ten minutes.
+    private var terminalDraftOpenedAt: Date?
+    private var terminalTarget: TerminalLineTarget?
     /// The in-flight inventory/flagging pass, so Cancel and a second ⌥⌘D can
     /// stop it rather than stacking a second scan on top.
     private var driveCleanupTask: Task<Void, Never>?
@@ -662,7 +667,7 @@ final class AssistantController {
         // ("send it") are more likely a command than the start of a message.
         guard pending.count >= 3 else { return }
         let utterance = pending.joined(separator: " ")
-        if !pendingConfirms.isEmpty || Self.isSendIt(utterance) || Self.isEraseIt(utterance) || Self.isUndoIt(utterance) || Self.isNeverMind(utterance) || Self.isAppCommand(utterance) {
+        if !pendingConfirms.isEmpty || Self.isSendIt(utterance) || Self.isEraseIt(utterance) || Self.isUndoIt(utterance) || Self.isNeverMind(utterance) || Self.isAppCommand(utterance) || Self.isTerminalCommand(utterance) {
             ghostDraft?.clear()
             return
         }
@@ -718,7 +723,7 @@ final class AssistantController {
         // Commands to the thread ("send it", "erase that", "undo") and thread
         // switches should still run promptly.
         let utterance = pending.joined(separator: " ")
-        if !pendingConfirms.isEmpty || Self.isSendIt(utterance) || Self.isEraseIt(utterance) || Self.isUndoIt(utterance) || Self.isNeverMind(utterance) || Self.isAppCommand(utterance) {
+        if !pendingConfirms.isEmpty || Self.isSendIt(utterance) || Self.isEraseIt(utterance) || Self.isUndoIt(utterance) || Self.isNeverMind(utterance) || Self.isAppCommand(utterance) || Self.isTerminalCommand(utterance) {
             return nil
         }
         let dangling: Set<String> = ["a", "an", "the", "and", "or", "but", "so", "to", "at", "in", "on", "of", "for",
@@ -1081,6 +1086,29 @@ final class AssistantController {
             sendOpenDraft()
             return
         }
+        // A line Clicky typed at a terminal prompt is the most recent draft:
+        // "run it" / "hit enter" presses Return (behind a confirm); "erase
+        // that" backspaces it out.
+        if terminalDraftIsCurrent {
+            if Self.isRunIt(utterance) {
+                ghost?.clear()
+                Task { @MainActor [weak self] in await self?.runOpenTerminalLine() }
+                return
+            }
+            if Self.isEraseIt(utterance) {
+                ghost?.clear()
+                eraseOpenTerminalLine()
+                return
+            }
+        }
+        // "Tell the terminal to run the tests", "tell Claude to fix the
+        // failing test": typed at the prompt in the background, Return not
+        // pressed. Focus stays where it is.
+        if let dictation = Self.terminalDictation(utterance, terminalActive: terminalDraftIsCurrent) {
+            ghost?.clear()
+            typeIntoTerminal(dictation.text, append: dictation.append, agent: dictation.agent)
+            return
+        }
         if Self.isEraseIt(utterance), messagesDraftOpenedAt.map({ Date().timeIntervalSince($0) < 10 * 60 }) ?? false {
             ghost?.clear()
             eraseOpenMessagesDraft()
@@ -1106,11 +1134,12 @@ final class AssistantController {
             }
             return
         }
-        if Self.isNeverMind(utterance), gmailDraftOpenedAt != nil || messagesDraftOpenedAt != nil {
+        if Self.isNeverMind(utterance), gmailDraftOpenedAt != nil || messagesDraftOpenedAt != nil || terminalDraftOpenedAt != nil {
             ghost?.clear()
             gmailDraftOpenedAt = nil
             messagesDraftOpenedAt = nil
             messagesDraftText = nil
+            terminalDraftOpenedAt = nil
             let message = "OK — the draft stays as it is; I'm back to taking commands."
             panel.state.status = .answering
             panel.state.answer = message
@@ -1142,7 +1171,7 @@ final class AssistantController {
         // recently is the one being talked to.
         // …unless it's plainly a command — "actually, open David's
         // conversation" must not get typed to Dino Dad.
-        let gateBypassed = Self.isAppCommand(utterance)
+        let gateBypassed = Self.isAppCommand(utterance) || Self.isTerminalCommand(utterance)
         if gateBypassed { ghost?.clear() }
         let gmailActive = !gateBypassed && (gmailDraftOpenedAt.map { Date().timeIntervalSince($0) < 10 * 60 } ?? false)
         let messagesActive = !gateBypassed && (messagesDraftOpenedAt.map { Date().timeIntervalSince($0) < 10 * 60 } ?? false)
@@ -1238,6 +1267,8 @@ final class AssistantController {
     enum ConfirmKind {
         case action
         case send(recipient: String)
+        /// A staged terminal line about to run in `where`.
+        case run(where: String)
     }
 
     /// The phone protocol is one message per line, so a question that carries
@@ -1265,6 +1296,9 @@ final class AssistantController {
             case .send(let recipient):
                 title = "Send this message?"; label = "Send"; icon = "paperplane"
                 wire = "CONFIRM \(id)\t\(Self.encodeConfirmField(question))\tSEND\t\(Self.encodeConfirmField(recipient))"
+            case .run(let place):
+                title = "Run this command?"; label = "Run"; icon = "terminal"
+                wire = "CONFIRM \(id)\t\(Self.encodeConfirmField(question))\tRUN\t\(Self.encodeConfirmField(place))"
             }
             confirmPanel.show(
                 title: title,
@@ -2058,9 +2092,12 @@ final class AssistantController {
     private func sendOpenDraft() {
         let gmail = gmailDraftOpenedAt ?? .distantPast
         let messages = messagesDraftOpenedAt ?? .distantPast
+        let terminal = terminalDraftOpenedAt ?? .distantPast
         Task { @MainActor [weak self] in
             guard let self else { return }
-            if messages > gmail, Date().timeIntervalSince(messages) < 10 * 60 {
+            if terminal > messages, terminal > gmail, Date().timeIntervalSince(terminal) < 10 * 60 {
+                await self.runOpenTerminalLine()
+            } else if messages > gmail, Date().timeIntervalSince(messages) < 10 * 60 {
                 await self.sendOpenMessagesDraft()
             } else {
                 await self.sendOpenGmailDraft()
@@ -2496,6 +2533,212 @@ final class AssistantController {
             }
         })
         return nil
+    }
+
+    // MARK: - Terminal as a write target
+
+    /// The terminal line is the draft "send it" / "erase that" act on when
+    /// it's the most recent thing Clicky opened and it's still fresh.
+    private var terminalDraftIsCurrent: Bool {
+        guard let opened = terminalDraftOpenedAt, Date().timeIntervalSince(opened) < 10 * 60 else { return false }
+        return opened > (messagesDraftOpenedAt ?? .distantPast) && opened > (gmailDraftOpenedAt ?? .distantPast)
+    }
+
+    struct TerminalDictation: Equatable {
+        /// What to type, as said (commands get spoken symbols normalised).
+        let text: String
+        /// Add to the line already typed rather than starting a new one.
+        let append: Bool
+        /// Addressed to the agent at the prompt (Claude Code, Copilot CLI…)
+        /// — natural language, left exactly as spoken.
+        let agent: Bool
+    }
+
+    private static let terminalNouns = "(?:terminal|shell|console|command line|prompt)"
+    private static let agentNouns = "(?:claude(?:\\s+code)?|copilot|codex|cursor|gemini|the agent|the ai|the assistant|the bot|the coding agent)"
+
+    /// "Tell the terminal to run the tests" → "run the tests" typed at the
+    /// prompt. Only explicit addressing counts; nothing is typed into a
+    /// terminal because it happens to be open.
+    static func terminalDictation(_ utterance: String, terminalActive: Bool) -> TerminalDictation? {
+        var text = utterance.trimmingCharacters(in: .whitespacesAndNewlines)
+        let leadIns = ["actually", "ok", "okay", "hey", "clicky", "please", "now", "um", "uh", "so", "and then", "then",
+                       "can you", "could you", "would you", "let's", "lets", "just", "go ahead and"]
+        var stripped = true
+        while stripped {
+            stripped = false
+            for lead in leadIns {
+                if let range = text.range(of: "^\(NSRegularExpression.escapedPattern(for: lead))[,\\s]+",
+                                          options: [.regularExpression, .caseInsensitive]) {
+                    text.removeSubrange(range)
+                    stripped = true
+                }
+            }
+        }
+        let T = terminalNouns, A = agentNouns
+        let shellPatterns = [
+            "^(?:tell|ask)\\s+(?:the\\s+)?\(T)\\s+(?:to\\s+)?(.+)$",
+            "^(?:in|into|on|at)\\s+(?:the\\s+)?\(T)[,:]?\\s+(?:type|run|write|say|enter|put)?\\s*(.+)$",
+            "^(?:type|enter|write|put|run|execute)\\s+(?:this\\s+|that\\s+)?(?:in|into|on|at)\\s+(?:the\\s+)?\(T)[,:]?\\s+(.+)$",
+            "^(?:type|enter|write|put|run|execute)\\s+(.+?)\\s+(?:in|into|on|at)\\s+(?:the\\s+)?\(T)$",
+            "^\(T)[,:]\\s+(.+)$",
+        ]
+        let agentPatterns = [
+            "^(?:tell|ask)\\s+\(A)\\s+(?:to\\s+)?(.+)$",
+            "^(?:say|send)\\s+(?:this\\s+)?to\\s+\(A)[,:]?\\s+(.+)$",
+        ]
+        func capture(_ pattern: String) -> String? {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+                  let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+                  let range = Range(match.range(at: 1), in: text) else { return nil }
+            let captured = text[range].trimmingCharacters(in: .whitespacesAndNewlines)
+            return captured.isEmpty ? nil : captured
+        }
+        for pattern in agentPatterns {
+            if let captured = capture(pattern) { return TerminalDictation(text: captured, append: false, agent: true) }
+        }
+        for pattern in shellPatterns {
+            if let captured = capture(pattern) {
+                return TerminalDictation(text: spokenSymbols(captured), append: false, agent: false)
+            }
+        }
+        // A line is already at the prompt: "type --verbose" / "add dash v"
+        // extends it. Anything else said isn't for the terminal.
+        if terminalActive, let captured = capture("^(?:type|add|append|also)\\s+(.+)$") {
+            return TerminalDictation(text: " " + spokenSymbols(captured), append: true, agent: false)
+        }
+        return nil
+    }
+
+    /// Speech gives "npm test dash dash watch"; the shell wants
+    /// "npm test --watch". Only the handful of tokens people actually say.
+    static func spokenSymbols(_ text: String) -> String {
+        var out = text
+        let rules: [(String, String)] = [
+            ("\\b(?:dash dash|double dash|hyphen hyphen)\\s+", "--"),
+            ("\\b(?:dash|hyphen|minus)\\s+(?=\\S)", "-"),
+            ("\\bdot\\s+slash\\s+", "./"),
+            ("\\s+dot\\s+", "."),
+            ("\\s+(?:slash|forward slash)\\s+", "/"),
+            ("\\s+underscore\\s+", "_"),
+            ("\\b(?:tilde|tilda)\\s*", "~"),
+            ("\\s+(?:pipe|pipe to)\\s+", " | "),
+            ("\\s+ampersand ampersand\\s+", " && "),
+        ]
+        for (pattern, replacement) in rules {
+            out = out.replacingOccurrences(of: pattern, with: replacement, options: [.regularExpression, .caseInsensitive])
+        }
+        // "dot" as a word at the end ("run dot slash build dot sh") — the
+        // space-bounded rule misses edges.
+        out = out.replacingOccurrences(of: "\\s+dot\\b", with: ".", options: [.regularExpression, .caseInsensitive])
+        return out
+    }
+
+    /// "Run it", "hit enter", "execute", "go" — press Return on the typed line.
+    static func isRunIt(_ utterance: String) -> Bool {
+        var words = stripStutters(utterance.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty })
+        let leadIns: Set<String> = ["ok", "okay", "hey", "clicky", "please", "now", "and", "then", "just", "go", "ahead", "yes", "yeah"]
+        while words.count > 1, let first = words.first, leadIns.contains(first) { words.removeFirst() }
+        guard !words.isEmpty, words.count <= 4 else { return false }
+        let verbs: Set<String> = ["run", "execute", "enter", "return", "go", "fire", "submit"]
+        let fillers: Set<String> = ["it", "that", "this", "the", "command", "line", "now", "please", "key", "press", "hit",
+                                    "enter", "return", "button", "off", "ahead"]
+        guard words.contains(where: verbs.contains) else { return false }
+        return words.allSatisfy { verbs.contains($0) || fillers.contains($0) }
+    }
+
+    static func isTerminalCommand(_ utterance: String) -> Bool {
+        terminalDictation(utterance, terminalActive: false) != nil
+    }
+
+    private func typeIntoTerminal(_ text: String, append: Bool, agent: Bool) {
+        guard let session = TerminalActions.session() else {
+            let message = "No terminal is open — open Terminal or iTerm first, then say that again."
+            finishTerminal(message, ok: false)
+            return
+        }
+        synthesizer.stopSpeaking(at: .immediate)
+        let target: TerminalLineTarget
+        let previous: String
+        if append, let existing = terminalTarget, existing.isValid,
+           existing.session.app.processIdentifier == session.app.processIdentifier {
+            target = existing
+            previous = existing.typed
+        } else {
+            target = TerminalLineTarget(session: session, typed: "")
+            previous = ""
+        }
+        let newValue = previous + text
+        guard TerminalActions.stage(text, in: session) else {
+            finishTerminal("Couldn't reach \(session.name) — check MyClicky has Automation access to it in Privacy & Security.", ok: false)
+            return
+        }
+        target.setTyped(newValue)
+        terminalTarget = target
+        terminalDraftOpenedAt = Date()
+        WriteUndoStack.shared.forget(key: target.undoKey)
+        WriteUndoStack.shared.record(target: target, previousValue: previous, newValue: newValue, label: session.name)
+        if let frame = session.frame { ring.show(over: frame, duration: 1.8) }
+        let shown = newValue.count > 80 ? String(newValue.prefix(80)) + "…" : newValue
+        let verb = session.kind.stagesAtPrompt ? "Typed" : "Ready for"
+        let message = agent ? "\(verb) \(session.name): “\(shown)” — say “send it” to let it go, or “erase that”."
+                            : "\(verb) \(session.name): “\(shown)” — say “run it”, or “erase that”."
+        ActivityLog.recordAction("terminal-draft", ["app": session.name, "agent": agent ? "yes" : "no",
+                                                    "append": append ? "yes" : "no", "chars": String(newValue.count)])
+        finishTerminal(message, ok: true)
+        toast.show("\(session.name): \(shown)", icon: "terminal.fill", tint: .cyan)
+    }
+
+    private func runOpenTerminalLine() async {
+        guard let target = terminalTarget, target.isValid, !target.typed.isEmpty else {
+            finishTerminal("Nothing staged for the terminal yet — say “tell the terminal …” first.", ok: false)
+            return
+        }
+        let screen = activeScreen ?? NSScreen.main ?? NSScreen.screens[0]
+        panel.state.status = .answering
+        panel.state.answer = "Run this in \(target.session.name)?"
+        let line = target.typed
+        let preview = line.count > 220 ? String(line.prefix(220)) + "…" : line
+        let confirmed = await requestConfirm(question: "Run in \(target.session.name)?\n\n\(preview)", screen: screen,
+                                             kind: .run(where: target.session.name))
+        ActivityLog.recordAction("terminal-run-confirm", ["via": target.session.name, "ok": confirmed ? "yes" : "no"])
+        guard confirmed else {
+            finishTerminal("Not run — the line is still staged; say “run it” when ready, or “erase that”.", ok: true)
+            return
+        }
+        let seen = TerminalActions.run(line, in: target.session)
+        WriteUndoStack.shared.forget(key: target.undoKey)
+        target.consume()
+        terminalDraftOpenedAt = Date() // still talking to this terminal
+        if let frame = target.session.frame { ring.show(over: frame, duration: 1.5) }
+        let message = seen == false ? "Sent it to \(target.session.name) but couldn't see it in the tab — check there."
+                                    : "Running in \(target.session.name)."
+        finishTerminal(message, ok: seen != false)
+        toast.show(message, icon: seen == false ? "exclamationmark.triangle.fill" : "terminal.fill",
+                   tint: seen == false ? .orange : .green)
+    }
+
+    private func eraseOpenTerminalLine() {
+        guard let target = terminalTarget, target.isValid, !target.typed.isEmpty else {
+            finishTerminal("Nothing of mine staged for the terminal to erase.", ok: false)
+            return
+        }
+        let result = target.restore("")
+        WriteUndoStack.shared.forget(key: target.undoKey)
+        let message = result.landed ? "Erased the line for \(target.session.name)."
+                                    : "Couldn't take the line back in \(target.session.name) — check the prompt."
+        ActivityLog.recordAction("terminal-erase-line", ["app": target.session.name, "result": String(describing: result)])
+        finishTerminal(message, ok: result.landed)
+    }
+
+    private func finishTerminal(_ message: String, ok: Bool) {
+        panel.state.status = .answering
+        panel.state.answer = message
+        panel.state.logTalk(ok ? .status : .error, message)
+        remote.broadcast("STATUS \(message)")
+        if !panel.state.textOnlyMode { speak(message) }
     }
 
     /// The preview. Shows who it resolved to and the opening of what's about
