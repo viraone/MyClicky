@@ -54,6 +54,28 @@ enum AssistantPhase: Equatable {
     }
 }
 
+/// The three card shapes. `half` is a narrow column — half the tall card's
+/// width at its full height — for parking Clicky down one side of the
+/// screen next to what's being worked on. Tabs go icon-only to fit.
+enum PanelSize: Int, CaseIterable, Comparable {
+    case half, normal, tall
+    static func < (a: PanelSize, b: PanelSize) -> Bool { a.rawValue < b.rawValue }
+    var symbol: String {
+        switch self {
+        case .half: return "rectangle.lefthalf.inset.filled"
+        case .normal: return "rectangle.inset.filled"
+        case .tall: return "rectangle.portrait.inset.filled"
+        }
+    }
+    var label: String {
+        switch self {
+        case .half: return "Half width — a tall column down one side"
+        case .normal: return "Normal"
+        case .tall: return "Tall — room for a long answer"
+        }
+    }
+}
+
 enum AssistantTab: String, CaseIterable {
     /// Region captures and dictation share one tab; both land on the clipboard together.
     /// Listed first so it's the default, leftmost tab.
@@ -68,6 +90,15 @@ enum AssistantTab: String, CaseIterable {
         case .ask: "bubble.left.and.text.bubble.right"
         case .captureDictate: "camera.on.rectangle"
         case .talk: "bolt.fill"
+        }
+    }
+
+    /// One-word name for the half-width column's tab bar.
+    var shortName: String {
+        switch self {
+        case .ask: "Ask"
+        case .captureDictate: "Capture"
+        case .talk: "Talk"
         }
     }
 }
@@ -249,7 +280,10 @@ final class AssistantState: ObservableObject {
     private static let textOnlyModeKey = "assistantTextOnlyMode"
     /// True while the panel is stretched taller to give a long answer more
     /// room, instead of leaving it all in a small scrolling area.
-    @Published var isTall = false
+    @Published var size: PanelSize = .normal
+    /// Kept for call sites that only care whether there's room for a long
+    /// answer.
+    var isTall: Bool { size == .tall }
     /// True whenever a request is in flight or speech is playing — i.e. when
     /// the Stop button should be shown.
     var canStop: Bool { status == .thinking || status == .listening || isSpeaking }
@@ -275,8 +309,8 @@ final class AssistantState: ObservableObject {
     var onRestore: (() -> Void)?
     /// Left-edge chevron: shrinks to the strip, or grows back from it.
     var onToggleStrip: (() -> Void)?
-    /// Toggles `isTall` and resizes the actual window to match.
-    var onToggleTall: (() -> Void)?
+    /// Sets the card size (half / normal / tall) and resizes the window to match.
+    var onSetSize: ((PanelSize) -> Void)?
     /// Live corner-drag resize: called continuously with the cumulative drag
     /// translation, then once more with `nil` when the drag ends.
     var onResize: ((PanelResizeCorner, CGSize?) -> Void)?
@@ -323,7 +357,7 @@ final class AssistantPanelController {
         let visible = screen.visibleFrame
         let size: NSSize
         if !panel.isVisible || wasSmall {
-            size = savedFrame?.size ?? (state.isTall ? Self.tallSize : Self.expandedSize)
+            size = savedFrame?.size ?? Self.frameSize(for: state.size)
         } else {
             size = panel.frame.size
         }
@@ -365,9 +399,19 @@ final class AssistantPanelController {
     static let glowMargin: CGFloat = 24
     private static let expandedSize = NSSize(width: 960 + glowMargin * 2, height: 220 + glowMargin * 2)
     private static let tallSize = NSSize(width: 960 + glowMargin * 2, height: 520 + glowMargin * 2)
+    /// Half the tall card's width, at its full height.
+    private static let halfSize = NSSize(width: 480 + glowMargin * 2, height: 520 + glowMargin * 2)
+    private static func frameSize(for size: PanelSize) -> NSSize {
+        switch size {
+        case .half: return halfSize
+        case .normal: return expandedSize
+        case .tall: return tallSize
+        }
+    }
+    private static func height(for size: PanelSize) -> CGFloat { frameSize(for: size).height }
     private static let collapsedSize = NSSize(width: 56, height: 56)
     private static let stripSize = NSSize(width: 420 + glowMargin * 2, height: 52 + glowMargin * 2)
-    private static let minPanelSize = NSSize(width: 640 + glowMargin * 2, height: 160 + glowMargin * 2)
+    private static let minPanelSize = NSSize(width: 480 + glowMargin * 2, height: 160 + glowMargin * 2)
     private static let maxPanelSize = NSSize(width: 1500, height: 1000)
     /// Full frame just before minimizing, so restoring puts it back exactly
     /// (including any manual corner-resize) rather than snapping to a preset.
@@ -445,19 +489,27 @@ final class AssistantPanelController {
     /// entirely, header showing and nothing beneath it.
     func growIfNeeded() {
         guard !state.isTall else { return }
-        toggleTall()
+        setSize(.tall)
     }
 
-    func toggleTall() {
+    func setSize(_ size: PanelSize) {
         guard let panel, !state.collapsed, !state.strip else { return }
-        state.isTall.toggle()
+        let wasHalf = state.size == .half
+        state.size = size
         let screen = panel.screen ?? NSScreen.main
         let visible = screen?.visibleFrame ?? .zero
-        let height = state.isTall ? Self.tallSize.height : Self.expandedSize.height
+        let target = Self.frameSize(for: size)
+        let height = target.height
+        // Width only changes when entering or leaving the half column; the
+        // other two keep whatever width the user dragged out. The right edge
+        // stays put so a panel parked at the screen edge stays there.
+        let width = (size == .half || wasHalf) ? target.width : panel.frame.width
         var origin = panel.frame.origin
+        origin.x = panel.frame.maxX - width
+        origin.x = min(max(origin.x, visible.minX + 8), visible.maxX - width - 8)
         origin.y = min(origin.y, visible.maxY - height - 8)
         origin.y = max(origin.y, visible.minY + 8)
-        panel.setFrame(NSRect(x: origin.x, y: origin.y, width: panel.frame.width, height: height),
+        panel.setFrame(NSRect(x: origin.x, y: origin.y, width: width, height: height),
                         display: true, animate: true)
     }
 
@@ -468,8 +520,14 @@ final class AssistantPanelController {
         guard let panel, !state.collapsed, !state.strip else { return }
         guard let translation else {
             resizeStartFrame = nil
-            // Keep the header button's icon honest after a manual drag.
-            state.isTall = panel.frame.height > (Self.expandedSize.height + Self.tallSize.height) / 2
+            // Keep the size switch honest after a manual drag: snap to the
+            // nearest preset.
+            let f = panel.frame
+            if f.width < (Self.halfSize.width + Self.expandedSize.width) / 2 {
+                state.size = .half
+            } else {
+                state.size = f.height > (Self.expandedSize.height + Self.tallSize.height) / 2 ? .tall : .normal
+            }
             return
         }
         let start = resizeStartFrame ?? panel.frame
@@ -535,7 +593,7 @@ final class AssistantPanelController {
         state.onMinimize = { [weak self] in self?.minimize() }
         state.onRestore = { [weak self] in self?.expand() }
         state.onToggleStrip = { [weak self] in self?.toggleStrip() }
-        state.onToggleTall = { [weak self] in self?.toggleTall() }
+        state.onSetSize = { [weak self] size in self?.setSize(size) }
         state.onResize = { [weak self] corner, translation in self?.resize(corner, translation: translation) }
         panel.onCancel = { [weak self] in
             guard let self, self.state.canStop else { return false }
@@ -662,6 +720,40 @@ struct AssistantPanelView: View {
         .help(expanded ? "Shrink to a strip" : "Expand the panel")
     }
 
+    /// Three-segment size switch in the header: half · normal · tall. The
+    /// current size is lit; click another to jump straight to it. Sits
+    /// left of Minimize and Close so the row reads smallest-to-gone.
+    private var sizeSwitch: some View {
+        HStack(spacing: 2) {
+            ForEach(PanelSize.allCases, id: \.rawValue) { size in
+                let on = state.size == size
+                Button {
+                    state.onSetSize?(size)
+                } label: {
+                    Image(systemName: size.symbol)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(on ? Color.white : Color.white.opacity(0.4))
+                        .frame(width: 24, height: 20)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .fill(on ? Color.white.opacity(0.18) : Color.clear)
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(size.label)
+            }
+        }
+        .padding(2)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+                .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+        )
+        .padding(.trailing, 4)
+    }
+
     private var collapsedDot: some View {
         Button(action: { state.onRestore?() }) {
             ZStack {
@@ -684,10 +776,7 @@ struct AssistantPanelView: View {
             HStack(alignment: .center) {
                 tabBar
                 Spacer()
-                headerButton(state.isTall ? "rectangle.compress.vertical" : "rectangle.expand.vertical",
-                             help: state.isTall ? "Shrink back down" : "Expand for a longer answer") {
-                    state.onToggleTall?()
-                }
+                sizeSwitch
                 headerButton("arrow.down.right.and.arrow.up.left", help: "Minimize to corner") {
                     state.onMinimize?()
                 }
@@ -722,7 +811,7 @@ struct AssistantPanelView: View {
         .padding(.trailing, 36)
         .padding(.vertical, 14)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .animation(.easeInOut(duration: 0.2), value: state.isTall)
+        .animation(.easeInOut(duration: 0.2), value: state.size)
         .background(
             ZStack {
                 // Flat, near-black terminal background.
@@ -798,9 +887,14 @@ struct AssistantPanelView: View {
                     HStack(spacing: 6) {
                         Image(systemName: tab.icon)
                             .font(.system(size: 12, weight: .semibold))
-                        Text(tab.rawValue)
-                            .font(.system(size: 14, weight: state.tab == tab ? .semibold : .regular, design: .monospaced))
+                        // The half column can't fit three full labels;
+                        // show only the selected tab's name there.
+                        if state.size != .half || state.tab == tab {
+                            Text(state.size == .half ? tab.shortName : tab.rawValue)
+                                .font(.system(size: 14, weight: state.tab == tab ? .semibold : .regular, design: .monospaced))
+                        }
                     }
+                    .help(tab.rawValue)
                     .foregroundStyle(state.tab == tab ? .white : Color.white.opacity(0.5))
                     .padding(.horizontal, 12)
                     .padding(.vertical, 7)
@@ -883,6 +977,17 @@ struct AssistantPanelView: View {
                     captureColumn
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     dictationUnderImage
+                }
+            } else if state.size == .half {
+                // The narrow column stacks the two halves instead.
+                VStack(spacing: 14) {
+                    captureColumn
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    Rectangle()
+                        .fill(Color.white.opacity(0.08))
+                        .frame(height: 1)
+                    dictateColumn
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             } else {
                 HStack(alignment: .top, spacing: 14) {
@@ -1510,11 +1615,14 @@ struct AssistantPanelView: View {
             }
             .font(.system(size: 14, weight: .semibold, design: .monospaced))
             .animation(.easeInOut(duration: 0.25), value: state.phase)
-            Text("⌥⌘C ask · ⌥⌘V dictate")
-                .font(.system(size: 12, weight: .medium, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.28))
-                .padding(.leading, 6)
+            if state.size != .half {
+                Text("⌥⌘C ask · ⌥⌘V dictate")
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.28))
+                    .padding(.leading, 6)
+            }
             Spacer()
+            if state.size != .half {
             VStack(alignment: .trailing, spacing: 1) {
                 Text("CLICKY")
                     .font(.system(size: 10, weight: .heavy, design: .rounded))
@@ -1531,6 +1639,7 @@ struct AssistantPanelView: View {
                     .foregroundStyle(.white.opacity(0.28))
                     .lineLimit(1)
                     .fixedSize()
+            }
             }
             coachButton
             if state.tab == .ask {
