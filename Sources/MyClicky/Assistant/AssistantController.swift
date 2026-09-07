@@ -27,7 +27,6 @@ final class AssistantController {
     private let captureFileWatcher = CaptureFileWatcher()
     private let driveCleanup = DriveCleanupWindowController()
     private let breakCoach = BreakCoach()
-    private let morningCoach = MorningCoach()
     /// The passage a copy verb last put on the clipboard — what "that" means
     /// in "text that to Noah". Kept apart from `NSPasteboard.general` on
     /// purpose: the system clipboard is shared with every app on the Mac and
@@ -94,7 +93,7 @@ final class AssistantController {
         panel.state.editedCaptureImage = nil
     }
     /// What the current listening session will do with what it hears.
-    private enum RecordKind { case ask, dictate, talk, morning }
+    private enum RecordKind { case ask, dictate, talk }
     private var recordKind: RecordKind = .ask
     /// The app a Talk command should act on, captured when recording starts —
     /// Clicky's own panel is non-activating, so this stays the real target.
@@ -132,17 +131,6 @@ final class AssistantController {
     func start() {
         panel.state.onSubmit = { [weak self] text in
             self?.handleQuestion(text)
-        }
-        panel.state.onMorningSend = { [weak self] text in
-            self?.handleMorning(text)
-        }
-        panel.state.onMorningReset = { [weak self] in
-            self?.morningCoach.clearToday()
-        }
-        panel.state.morningMessages = morningCoach.messages
-        morningCoach.onChange = { [weak self] in
-            guard let self else { return }
-            self.panel.state.morningMessages = self.morningCoach.messages
         }
         panel.state.onDo = { [weak self] text in
             self?.handleDo(text, targetApp: NSWorkspace.shared.frontmostApplication)
@@ -454,58 +442,6 @@ final class AssistantController {
         panel.show(near: cursor, on: screen)
     }
 
-    // MARK: - Morning Clicky
-
-    /// One user turn of the morning chat: Clicky replies as a coach, using
-    /// the activity log and past chats, and speaks the reply. When the reply
-    /// hands over to work ("first 25 minutes…") the break timer restarts so
-    /// the block Clicky just proposed is the one it times.
-    private func handleMorning(_ text: String) {
-        guard !busy else { return }
-        panel.state.tab = .morning
-        panel.state.errorText = nil
-        panel.state.transcript = ""
-        ActivityLog.recordAction("morning", ["text": text])
-        morningCoach.append(.user, text)
-        guard let apiKey = KeychainService.anthropicAPIKey() else {
-            panel.state.errorText = "No Anthropic API key found in Keychain.\n\nRun this once in Terminal:\n\(KeychainService.setupCommand)"
-            panel.state.status = .idle
-            return
-        }
-        busy = true
-        synthesizer.stopSpeaking(at: .immediate)
-        panel.state.status = .thinking
-        requestID += 1
-        let id = requestID
-        currentTask = Task {
-            defer { if id == requestID { busy = false; currentTask = nil } }
-            do {
-                let claude = AnthropicService(apiKey: apiKey)
-                let reply = try await claude.morningChat(messages: morningCoach.messages, context: morningCoach.contextBrief())
-                try Task.checkCancellation()
-                guard id == requestID else { return }
-                morningCoach.append(.clicky, reply)
-                panel.state.status = .idle
-                panel.growIfNeeded()
-                if Self.handsOverToWork(reply) {
-                    breakCoach.start()
-                    ActivityLog.recordAction("morning-start", [:])
-                }
-                speak(reply)
-            } catch {
-                guard id == requestID, !Task.isCancelled else { return }
-                panel.state.status = .idle
-                panel.state.errorText = error.localizedDescription
-            }
-        }
-    }
-
-    /// Did Clicky just hand the user off into a focused block?
-    private static func handsOverToWork(_ reply: String) -> Bool {
-        let t = reply.lowercased()
-        return t.contains("25") || t.contains("twenty-five") || t.contains("twenty five") || t.contains("timer")
-    }
-
     // MARK: - Break coach
 
     /// Wires the 25-minute coach to the panel: a live countdown in the bottom
@@ -594,7 +530,6 @@ final class AssistantController {
         case .ask: .ask
         case .dictate: .captureDictate
         case .talk: .talk
-        case .morning: .morning
         }
         panel.state.status = .listening
         panel.state.transcript = ""
@@ -650,7 +585,6 @@ final class AssistantController {
             case .dictate: finishDictation(heard)
             case .ask: handleQuestion(heard)
             case .talk: handleDo(heard, targetApp: target)
-            case .morning: handleMorning(heard)
             }
         }
     }
@@ -892,7 +826,6 @@ final class AssistantController {
         case .ask: .ask
         case .captureDictate: .dictate
         case .talk: .talk
-        case .morning: .morning
         }
         if panel.state.status == .listening || talkStreaming {
             if recordKind == kind {
@@ -968,10 +901,6 @@ final class AssistantController {
         guard !busy else { return }
         // Keep the displayed question current for every input path, including typing.
         panel.state.transcript = question
-        if MorningCoach.isGreeting(question) {
-            handleMorning(question)
-            return
-        }
         if Self.isClickIntent(question) {
             ActivityLog.recordAction("click", ["text": question])
             handleClickCommand(question)
@@ -1101,10 +1030,6 @@ final class AssistantController {
             panel.state.logTalk(.command, utterance)
             takeGhostDraft()?.clear()
             resolveConfirm(id: id, result: answer)
-            return
-        }
-        if MorningCoach.isGreeting(utterance) {
-            handleMorning(utterance)
             return
         }
         guard !busy else { return }
