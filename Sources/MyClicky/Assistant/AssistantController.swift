@@ -690,13 +690,30 @@ final class AssistantController {
         guard talkStreaming, panel.state.status == .listening else { return }
         // The panel turns amber at 1.4s; give the sentence another moment
         // before acting so a mid-command breath doesn't split it in two.
+        // Dictating a message gets longer still — people breathe mid-sentence
+        // ("do you know where … the next open mic is") and splitting there
+        // sends half a message then treats the rest as a revision.
         let snapshot = panel.state.transcript
+        let grace = dictationGrace(for: snapshot) ?? 800_000_000
         Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 800_000_000)
+            try? await Task.sleep(nanoseconds: grace)
             guard let self, self.talkStreaming, self.panel.state.status == .listening,
                   self.panel.state.transcript == snapshot else { return }
             self.dispatchTalkSegment()
         }
+    }
+
+    /// Extra silence to allow before a pause ends a *message* (nil when the
+    /// pending words aren't message dictation). Longer when the sentence is
+    /// visibly unfinished — it trails off on "at", "the", "and", "where"…
+    private func dictationGrace(for transcript: String) -> UInt64? {
+        guard ghostDraft != nil else { return nil }
+        let pending = pendingTalkWords(in: Self.words(transcript), quiet: true)
+        guard let last = pending.last.map(Self.normalizedWord) else { return nil }
+        let dangling: Set<String> = ["a", "an", "the", "and", "or", "but", "so", "to", "at", "in", "on", "of", "for",
+                                     "with", "from", "by", "about", "is", "are", "was", "be", "gonna", "going", "that",
+                                     "where", "when", "what", "who", "how", "if", "because", "like", "um", "uh"]
+        return dangling.contains(last) ? 3_500_000_000 : 2_000_000_000
     }
 
     private func dispatchTalkSegment() {
@@ -1715,8 +1732,16 @@ final class AssistantController {
         if commandVerbs.contains(verb) { return true }
         let joined = words.joined(separator: " ")
         let phrases = ["write an email", "write a new email", "send an email", "new email", "email to ",
-                       "conversation with", "chat with", "thread with", "text conversation", "look up"]
-        return phrases.contains { joined.hasPrefix($0) || joined.hasPrefix("write " + $0) }
+                       "conversation with", "chat with", "thread with", "text conversation", "look up",
+                       "i wanna talk to", "i want to talk to", "i wanna text", "i want to text"]
+        if phrases.contains(where: { joined.hasPrefix($0) || joined.hasPrefix("write " + $0) }) { return true }
+        // "Actually I wanna talk to David — open up a text message with Dave":
+        // a change of recipient buried mid-sentence is still a command, not
+        // something to text the current thread (observed live).
+        let anywhere = ["open a conversation with", "open up a conversation with", "open a text message with",
+                        "open up a text message with", "open a text with", "open up a text with",
+                        "open a message with", "open up a message with", "switch to the conversation with"]
+        return anywhere.contains { joined.contains($0) }
     }
 
     private func draftGmail(gist: String, compose: GmailDrafter.Compose, apiKey: String) {
