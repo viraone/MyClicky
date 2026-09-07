@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ClickyLogs report generator.
 
-Reads Clicky's activity log (JSONL) and writes data.js next to index.html.
+Reads Peeky's activity log (JSONL) and writes data.js next to index.html.
 Runs both manually (with --backfill, which imports old screenshot timestamps
 from the Desktop) and from the background LaunchAgent (no --backfill, since
 background jobs can't read the Desktop).
@@ -105,7 +105,7 @@ def main():
             if app:
                 apps[app] = apps.get(app, 0) + 1
         else:
-            # Sites only count when Clicky was actually used there.
+            # Sites only count when Peeky was actually used there.
             url = e.get("url")
             if url:
                 domain = urlparse(url).netloc.removeprefix("www.")

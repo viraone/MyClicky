@@ -4,7 +4,7 @@ import XCTest
 @MainActor
 final class SendConfirmTests: XCTestCase {
     func testSpokenYesAnswers() {
-        for phrase in ["yes", "Yes.", "yeah send it", "send it", "go ahead", "okay do it", "Clicky, send it",
+        for phrase in ["yes", "Yes.", "yeah send it", "send it", "go ahead", "okay do it", "Peeky, send it",
                        "yes send the message", "sure", "confirm", "Ye yes"] {
             XCTAssertEqual(AssistantController.spokenConfirmAnswer(phrase), true, phrase)
         }

@@ -45,9 +45,9 @@ enum ActivityLog {
         }
     }
 
-    /// Records a Clicky action (ask, dictate, capture, click, trash) and
+    /// Records a Peeky action (ask, dictate, capture, click, trash) and
     /// automatically attaches the frontmost app and, when a browser is open,
-    /// the site the user was on when they used Clicky.
+    /// the site the user was on when they used Peeky.
     static func recordAction(_ type: String, _ details: [String: String] = [:]) {
         var payload = details
         if let app = NSWorkspace.shared.frontmostApplication?.localizedName {

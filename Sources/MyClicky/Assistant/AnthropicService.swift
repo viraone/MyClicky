@@ -105,11 +105,11 @@ struct AnthropicService {
         )
     }
 
-    /// A short break check-in from Clicky in the role of a coach who knows
+    /// A short break check-in from Peeky in the role of a coach who knows
     /// how long this stretch has been and what it was spent in. Text-only.
     func breakCheckIn(minutes: Int, apps: [(name: String, minutes: Int)], hour: Int) async throws -> String {
         let instruction = """
-        You are Clicky, a warm, direct wellbeing coach living on this person's \
+        You are Peeky, a warm, direct wellbeing coach living on this person's \
         Mac. They have a habit of sitting at the computer for hours working on \
         projects. Their timer just went off. Write what you would SAY out loud \
         to them right now: two to four sentences, spoken plain English, no \

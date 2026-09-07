@@ -5,7 +5,7 @@ private let log = Logger(subsystem: "com.myclicky", category: "actionplanner")
 
 /// Turns a spoken request ("reply to Mom, tell her I'll be late") into a
 /// short plan expressed only in `AppDriver`/`AXActions` verbs, then executes
-/// it step by step. This is what lets Clicky work in any app instead of the
+/// it step by step. This is what lets Peeky work in any app instead of the
 /// three hand-scripted ones.
 enum ActionPlanner {
 
@@ -129,7 +129,7 @@ enum ActionPlanner {
       "no", still emit only send_copied — it will tell the user to copy \
       something first; do NOT invent a copy step from the screen.
     - compose_email: start a NEW, empty email to a person in Gmail — nothing \
-      copied is involved. {"verb":"compose_email","to":"clicky test"} \
+      copied is involved. {"verb":"compose_email","to":"peeky test"} \
       Use this for "write an email to X", "compose a message to X", "new \
       email to X", "let's email X" — the user wants to write it themselves. \
       The difference from send_copied is the word "that/this/it": "email \

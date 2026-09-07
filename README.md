@@ -94,18 +94,18 @@ On first use, allow **Screen Recording** in System Settings for MyClicky.
 Speak → text is cleaned up by Claude and copied to the clipboard. Shown in the
 panel's **Dictate** tab. The panel has three tabs: Ask, Dictate, Capture.
 
-## Clicky Remote (iOS app)
+## Peeky Remote (iOS app)
 
 `ClickyRemote/` is a companion iPhone numpad app (open `ClickyRemote.xcodeproj`
 in Xcode, run on the phone with ⌘R after any change). It finds the Mac via
 Bonjour (`_clicky._tcp`) and sends newline-terminated text commands
-(`RemoteControlService`). Pad: CLICKY = show/hide the Mac panel; ASK = record
+(`RemoteControlService`). Pad: PEEKY = show/hide the Mac panel; ASK = record
 a question on the phone and send it (answered like ⌥⌘C); DICTATE = clean-up to
 the Mac clipboard; CAPTURE = region grab; TALK = "do it" action mode.
 
 ## ClickyLogs (weekly dashboard)
 
-Every ask/dictate/capture/click is logged (with the site you used Clicky on)
+Every ask/dictate/capture/click is logged (with the site you used Peeky on)
 to `~/Library/Application Support/MyClicky/ClickyLogs/*.jsonl` by
 `Assistant/ActivityLog`, plus a once-a-minute frontmost-app sample.
 The dashboard lives at

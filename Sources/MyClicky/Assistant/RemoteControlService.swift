@@ -1,7 +1,7 @@
 import Foundation
 import Network
 
-/// Local-network remote control for the assistant, used by the Clicky Remote
+/// Local-network remote control for the assistant, used by the Peeky Remote
 /// iOS app. Advertises a Bonjour service (_clicky._tcp) on the local network
 /// and accepts newline-terminated text commands:
 ///

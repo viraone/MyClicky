@@ -37,7 +37,7 @@ struct WriteUndoEntry {
 /// What `WriteUndoStack.undoLast()` did, ready to be spoken or toasted.
 enum UndoWriteOutcome: Equatable {
     /// `previousValue` is back in the field. `forced` when the field no
-    /// longer held what Clicky last wrote (the user typed since) — it was
+    /// longer held what Peeky last wrote (the user typed since) — it was
     /// restored anyway, but the caller should say so.
     case restored(label: String, previousValue: String, forced: Bool)
     case nothingToUndo
@@ -72,7 +72,7 @@ enum UndoWriteOutcome: Equatable {
     }
 }
 
-/// Revert-last-write for Clicky's background writes. `AXActions.
+/// Revert-last-write for Peeky's background writes. `AXActions.
 /// writeTextInBackground` records every real change here (never streaming
 /// partials — see `beginCoalescing`), and "undo that" pops the most recent
 /// entry and writes its previous value back through the same no-focus path.

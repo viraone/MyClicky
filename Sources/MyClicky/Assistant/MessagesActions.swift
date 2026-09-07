@@ -92,7 +92,7 @@ enum MessagesActions {
             if isConversationWindowCovered(by: frontBefore) {
                 // Nothing short of activation puts a window above the *active*
                 // app's own windows — and that is exactly the case when the
-                // user is talking to Clicky from the app sitting over Messages
+                // user is talking to Peeky from the app sitting over Messages
                 // (observed: Copilot on the same screen). Seeing the thread
                 // beats keeping focus; the compose box is written via AX
                 // either way.
@@ -270,7 +270,7 @@ enum MessagesActions {
     }
 
     /// What's currently typed in the open conversation's compose box — text
-    /// the user (or an earlier Clicky) left there — or nil when the box isn't
+    /// the user (or an earlier Peeky) left there — or nil when the box isn't
     /// exposed to Accessibility.
     static func currentComposeText() -> String? {
         guard let app = running(), openConversation() != nil, let field = composeElement(in: app) else { return nil }

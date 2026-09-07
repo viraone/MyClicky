@@ -3,13 +3,13 @@ import AudioToolbox
 import PhotosUI
 
 /// A 22-key numeric keypad skinned like a Super Nintendo console.
-/// Key "0" toggles Clicky on the Mac (show / collapse); "4" records a question;
+/// Key "0" toggles Peeky on the Mac (show / collapse); "4" records a question;
 /// "1" opens Capture + Dictate, "2" starts a region capture, "3" records dictation.
 struct NumpadView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var client = ClickyClient()
     @StateObject private var recorder = SpeechRecorder()
-    @State private var statusText = "Tap CLICKY to open it on your Mac (tap again to hide)"
+    @State private var statusText = "Tap PEEKY to open it on your Mac (tap again to hide)"
     @State private var permissionDenied = false
     /// Short-lived toast over the whole console — used for warnings that fire
     /// while a recording is running, when the status line isn't visible.
@@ -63,7 +63,7 @@ struct NumpadView: View {
     enum RemoteMode: String, CaseIterable {
         /// The keypad. Talk isn't a mode: its button rides in the corner of
         /// every pad (see `cornerTalkButton`), so it needs no cartridge.
-        case remote = "Mobile Clicky"
+        case remote = "Mobile Peeky"
         case gmail = "GMAIL"
         case spotify = "SPOTIFY"
         case whatsapp = "WHATSAPP"
@@ -80,10 +80,10 @@ struct NumpadView: View {
         }
 
         /// One-word label for the portrait strip, where there's no room for
-        /// "Mobile Clicky".
+        /// "Mobile Peeky".
         var shortName: String {
             switch self {
-            case .remote: "CLICKY"
+            case .remote: "PEEKY"
             default: rawValue
             }
         }
@@ -100,7 +100,7 @@ struct NumpadView: View {
 
         var welcome: String {
             switch self {
-            case .remote: "Tap CLICKY to open it on your Mac (tap again to hide)"
+            case .remote: "Tap PEEKY to open it on your Mac (tap again to hide)"
             case .gmail: "Gmail mode — buttons control Gmail on your Mac"
             case .spotify: "Spotify mode — buttons control the Spotify app on your Mac"
             case .whatsapp: "WhatsApp mode — buttons control the WhatsApp app on your Mac"
@@ -131,7 +131,7 @@ struct NumpadView: View {
                             .padding(.top, 40)
                         modeTabs
                             .frame(maxHeight: .infinity)
-                        Text("SUPER CLICKY\nENTERTAINMENT SYSTEM")
+                        Text("SUPER PEEKY\nENTERTAINMENT SYSTEM")
                             .font(.system(size: 8, weight: .heavy, design: .monospaced).italic())
                             .kerning(1)
                             .multilineTextAlignment(.center)
@@ -194,7 +194,7 @@ struct NumpadView: View {
             guard status != .connected, recorder.isListening else { return }
             Task {
                 _ = await recorder.stop()
-                statusText = "Lost Clicky mid-recording — nothing sent. Tap again once it's back."
+                statusText = "Lost Peeky mid-recording — nothing sent. Tap again once it's back."
                 UINotificationFeedbackGenerator().notificationOccurred(.warning)
             }
         }
@@ -212,7 +212,7 @@ struct NumpadView: View {
     // MARK: - Mode tabs (cartridge selector)
 
     /// Entries in the scrolling mode wheel: the Refresh action plus every mode.
-    /// REFRESH and Mobile Clicky swap places so Mobile Clicky sits at the top,
+    /// REFRESH and Mobile Peeky swap places so Mobile Peeky sits at the top,
     /// within easy thumb reach, since it's the mode used most.
     private var wheelEntries: [String] {
         var entries = ["REFRESH"] + RemoteMode.allCases.map(\.rawValue)
@@ -492,7 +492,7 @@ struct NumpadView: View {
 
     // MARK: - Talk (universal voice control — any app on the Mac)
 
-    /// Press to speak, Clicky plans and does it on the Mac; press again to
+    /// Press to speak, Peeky plans and does it on the Mac; press again to
     /// stop and send. Sits in the corner of every pad. The Mac's STATUS stream
     /// lands in the status line (and is spoken aloud, in ClickyClient).
     private var cornerTalkButton: some View {
@@ -513,7 +513,7 @@ struct NumpadView: View {
             .overlay(Circle().strokeBorder(.white.opacity(0.25), lineWidth: 1))
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(talkRecording ? "Stop and send" : "Talk to Clicky")
+        .accessibilityLabel(talkRecording ? "Stop and send" : "Talk to Peeky")
         .accessibilityHint(talkRecording ? "Double tap when you're done speaking"
                                           : "Double tap, then say what you want your Mac to do")
     }
@@ -609,7 +609,7 @@ struct NumpadView: View {
                     .minimumScaleFactor(0.7)
             }
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("Clicky wants to confirm: \(spoken)")
+            .accessibilityLabel("Peeky wants to confirm: \(spoken)")
 
             if !preview.isEmpty {
                 previewQuote(preview)
@@ -706,7 +706,7 @@ struct NumpadView: View {
                 .dynamicTypeSize(.large ... .accessibility5)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.white)
-                .accessibilityLabel("Clicky asks: \(choice.question)")
+                .accessibilityLabel("Peeky asks: \(choice.question)")
             VStack(spacing: 10) {
                 ForEach(Array(choice.options.enumerated()), id: \.offset) { index, option in
                     Button {
@@ -859,22 +859,22 @@ struct NumpadView: View {
                 Button("Type it") { whatsappSendTypedText() }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("Clicky types this into \(textComposeChat.label) on your Mac — you still tap Send.")
+                Text("Peeky types this into \(textComposeChat.label) on your Mac — you still tap Send.")
             }
         )
     }
 
-    /// Clicky toggle: bring the Mac panel up (e.g. to see what was typed), tap again to collapse it.
+    /// Peeky toggle: bring the Mac panel up (e.g. to see what was typed), tap again to collapse it.
     private var clickyPill: some View {
         Button {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
             client.collapse()
-            statusText = "Clicky toggled on your Mac — tap again to collapse / bring back"
+            statusText = "Peeky toggled on your Mac — tap again to collapse / bring back"
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "sparkles")
                     .font(.system(size: 19, weight: .bold))
-                Text("CLICKY")
+                Text("PEEKY")
                     .font(.system(size: 19, design: .monospaced).weight(.black))
                 Text("show / collapse on Mac")
                     .font(.system(size: 12, design: .monospaced).weight(.semibold))
@@ -902,10 +902,10 @@ struct NumpadView: View {
             padButton(icon: chat.icon, title: chat.label,
                       hint: "Open on your Mac", tint: Snes.whatsapp) { whatsappOpenChat(chat) }
             padButton(icon: "keyboard", title: "Text",
-                      hint: "Type — Clicky types it there", tint: Snes.whatsapp) { whatsappTextTapped(chat) }
+                      hint: "Type — Peeky types it there", tint: Snes.whatsapp) { whatsappTextTapped(chat) }
             padButton(icon: recording ? "stop.fill" : "mic.fill",
                       title: recording ? "Stop" : "Reply",
-                      hint: recording ? "Tap when you're done talking" : "Dictate — Clicky types it there",
+                      hint: recording ? "Tap when you're done talking" : "Dictate — Peeky types it there",
                       tint: recording ? Snes.red : Snes.whatsapp) { whatsappReplyTapped(chat) }
             let attached = photoAttachedIn == chat
             let sending = sendingPhoto && photoChat == chat
@@ -1105,11 +1105,11 @@ struct NumpadView: View {
                 Button {
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     client.collapse()
-                    statusText = "Clicky toggled on your Mac — tap again to collapse / bring back"
+                    statusText = "Peeky toggled on your Mac — tap again to collapse / bring back"
                 } label: {
                     HStack(spacing: 5) {
                         Image(systemName: "sparkles").font(.system(size: 11, weight: .bold))
-                        Text("CLICKY")
+                        Text("PEEKY")
                             .font(.system(size: 11, weight: .black, design: .monospaced))
                         Text("show / hide")
                             .font(.system(size: 10, weight: .semibold, design: .rounded))
@@ -1434,11 +1434,11 @@ struct NumpadView: View {
                 Button {
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                     client.collapse()
-                    statusText = "Clicky toggled on your Mac — tap again to collapse / bring back"
+                    statusText = "Peeky toggled on your Mac — tap again to collapse / bring back"
                 } label: {
                     HStack(spacing: 5) {
                         Image(systemName: "sparkles").font(.system(size: 11, weight: .bold))
-                        Text("CLICKY")
+                        Text("PEEKY")
                             .font(.system(size: 11, weight: .black, design: .monospaced))
                         Text("show / hide")
                             .font(.system(size: 10, weight: .semibold, design: .rounded))
@@ -1576,7 +1576,7 @@ struct NumpadView: View {
                     .lineLimit(1)
                 Spacer(minLength: 4)
                 snesDots
-                Text("CLICKY")
+                Text("PEEKY")
                     .font(.system(size: 10, design: .monospaced).weight(.black).italic())
                     .kerning(1)
                     .foregroundStyle(Snes.purple)
@@ -1647,7 +1647,7 @@ struct NumpadView: View {
         GeometryReader { geo in
             let gap: CGFloat = 12
             let topInset: CGFloat = 12
-            // Five equal rows: a one-row CLICKY bar across the top (it only
+            // Five equal rows: a one-row PEEKY bar across the top (it only
             // shows/hides the Mac panel, so it doesn't need a hero tile), then
             // a 2×2 grid of hero keys each two rows tall — ASK | DICTATE over
             // CAPTURE | TALK — so the four mic/capture actions line up exactly.
@@ -1655,7 +1655,7 @@ struct NumpadView: View {
             let heroH = rowH * 2 + gap
             let heroW = (geo.size.width - gap) / 2
             VStack(spacing: gap) {
-                key("0", label: "CLICKY", icon: "sparkles", tint: Snes.purple, lit: true,
+                key("0", label: "PEEKY", icon: "sparkles", tint: Snes.purple, lit: true,
                     h: rowH, w: geo.size.width, banner: true)
                 HStack(alignment: .top, spacing: gap) {
                     // ASK records on the phone and sends `ASK <text>`: the Mac
@@ -1865,9 +1865,9 @@ struct NumpadView: View {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         switch label {
         case "0":
-            // Toggle: the Mac shows Clicky if hidden/collapsed, collapses it if open.
+            // Toggle: the Mac shows Peeky if hidden/collapsed, collapses it if open.
             client.collapse()
-            statusText = "Clicky toggled — tap CLICKY again to hide or bring it back"
+            statusText = "Peeky toggled — tap PEEKY again to hide or bring it back"
         case "4":
             client.show()
             client.tab("ASK")
@@ -1904,7 +1904,7 @@ struct NumpadView: View {
             toggleListening()
         case "enter":
             client.collapse()
-            statusText = "Clicky collapsed on your Mac"
+            statusText = "Peeky collapsed on your Mac"
         default:
             break
         }
@@ -1935,7 +1935,7 @@ struct NumpadView: View {
                     statusText = "Sent: “\(text)”"
                 case .talk:
                     client.talk(text)
-                    statusText = "Sent to Clicky: “\(text)”"
+                    statusText = "Sent to Peeky: “\(text)”"
                 }
             }
         } else {
@@ -1952,7 +1952,7 @@ struct NumpadView: View {
                 case .whatsapp: statusText = "Listening… speak your reply, then tap Stop"
                 case .dictate: statusText = "Listening… speak, then tap STOP to copy to your Mac"
                 case .ask: statusText = "Listening… speak, then tap STOP to ask"
-                case .talk: statusText = "Listening… say a command, pause and Clicky does it, keep going, then tap Stop"
+                case .talk: statusText = "Listening… say a command, pause and Peeky does it, keep going, then tap Stop"
                 }
             } catch {
                 statusText = "Mic error: \(error.localizedDescription)"

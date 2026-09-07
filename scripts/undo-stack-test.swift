@@ -82,7 +82,7 @@ let original = attribute(compose, kAXValueAttribute) as? String ?? ""
 print("compose box holds: \"\(original)\"")
 
 // (b) A real change — the entry the undo stack would push.
-let marker = "Clicky undo test \(Int(Date().timeIntervalSince1970))"
+let marker = "Peeky undo test \(Int(Date().timeIntervalSince1970))"
 let first = write(compose, marker)
 check(first.0 == .success, "first write: .success (was: \(first.0.rawValue)); stack entry previous=\"\(first.previous)\"")
 check(first.previous == original, "snapshotted previous value equals what the box held")
