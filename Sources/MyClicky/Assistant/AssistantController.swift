@@ -2096,7 +2096,11 @@ final class AssistantController {
         panel.state.status = .thinking
         MessagesActions.sendTyped { [weak self] message, ok in
             guard let self else { return }
-            if ok { self.messagesDraftOpenedAt = nil; self.messagesDraftText = nil }
+            // The thread is still open after a send, and the next sentence is
+            // almost always a follow-up to it (observed live: "No I actually
+            // got work on Friday" right after "send it" fell to the planner
+            // and went nowhere). Keep drafting into it; only the text resets.
+            if ok { self.messagesDraftOpenedAt = Date(); self.messagesDraftText = nil }
             self.panel.state.status = .answering
             self.panel.state.answer = message
             self.panel.state.logTalk(ok ? .status : .error, message)
