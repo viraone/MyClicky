@@ -530,6 +530,10 @@ struct NumpadView: View {
                 sendConfirmCard(to: sendTo, preview: preview, spoken: confirm.question)
             } else if let runIn = confirm.runIn {
                 sendConfirmCard(to: runIn, preview: preview, spoken: confirm.question, run: true)
+            } else if Self.isSendShaped(headline) {
+                // A send the Mac couldn't attribute to a recipient still gets
+                // the send card, never the bare yes/no.
+                sendConfirmCard(to: "", preview: preview, spoken: confirm.question)
             } else {
                 genericConfirmCard(headline: headline, preview: preview, spoken: confirm.question)
             }
@@ -547,6 +551,11 @@ struct NumpadView: View {
         )
     }
 
+    private static func isSendShaped(_ headline: String) -> Bool {
+        let lowered = headline.lowercased()
+        return lowered.contains("send") || lowered.contains("reply")
+    }
+
     /// The last gate before a message leaves: who it's going to, what it
     /// says, and two pills — grey Cancel, blue Send. Cancel is the safe
     /// default and sits where a thumb lands first.
@@ -559,6 +568,7 @@ struct NumpadView: View {
                     .dynamicTypeSize(.large ... .accessibility4)
                     .foregroundStyle(.white)
                 (run ? Text("Are you sure you want to run this in \(Text(recipient).bold())?")
+                     : recipient.isEmpty ? Text("Are you sure you want to send this message?")
                      : Text("Are you sure you want to send this message to \(Text(recipient).bold())?"))
                     .font(.system(.body, design: .rounded))
                     .dynamicTypeSize(.large ... .accessibility4)
@@ -568,6 +578,7 @@ struct NumpadView: View {
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel(run ? "Confirm action. Are you sure you want to run this in \(recipient)? \(preview)"
+                                    : recipient.isEmpty ? "Confirm action. Are you sure you want to send this message? \(preview)"
                                     : "Confirm action. Are you sure you want to send this message to \(recipient)? \(preview)")
 
             if !preview.isEmpty {
