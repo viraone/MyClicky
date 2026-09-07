@@ -662,7 +662,7 @@ final class AssistantController {
         // ("send it") are more likely a command than the start of a message.
         guard pending.count >= 3 else { return }
         let utterance = pending.joined(separator: " ")
-        if Self.isSendIt(utterance) || Self.isEraseIt(utterance) || Self.isUndoIt(utterance) || Self.isNeverMind(utterance) || Self.isAppCommand(utterance) {
+        if !pendingConfirms.isEmpty || Self.isSendIt(utterance) || Self.isEraseIt(utterance) || Self.isUndoIt(utterance) || Self.isNeverMind(utterance) || Self.isAppCommand(utterance) {
             ghostDraft?.clear()
             return
         }
@@ -718,7 +718,7 @@ final class AssistantController {
         // Commands to the thread ("send it", "erase that", "undo") and thread
         // switches should still run promptly.
         let utterance = pending.joined(separator: " ")
-        if Self.isSendIt(utterance) || Self.isEraseIt(utterance) || Self.isUndoIt(utterance) || Self.isNeverMind(utterance) || Self.isAppCommand(utterance) {
+        if !pendingConfirms.isEmpty || Self.isSendIt(utterance) || Self.isEraseIt(utterance) || Self.isUndoIt(utterance) || Self.isNeverMind(utterance) || Self.isAppCommand(utterance) {
             return nil
         }
         let dangling: Set<String> = ["a", "an", "the", "and", "or", "but", "so", "to", "at", "in", "on", "of", "for",
@@ -1031,6 +1031,15 @@ final class AssistantController {
     }
 
     private func handleDo(_ utterance: String, targetApp: NSRunningApplication?) {
+        // A confirm card is up: "yes" / "send it" / "no" / "cancel" answers it
+        // and is never a new command.
+        if let id = pendingConfirms.keys.first, let answer = Self.spokenConfirmAnswer(utterance) {
+            ActivityLog.recordAction("confirm-spoken", ["text": utterance, "answer": answer ? "yes" : "no"])
+            panel.state.logTalk(.command, utterance)
+            takeGhostDraft()?.clear()
+            resolveConfirm(id: id, result: answer)
+            return
+        }
         if MorningCoach.isGreeting(utterance) {
             handleMorning(utterance)
             return
@@ -1224,26 +1233,80 @@ final class AssistantController {
     /// Shows the confirmation on the Mac panel AND sends CONFIRM to the phone;
     /// whichever answers first resolves it, since the person asking may not
     /// be within reach of the Mac.
+    /// What a confirm is for. `.send` gets a Cancel/Send card on the phone and
+    /// a "Send" button on the Mac; everything else is the generic No/Yes.
+    enum ConfirmKind {
+        case action
+        case send(recipient: String)
+    }
+
+    /// The phone protocol is one message per line, so a question that carries
+    /// a quoted preview ("Send to X?\n\n<text>") has to travel with its
+    /// newlines folded into U+2028; the phone unfolds them. Tabs separate
+    /// fields, so they're flattened too.
+    static func encodeConfirmField(_ text: String) -> String {
+        text.replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\n", with: "\u{2028}")
+            .replacingOccurrences(of: "\t", with: " ")
+    }
+
     @MainActor
-    private func requestConfirm(question: String, screen: NSScreen) async -> Bool {
+    private func requestConfirm(question: String, screen: NSScreen, kind: ConfirmKind = .action) async -> Bool {
         await withCheckedContinuation { continuation in
             let id = UUID().uuidString
             log.notice("requesting confirm \(id, privacy: .public): \(question, privacy: .public)")
             pendingConfirms[id] = continuation
             let cursor = NSEvent.mouseLocation
+            let title: String, label: String, icon: String, wire: String
+            switch kind {
+            case .action:
+                title = "Confirm this action?"; label = "Do It"; icon = "checkmark.circle"
+                wire = "CONFIRM \(id)\t\(Self.encodeConfirmField(question))"
+            case .send(let recipient):
+                title = "Send this message?"; label = "Send"; icon = "paperplane"
+                wire = "CONFIRM \(id)\t\(Self.encodeConfirmField(question))\tSEND\t\(Self.encodeConfirmField(recipient))"
+            }
             confirmPanel.show(
-                title: "Confirm this action?",
+                title: title,
                 message: question,
-                confirmLabel: "Do It",
-                icon: "checkmark.circle",
+                confirmLabel: label,
+                icon: icon,
                 tint: .blue,
                 near: cursor,
                 on: screen
             ) { [weak self] confirmed in
                 self?.resolveConfirm(id: id, result: confirmed)
             }
-            remote.broadcast("CONFIRM \(id)\t\(question)")
+            remote.broadcast(wire)
         }
+    }
+
+    /// "Yes" / "send it" / "go ahead" while a confirm is up answers it; so does
+    /// "no" / "cancel" / "never mind". Returns nil when the words aren't a
+    /// plain answer — then they're treated as a new command as usual.
+    static func spokenConfirmAnswer(_ utterance: String) -> Bool? {
+        var words = utterance.lowercased()
+            .replacingOccurrences(of: "’", with: "")
+            .replacingOccurrences(of: "'", with: "")
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+        let leadIns: Set<String> = ["ok", "okay", "hey", "clicky", "please", "just", "um", "uh", "and", "so", "well"]
+        while let first = words.first, leadIns.contains(first), words.count > 1 { words.removeFirst() }
+        words = stripStutters(words)
+        guard !words.isEmpty, words.count <= 5 else { return nil }
+        let yes: Set<String> = ["yes", "yeah", "yep", "yup", "sure", "confirm", "confirmed", "send", "sent", "ship",
+                                "go", "ahead", "do", "it", "that", "this", "the", "message", "text", "email", "now",
+                                "please", "ok", "okay", "fine", "correct", "right", "absolutely", "affirmative"]
+        let no: Set<String> = ["no", "nope", "nah", "cancel", "stop", "don't", "dont", "never", "mind", "nevermind",
+                               "wait", "hold", "on", "abort", "negative", "not", "yet", "it", "that", "this", "please",
+                               "the", "send", "sending"]
+        let hasNoVerb = words.contains { ["no", "nope", "nah", "cancel", "stop", "don't", "dont", "never",
+                                          "nevermind", "wait", "hold", "abort", "negative", "not"].contains($0) }
+        if hasNoVerb, words.allSatisfy({ no.contains($0) }) { return false }
+        let hasYesVerb = words.contains { ["yes", "yeah", "yep", "yup", "sure", "confirm", "confirmed", "send", "sent",
+                                           "ship", "go", "do", "ok", "okay", "correct", "absolutely", "affirmative"].contains($0) }
+        if hasYesVerb, words.allSatisfy({ yes.contains($0) }) { return true }
+        return nil
     }
 
     private func resolveConfirm(id: String, result: Bool) {
@@ -1995,11 +2058,33 @@ final class AssistantController {
     private func sendOpenDraft() {
         let gmail = gmailDraftOpenedAt ?? .distantPast
         let messages = messagesDraftOpenedAt ?? .distantPast
-        if messages > gmail, Date().timeIntervalSince(messages) < 10 * 60 {
-            sendOpenMessagesDraft()
-        } else {
-            sendOpenGmailDraft()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if messages > gmail, Date().timeIntervalSince(messages) < 10 * 60 {
+                await self.sendOpenMessagesDraft()
+            } else {
+                await self.sendOpenGmailDraft()
+            }
         }
+    }
+
+    /// The one moment that can't be taken back. The card names who and quotes
+    /// what, on the phone and on the Mac; a spoken "yes" / "send" or "no" /
+    /// "cancel" answers it too. Cancel leaves the draft exactly where it was.
+    private func confirmSendOpenDraft(to recipient: String, via app: String, body: String) async -> Bool {
+        let screen = activeScreen ?? NSScreen.main ?? NSScreen.screens[0]
+        panel.state.status = .answering
+        let ask = "Send this to \(recipient)?"
+        panel.state.answer = ask
+        panel.state.logTalk(.status, ask)
+        guard await confirmSend(to: recipient, via: app, body: body, screen: screen) else {
+            let message = "Not sent — the draft is still there."
+            panel.state.answer = message
+            panel.state.logTalk(.status, message)
+            remote.broadcast("STATUS \(message)")
+            return false
+        }
+        return true
     }
 
     /// Empties the compose box of the open Messages thread — in the
@@ -2099,8 +2184,8 @@ final class AssistantController {
         if !panel.state.textOnlyMode { speak(message) }
     }
 
-    private func sendOpenMessagesDraft() {
-        guard messagesDraftText != nil, MessagesActions.openConversation() != nil else {
+    private func sendOpenMessagesDraft() async {
+        guard messagesDraftText != nil, let open = MessagesActions.openConversation() else {
             let message = "Nothing typed in Messages yet — tell me what to say first."
             panel.state.status = .answering
             panel.state.answer = message
@@ -2108,6 +2193,10 @@ final class AssistantController {
             remote.broadcast("STATUS \(message)")
             return
         }
+        // What's actually in the box wins over what we last wrote — the user
+        // may have edited it by hand since.
+        let body = MessagesActions.currentComposeText() ?? messagesDraftText ?? ""
+        guard await confirmSendOpenDraft(to: open, via: "Messages", body: body) else { return }
         panel.state.status = .thinking
         MessagesActions.sendTyped { [weak self] message, ok in
             guard let self else { return }
@@ -2321,7 +2410,7 @@ final class AssistantController {
         }
     }
 
-    private func sendOpenGmailDraft() {
+    private func sendOpenGmailDraft() async {
         guard let opened = gmailDraftOpenedAt, Date().timeIntervalSince(opened) < 10 * 60 else {
             let message = "No Gmail draft from me to send — say “email that to someone” first."
             panel.state.status = .answering
@@ -2330,6 +2419,9 @@ final class AssistantController {
             remote.broadcast("STATUS \(message)")
             return
         }
+        let compose = GmailDrafter.openCompose(recipientHint: gmailDraftRecipient)
+        let recipient = compose?.to.isEmpty == false ? compose!.to : (gmailDraftRecipient ?? "this recipient")
+        guard await confirmSendOpenDraft(to: recipient, via: "Gmail", body: compose?.body ?? "") else { return }
         panel.state.status = .thinking
         GmailActions.send { [weak self] message, ok in
             guard let self else { return }
@@ -2411,10 +2503,13 @@ final class AssistantController {
     private func confirmSend(to recipient: String, via app: String,
                              body: String, screen: NSScreen) async -> Bool {
         let preview = body.count > 220 ? String(body.prefix(220)) + "…" : body
-        return await requestConfirm(
+        let confirmed = await requestConfirm(
             question: "Send to \(recipient) in \(app)?\n\n\(preview)",
-            screen: screen
+            screen: screen,
+            kind: .send(recipient: recipient)
         )
+        ActivityLog.recordAction("send-confirm", ["via": app, "ok": confirmed ? "yes" : "no"])
+        return confirmed
     }
 
     // MARK: - Drive cleanup (⌥⌘D)    // MARK: - Drive cleanup (⌥⌘D)

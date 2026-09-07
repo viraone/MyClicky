@@ -518,14 +518,68 @@ struct NumpadView: View {
                                           : "Double tap, then say what you want your Mac to do")
     }
 
-    private func confirmView(_ confirm: (id: String, question: String)) -> some View {
+    private func confirmView(_ confirm: ClickyClient.PendingConfirm) -> some View {
         // "Send to X in Gmail?\n\n<preview>" — headline first, the passage
         // (if any) shown as a quoted card underneath it.
         let parts = confirm.question.components(separatedBy: "\n\n")
         let headline = parts.first ?? confirm.question
         let preview = parts.dropFirst().joined(separator: "\n\n").trimmingCharacters(in: .whitespacesAndNewlines)
 
-        return VStack(spacing: 18) {
+        return Group {
+            if let sendTo = confirm.sendTo {
+                sendConfirmCard(to: sendTo, preview: preview, spoken: confirm.question)
+            } else {
+                genericConfirmCard(headline: headline, preview: preview, spoken: confirm.question)
+            }
+        }
+        .padding(22)
+        .background(
+            RoundedRectangle(cornerRadius: 28)
+                .fill(
+                    LinearGradient(colors: [Color(red: 0.13, green: 0.13, blue: 0.16),
+                                            Color(red: 0.07, green: 0.07, blue: 0.09)],
+                                   startPoint: .top, endPoint: .bottom)
+                )
+                .overlay(RoundedRectangle(cornerRadius: 28).strokeBorder(.white.opacity(0.10), lineWidth: 1))
+                .shadow(color: .black.opacity(0.45), radius: 30, y: 12)
+        )
+    }
+
+    /// The last gate before a message leaves: who it's going to, what it
+    /// says, and two pills — grey Cancel, blue Send. Cancel is the safe
+    /// default and sits where a thumb lands first.
+    private func sendConfirmCard(to recipient: String, preview: String, spoken: String) -> some View {
+        VStack(spacing: 22) {
+            Spacer(minLength: 0)
+            VStack(spacing: 14) {
+                Text("Confirm Action")
+                    .font(.system(.title, design: .rounded).weight(.bold))
+                    .dynamicTypeSize(.large ... .accessibility4)
+                    .foregroundStyle(.white)
+                Text("Are you sure you want to send this message to \(Text(recipient).bold())?")
+                    .font(.system(.body, design: .rounded))
+                    .dynamicTypeSize(.large ... .accessibility4)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.white.opacity(0.75))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Confirm action. Are you sure you want to send this message to \(recipient)? \(preview)")
+
+            if !preview.isEmpty {
+                previewQuote(preview)
+            }
+
+            HStack(spacing: 14) {
+                pillButton("Cancel", prominent: false) { respondConfirm(false) }
+                pillButton("Send", prominent: true) { respondConfirm(true) }
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func genericConfirmCard(headline: String, preview: String, spoken: String) -> some View {
+        VStack(spacing: 18) {
             VStack(spacing: 6) {
                 Text("CONFIRM")
                     .font(.system(size: 11, weight: .heavy, design: .rounded))
@@ -540,28 +594,10 @@ struct NumpadView: View {
                     .minimumScaleFactor(0.7)
             }
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("Clicky wants to confirm: \(confirm.question)")
+            .accessibilityLabel("Clicky wants to confirm: \(spoken)")
 
             if !preview.isEmpty {
-                Text(preview)
-                    .font(.system(.callout, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.85))
-                    .lineLimit(4)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(14)
-                    .background(
-                        RoundedRectangle(cornerRadius: 14)
-                            .fill(.white.opacity(0.07))
-                            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(0.12), lineWidth: 1))
-                    )
-                    .overlay(alignment: .leading) {
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(Snes.talk)
-                            .frame(width: 3)
-                            .padding(.vertical, 12)
-                            .padding(.leading, 1)
-                    }
-                    .accessibilityHidden(true)
+                previewQuote(preview)
             }
 
             HStack(spacing: 14) {
@@ -570,17 +606,48 @@ struct NumpadView: View {
             }
             .frame(maxHeight: .infinity)
         }
-        .padding(22)
-        .background(
-            RoundedRectangle(cornerRadius: 28)
-                .fill(
-                    LinearGradient(colors: [Color(red: 0.13, green: 0.13, blue: 0.16),
-                                            Color(red: 0.07, green: 0.07, blue: 0.09)],
-                                   startPoint: .top, endPoint: .bottom)
+    }
+
+    private func previewQuote(_ preview: String) -> some View {
+        Text(preview)
+            .font(.system(.callout, design: .monospaced))
+            .foregroundStyle(.white.opacity(0.85))
+            .lineLimit(6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .background(
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(.white.opacity(0.07))
+                    .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(0.12), lineWidth: 1))
+            )
+            .overlay(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Snes.talk)
+                    .frame(width: 3)
+                    .padding(.vertical, 12)
+                    .padding(.leading, 1)
+            }
+            .accessibilityHidden(true)
+    }
+
+    private func pillButton(_ title: String, prominent: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(.title3, design: .rounded).weight(.semibold))
+                .dynamicTypeSize(.large ... .accessibility3)
+                .foregroundStyle(prominent ? Color.white : Color.white.opacity(0.9))
+                .frame(maxWidth: .infinity)
+                .frame(height: 56)
+                .background(
+                    Capsule().fill(prominent ? Color(red: 0.0, green: 0.48, blue: 1.0)
+                                             : Color.white.opacity(0.14))
                 )
-                .overlay(RoundedRectangle(cornerRadius: 28).strokeBorder(.white.opacity(0.10), lineWidth: 1))
-                .shadow(color: .black.opacity(0.45), radius: 30, y: 12)
-        )
+                .overlay(Capsule().strokeBorder(.white.opacity(prominent ? 0.18 : 0.10), lineWidth: 1))
+                .shadow(color: prominent ? Color(red: 0.0, green: 0.48, blue: 1.0).opacity(0.45) : .clear,
+                        radius: 14, y: 5)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
     }
 
     private func confirmButton(_ title: String, icon: String, color: Color, prominent: Bool,
