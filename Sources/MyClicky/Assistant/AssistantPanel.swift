@@ -212,6 +212,12 @@ final class AssistantState: ObservableObject {
     /// Last region capture (saved to disk; on the clipboard, paired with the dictation if any).
     @Published var captureImage: NSImage?
     @Published var captureURL: URL?
+    /// Where the preview came from. `.capture` is a region grab; the other
+    /// two arrive via the + menu ("Files and folders"). A `.file` is anything
+    /// that isn't an image — previewed by its Finder icon and copied as a
+    /// file URL rather than pixels.
+    enum AttachmentKind { case capture, image, file }
+    @Published var attachmentKind: AttachmentKind = .capture
     /// Reloaded from disk when the saved capture is edited in an external
     /// app (e.g. Preview.app's markup arrow) after being saved — nil until
     /// the file actually changes.
@@ -256,6 +262,9 @@ final class AssistantState: ObservableObject {
     /// Dismisses the capture preview (the file on disk is untouched) and
     /// stops watching it for external edits.
     var onDismissCapture: (() -> Void)?
+    /// Opens the macOS file picker so a file or folder from this Mac can be
+    /// dropped into the capture preview (the + menu on Capture + Dictate).
+    var onAttachFile: (() -> Void)?
     /// Reads the current answer aloud on demand, regardless of `textOnlyMode`.
     var onReadAloud: (() -> Void)?
     /// Mic button: starts recording (a question on the Ask tab, a dictation
@@ -1029,6 +1038,35 @@ struct AssistantPanelView: View {
                                 onSelect: { selectClipboardChoice(.edited) }
                             )
                         }
+                    } else if state.attachmentKind == .file {
+                        // Not an image: the Finder icon at a sane size, with
+                        // the name, rather than a 256pt icon blown up to fill.
+                        VStack(spacing: 10) {
+                            Image(nsImage: image)
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .frame(width: 96, height: 96)
+                            Text(state.captureURL?.lastPathComponent ?? "")
+                                .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.85))
+                                .lineLimit(2)
+                                .multilineTextAlignment(.center)
+                            Text(state.captureURL?.deletingLastPathComponent().path
+                                    .replacingOccurrences(of: NSHomeDirectory(), with: "~") ?? "")
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.4))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        .padding(16)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.04)))
+                        .overlay(RoundedRectangle(cornerRadius: 8)
+                            .strokeBorder(Color.white.opacity(0.2), lineWidth: 1))
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            if let url = state.captureURL { NSWorkspace.shared.open(url) }
+                        }
                     } else {
                         Image(nsImage: image)
                             .resizable()
@@ -1077,6 +1115,11 @@ struct AssistantPanelView: View {
                         .font(.system(size: 14, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.55))
                         .multilineTextAlignment(.center)
+                    Text("Or click + below to add a file or folder from this Mac.")
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.4))
+                        .multilineTextAlignment(.center)
+                        .padding(.top, 2)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -1134,8 +1177,14 @@ struct AssistantPanelView: View {
     }
 
     private var captureStatusText: String {
+        let name = state.captureURL?.lastPathComponent ?? "Saved"
+        switch state.attachmentKind {
+        case .image: return "\(name) — added from this Mac, on your clipboard, click to open"
+        case .file: return "\(name) — added from this Mac, copied as a file, click to open"
+        case .capture: break
+        }
         guard state.editedCaptureImage != nil else {
-            return "\(state.captureURL?.lastPathComponent ?? "Saved") — on your clipboard, click to open"
+            return "\(name) — on your clipboard, click to open"
         }
         let which = state.clipboardChoice == .edited ? "Edited version" : "Original"
         return "\(which) on your clipboard — click the Edited thumbnail to reopen in Preview"
@@ -1411,6 +1460,9 @@ struct AssistantPanelView: View {
 
     private var bottomBar: some View {
         HStack(spacing: 10) {
+            if state.tab == .captureDictate {
+                addMenu
+            }
             // Shell-prompt readout: `clicky on talk ❯` — the segments coloured
             // as a prompt colours them, the chevron in the phase colour.
             HStack(spacing: 6) {
@@ -1467,6 +1519,33 @@ struct AssistantPanelView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: state.canStop)
+    }
+
+    /// Codex-style "+" at the foot of Capture + Dictate: a small menu whose
+    /// one entry, "Files and folders", opens the macOS picker. Whatever is
+    /// chosen lands in the capture preview exactly as a region grab would.
+    private var addMenu: some View {
+        Menu {
+            Section("Add") {
+                Button {
+                    state.onAttachFile?()
+                } label: {
+                    Label("Files and folders", systemImage: "paperclip")
+                }
+            }
+        } label: {
+            Image(systemName: "plus")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.75))
+                .frame(width: 30, height: 30)
+                .background(Circle().fill(Color.white.opacity(0.07)))
+                .overlay(Circle().strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
+                .contentShape(Circle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Add a file or folder from this Mac to the preview")
     }
 
     /// The break coach's countdown, and its on/off switch. Always visible so
