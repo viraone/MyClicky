@@ -2295,6 +2295,10 @@ final class AssistantController {
             panel.state.answer = message
             panel.state.logTalk(ok ? .status : .error, message)
             remote.broadcast("STATUS \(message)")
+            // The landed-write confirmation lived only on the panel and the
+            // phone's status line — easy to miss with the panel behind other
+            // windows (observed live: "I didn't see it land").
+            if ok { toast.show("Written — say “send it” or “undo that”", icon: "text.bubble.fill", tint: .green) }
         }
     }
 
