@@ -221,6 +221,16 @@ enum MessagesActions {
         return Array(lines.suffix(limit))
     }
 
+    /// What's currently typed in the open conversation's compose box — text
+    /// the user (or an earlier Clicky) left there — or nil when the box isn't
+    /// exposed to Accessibility.
+    static func currentComposeText() -> String? {
+        guard let app = running(), openConversation() != nil, let field = composeElement(in: app) else { return nil }
+        let text = (AccessibilityFinder.attribute(field, kAXValueAttribute) as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return text?.isEmpty == false ? text : nil
+    }
+
     /// Background counterpart of `typeIntoOpenConversation`: sets the compose
     /// box's value through Accessibility without activating Messages, so the
     /// app the user is working in keeps focus. Any `needsFallback` result

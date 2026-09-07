@@ -30,11 +30,23 @@ enum MessagesDrafter {
     draft and return the whole revised text. Never paste their instruction \
     or apology into the message.
 
-    Reply with JSON only: {"text": "<the message>"}.
+    Erasing: when they want the draft gone — "erase that", "get rid of \
+    that message", "delete it", "clear it out", "scrap that", "start over" \
+    — even if they quote the draft's words while asking, or ramble, reply \
+    {"action": "erase"} and nothing else. Only a request to remove the \
+    WHOLE draft is an erase; "delete the second sentence" is a revision.
+
+    Reply with JSON only: {"action": "write", "text": "<the message>"} \
+    or {"action": "erase"}.
     """
 
+    enum Outcome: Equatable {
+        case write(String)
+        case erase
+    }
+
     static func write(gist: String, recipient: String, transcript: [String], currentDraft: String?,
-                      senderName: String, claude: AnthropicService) async throws -> String {
+                      senderName: String, claude: AnthropicService) async throws -> Outcome {
         var payload = "Gist, as spoken: \"\(gist)\"\n\nSender: \(senderName)\nConversation with: \(recipient)\n"
         if let currentDraft, !currentDraft.isEmpty { payload += "\nCurrent draft:\n<draft>\n\(currentDraft)\n</draft>\n" }
         if !transcript.isEmpty {
@@ -42,9 +54,10 @@ enum MessagesDrafter {
                      + transcript.joined(separator: "\n") + "\n</messages>\n"
         }
         let json = try await claude.requestJSON(system: system, userText: payload, maxTokens: 600, timeout: 45)
+        if (json["action"] as? String)?.lowercased() == "erase" { return .erase }
         guard let text = (json["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
             throw AnthropicService.ServiceError.emptyAnswer
         }
-        return text
+        return .write(text)
     }
 }

@@ -1616,7 +1616,7 @@ final class AssistantController {
         let leadIns: Set<String> = ["actually", "ok", "okay", "hey", "clicky", "no", "wait", "please", "just", "can", "you", "let's", "lets", "and", "now"]
         while let first = words.first, leadIns.contains(first) { words.removeFirst() }
         let joined = words.joined(separator: " ")
-        if ["start over", "start again", "scrap that", "scrap it", "wipe it", "wipe that"].contains(where: { joined.hasPrefix($0) }) {
+        if ["start over", "start again", "scrap that", "scrap it", "wipe it", "wipe that", "get rid of"].contains(where: { joined.hasPrefix($0) }) {
             return true
         }
         let verbs: Set<String> = ["erase", "delete", "clear", "remove", "wipe", "scrap"]
@@ -1767,11 +1767,15 @@ final class AssistantController {
         busy = true
         synthesizer.stopSpeaking(at: .immediate)
         ring.hide()
+        // What's really in the compose box counts as the draft — text left
+        // there from before Clicky opened this thread included — so "erase
+        // that" / "make it shorter" have something to act on.
+        let currentDraft = messagesDraftText ?? MessagesActions.currentComposeText()
         panel.state.status = .thinking
-        panel.state.answer = messagesDraftText == nil ? "Writing it…" : "Rewriting it…"
+        panel.state.answer = currentDraft == nil ? "Writing it…" : "Rewriting it…"
         panel.state.errorText = nil
         remote.broadcast("STATUS \(panel.state.answer)")
-        ActivityLog.recordAction("messages-draft", ["revision": messagesDraftText == nil ? "no" : "yes"])
+        ActivityLog.recordAction("messages-draft", ["revision": currentDraft == nil ? "no" : "yes"])
 
         requestID += 1
         let id = requestID
@@ -1782,10 +1786,14 @@ final class AssistantController {
             let message: String
             var ok = false
             do {
-                let text = try await MessagesDrafter.write(gist: gist, recipient: recipient, transcript: transcript,
-                                                           currentDraft: messagesDraftText,
-                                                           senderName: NSFullUserName(), claude: claude)
+                let outcome = try await MessagesDrafter.write(gist: gist, recipient: recipient, transcript: transcript,
+                                                              currentDraft: currentDraft,
+                                                              senderName: NSFullUserName(), claude: claude)
                 guard id == requestID else { return }
+                guard case .write(let text) = outcome else {
+                    eraseOpenMessagesDraft()
+                    return
+                }
                 // Prefer writing into the compose box without taking focus
                 // from whatever the user is working in; only activate
                 // Messages (focus-and-return path) if that verifiably fails.
