@@ -56,6 +56,7 @@ final class AssistantController {
     private var busy = false
     /// The Claude request currently in flight, so Stop can cancel it.
     private var currentTask: Task<Void, Never>?
+    private var siteSaveTask: Task<Void, Never>?
     /// Bumped on every new request/stop; stale tasks compare against it
     /// before touching panel state.
     private var requestID = 0
@@ -104,6 +105,9 @@ final class AssistantController {
     /// conversation … (pause) … send that to Dino Dad … STOP" runs as three
     /// commands, each starting the moment the user stops talking.
     private var talkStreaming = false
+    private var streamQuestionsOnly = false
+    private var streamTranscript = ""
+    private var streamPauseTask: Task<Void, Never>?
     /// True from the first word of a Talk session until its last segment has
     /// run — the copied preview survives across segments while this is set.
     private var talkSession = false
@@ -166,8 +170,16 @@ final class AssistantController {
         driveCleanupHotkey.start()
 
         // Clicky Remote (iOS app) commands over the local network.
-        remote.onShow = { [weak self] in self?.showPanel() }
-        remote.onListen = { [weak self] in self?.showPanel(listening: true) }
+        remote.onShow = { [weak self] in
+            guard let self else { return }
+            if !self.talkStreaming && !self.busy { self.panel.state.tab = .ask }
+            self.showPanel()
+        }
+        remote.onListen = { [weak self] in
+            guard let self else { return }
+            self.showPanel(listening: true)
+            if self.panel.state.tab == .ask { self.beginTalkStreaming(questionsOnly: true) }
+        }
         remote.onListenTalk = { [weak self] in
             guard let self else { return }
             self.talkTargetApp = NSWorkspace.shared.frontmostApplication
@@ -175,10 +187,12 @@ final class AssistantController {
             // Phone-driven: the Mac panel is just a status readout, so park it
             // as the thin strip at the bottom of the work screen.
             if let screen = self.activeScreen { self.panel.showAsStrip(on: screen) }
-            self.panel.state.tab = .talk
-            self.beginTalkStreaming()
+            // The desktop selection controls the phone's continuous voice stream.
+            let questionsOnly = self.panel.state.tab == .ask
+            if !questionsOnly { self.panel.state.tab = .talk }
+            self.beginTalkStreaming(questionsOnly: questionsOnly)
         }
-        panel.state.onPause = { [weak self] in self?.talkPaused() }
+        // Streaming silence is tracked independently of the answer UI state.
         remote.onStop = { [weak self] in self?.stop() }
         remote.onCollapse = { [weak self] in
             guard let self else { return }
@@ -186,8 +200,10 @@ final class AssistantController {
             if self.panel.isVisible && !self.panel.state.collapsed {
                 self.panel.minimize()
             } else if self.panel.isVisible {
+                if !self.talkStreaming && !self.busy { self.panel.state.tab = .ask }
                 self.panel.expand()
             } else {
+                if !self.talkStreaming && !self.busy { self.panel.state.tab = .ask }
                 self.showPanel()
             }
         }
@@ -362,6 +378,10 @@ final class AssistantController {
             guard let self else { return }
             self.showPanel()
             self.panel.state.transcript = question
+            if self.talkStreaming, self.streamQuestionsOnly {
+                self.finishTalkStreaming(final: question)
+                return
+            }
             // The Mac's visible tab wins: if the user switched to Capture +
             // Dictate on the panel itself, treat the phone's speech as dictation.
             if self.panel.state.tab == .captureDictate {
@@ -407,6 +427,13 @@ final class AssistantController {
             self?.remote.broadcast("GMAIL_UNREAD \(count)")
         }
         gmailUnread.start()
+        siteSaveTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                guard !Task.isCancelled, let self else { return }
+                if !self.busy { await SiteEditActions.savePendingPageEdit() }
+            }
+        }
         remote.start()
         ActivityLog.startSampling()
         startBreakCoach()
@@ -578,7 +605,7 @@ final class AssistantController {
         speech.onPartial = { [weak self] text in
             self?.applyPartial(text)
         }
-        if kind == .talk { beginTalkStreaming() }
+        if kind == .talk || kind == .ask { beginTalkStreaming(questionsOnly: kind == .ask) }
 
         Task {
             guard await SpeechService.requestPermissions() else {
@@ -594,13 +621,13 @@ final class AssistantController {
     }
 
     private func endListening() {
-        guard panel.state.status == .listening else { return }
+        guard panel.state.status == .listening || talkStreaming else { return }
         let kind = recordKind
         let target = talkTargetApp
         recordKind = .ask
         Task {
             let heard = await speech.finish()
-            if kind == .talk, talkStreaming {
+            if (kind == .talk || kind == .ask), talkStreaming {
                 if !heard.isEmpty { panel.state.transcript = heard }
                 finishTalkStreaming(final: heard)
                 return
@@ -630,7 +657,10 @@ final class AssistantController {
 
     // MARK: - Talk streaming (run each command at the pause)
 
-    private func beginTalkStreaming() {
+    private func beginTalkStreaming(questionsOnly: Bool = false) {
+        streamPauseTask?.cancel()
+        streamTranscript = ""
+        streamQuestionsOnly = questionsOnly
         talkStreaming = true
         talkSession = true
         talkDispatched = []
@@ -643,16 +673,26 @@ final class AssistantController {
     /// be running (status thinking/answering) — new words switch the panel
     /// back to listening so the phase shows recording again.
     private func applyPartial(_ text: String) {
-        if talkStreaming, panel.state.status != .listening, panel.state.status != .thinking,
-           text != panel.state.transcript {
-            panel.state.chaining = false
-            panel.state.status = .listening
+        if talkStreaming {
+            guard text != streamTranscript else { return }
+            streamTranscript = text
+            panel.state.transcript = text
+            hud.attach(to: panel.screen ?? activeScreen)
+            hud.hear(text)
+            if !busy {
+                synthesizer.stopSpeaking(at: .immediate)
+                panel.state.chaining = false
+                panel.state.status = .listening
+            }
+            // Keep receiving and queueing speech even while the previous answer runs.
+            talkPaused()
+            if !streamQuestionsOnly { streamGhostDraft(text) }
+            return
         }
         guard panel.state.status == .listening else { return }
         panel.state.transcript = text
         hud.attach(to: panel.screen ?? activeScreen)
         hud.hear(text)
-        streamGhostDraft(text)
     }
 
     /// Streaming dictation insert: while the user is talking to a Messages
@@ -695,18 +735,14 @@ final class AssistantController {
 
     /// The recognizer went quiet: run what was said since the last pause.
     private func talkPaused() {
-        guard talkStreaming, panel.state.status == .listening else { return }
-        // The panel turns amber at 1.4s; give the sentence another moment
-        // before acting so a mid-command breath doesn't split it in two.
-        // Dictating a message gets longer still — people breathe mid-sentence
-        // ("do you know where … the next open mic is") and splitting there
-        // sends half a message then treats the rest as a revision.
-        let snapshot = panel.state.transcript
-        let grace = dictationGrace(for: snapshot) ?? 800_000_000
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: grace)
-            guard let self, self.talkStreaming, self.panel.state.status == .listening,
-                  self.panel.state.transcript == snapshot else { return }
+        guard talkStreaming else { return }
+        streamPauseTask?.cancel()
+        let snapshot = streamTranscript
+        let grace = streamQuestionsOnly ? 800_000_000 : (dictationGrace(for: snapshot) ?? 800_000_000)
+        streamPauseTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 1_400_000_000 + grace)
+            guard !Task.isCancelled, let self, self.talkStreaming,
+                  self.streamTranscript == snapshot else { return }
             self.dispatchTalkSegment()
         }
     }
@@ -736,7 +772,7 @@ final class AssistantController {
     }
 
     private func dispatchTalkSegment() {
-        let words = Self.words(panel.state.transcript)
+        let words = Self.words(streamTranscript)
         let pending = pendingTalkWords(in: words)
         // Two words is the shortest real command ("open Messages"); a single
         // stray word is more likely the recognizer catching its breath.
@@ -778,6 +814,7 @@ final class AssistantController {
 
     /// STOP: whatever is left after the last dispatched segment runs too.
     private func finishTalkStreaming(final: String) {
+        streamPauseTask?.cancel()
         talkStreaming = false
         let words = Self.words(final)
         let rest = pendingTalkWords(in: words).joined(separator: " ")
@@ -817,7 +854,11 @@ final class AssistantController {
            front.bundleIdentifier != Bundle.main.bundleIdentifier {
             talkTargetApp = front
         }
-        handleDo(segment, targetApp: talkTargetApp)
+        if streamQuestionsOnly {
+            handleQuestion(segment)
+        } else {
+            handleDo(segment, targetApp: talkTargetApp)
+        }
     }
 
     /// After a Talk plan finishes: next queued segment, or back to listening
@@ -853,7 +894,7 @@ final class AssistantController {
         case .talk: .talk
         case .morning: .morning
         }
-        if panel.state.status == .listening {
+        if panel.state.status == .listening || talkStreaming {
             if recordKind == kind {
                 endListening()
             } else {
@@ -925,6 +966,8 @@ final class AssistantController {
 
     private func handleQuestion(_ question: String) {
         guard !busy else { return }
+        // Keep the displayed question current for every input path, including typing.
+        panel.state.transcript = question
         if MorningCoach.isGreeting(question) {
             handleMorning(question)
             return
@@ -963,9 +1006,16 @@ final class AssistantController {
         requestID += 1
         let id = requestID
         currentTask = Task {
-            defer { if id == requestID { busy = false; currentTask = nil } }
+            defer {
+                if id == requestID {
+                    busy = false
+                    currentTask = nil
+                    if talkSession { afterTalkSegment() }
+                }
+            }
             do {
-                let image = try await capture.captureDisplayJPEG(screen: screen, maxDimension: 1600)
+                let image = try await capture.captureDisplayJPEG(screen: screen, maxDimension: 1600,
+                                                                 excludingOwnWindows: true)
                 try Task.checkCancellation()
                 var context: String?
                 // A box in edit mode is what the question is about — "explain
@@ -1432,6 +1482,8 @@ final class AssistantController {
         for continuation in pendingChoices.values { continuation.resume(returning: nil) }
         pendingChoices.removeAll()
         let wasStreaming = talkStreaming
+        streamPauseTask?.cancel()
+        streamTranscript = ""
         talkStreaming = false
         takeGhostDraft()?.clear()
         talkSession = false

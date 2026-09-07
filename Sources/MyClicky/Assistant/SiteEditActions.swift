@@ -187,21 +187,77 @@ enum SiteEditActions {
         log.notice("wrote \(html.count) chars into \(id, privacy: .public) in \(file.lastPathComponent, privacy: .public)")
     }
 
+
+    // Explicit Done/Insert requests from this project's hosted page only.
+    private static func isSavePage(_ value: String) -> Bool {
+        guard let url = URL(string: value) else { return false }
+        return url.scheme == "https" && url.host == "viraone.github.io"
+            && url.path == "/sdet-master-clicky/cs198-analogy.html"
+    }
+
+    static func savePendingPageEdit() async {
+        guard !publishing else { return }
+        guard let raw = BrowserTabReader.runJavaScript("JSON.stringify(window.clickyEdit?.pendingSave?.() ?? null)", inTabMatching: isSavePage),
+              let data = raw.data(using: .utf8),
+              let request = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let token = request["token"] as? String,
+              let id = request["id"] as? String,
+              id.range(of: "^(ins|code)-[0-9]+$", options: .regularExpression) != nil,
+              let html = request["html"] as? String,
+              let original = request["original"] as? String else { return }
+        guard BrowserTabReader.runJavaScript("String(window.clickyEdit?.claimSave?.(\(jsString(token))) === true)", inTabMatching: isSavePage) == "true" else { return }
+        let file = repoURL.appendingPathComponent("cs198-analogy.html")
+        var ok = false
+        var message = ""
+        do {
+            let source = try String(contentsOf: file, encoding: .utf8)
+            let compare = """
+            (() => {
+              const doc = new DOMParser().parseFromString(\(jsString(source)), 'text/html');
+              const box = [...doc.querySelectorAll('.insight,.code-panel')].find(b => b.dataset.clickyId === \(jsString(id)));
+              const value = box?.querySelector(box.tagName === 'FIGURE' ? 'pre > code' : ':scope > p')?.innerHTML;
+              return String(value === \(jsString(original)) || value === \(jsString(html)));
+            })()
+            """
+            guard BrowserTabReader.runJavaScript(compare, inTabMatching: isSavePage) == "true" else {
+                throw SaveError.conflict
+            }
+            try writeBoxToFile(id, html: html, in: file)
+            let result = await publish(message: "Save webpage edit to \(id)")
+            ok = result.ok
+            message = result.message
+        } catch { message = error.localizedDescription }
+        _ = BrowserTabReader.runJavaScript("String(window.clickyEdit?.finishSave?.(\(jsString(token)), \(ok ? "true" : "false"), \(jsString(message))))", inTabMatching: isSavePage)
+        ActivityLog.recordAction("site-browser-save", ["box": id, "ok": ok ? "yes" : "no"])
+    }
+
+    private enum SaveError: LocalizedError {
+        case conflict
+        var errorDescription: String? {
+            "This box changed on disk, or Clicky lost access to the tab. Copy your edit before refreshing; it was not overwritten."
+        }
+    }
+    private static var publishing = false
+
     // MARK: - Publish
 
     /// Commits every change in the site repo and pushes. Returns a sentence
     /// for the user.
     static func publish(repo: URL = repoURL, message: String = "Edit via Clicky") async -> (ok: Bool, message: String) {
+        guard !publishing else { return (false, "Another publish is running. Try saving again in a moment.") }
+        publishing = true
+        defer { publishing = false }
         let steps: [[String]] = [
-            ["git", "add", "-A"],
-            ["git", "-c", "user.name=Clicky", "-c", "user.email=clicky@local", "commit", "-q", "-m", message],
-            ["git", "push", "-q"],
+            ["git", "add", "--", "cs198-analogy.html"],
+            ["git", "-c", "user.name=Clicky", "-c", "user.email=clicky@local", "commit", "--only", "-q", "-m", message, "--", "cs198-analogy.html"],
+            ["git", "push", "-q", "origin", "HEAD"],
         ]
         for step in steps {
             let (status, output) = await run(step, in: repo)
             if status != 0 {
-                if step[step.count - 2] == "-m", output.contains("nothing to commit") {
-                    return (true, "Nothing new to publish — the site already has everything.")
+                if step.contains("commit"), output.contains("nothing to commit") || output.contains("no changes added to commit") || output.contains("nothing added to commit") {
+                    // Retry a failed push even when the commit already exists.
+                    continue
                 }
                 log.error("publish failed at \(step.joined(separator: " "), privacy: .public): \(output, privacy: .public)")
                 return (false, "Publishing stopped at \(step[1]): \(output.split(separator: "\n").last.map(String.init) ?? "unknown error")")
