@@ -528,6 +528,8 @@ struct NumpadView: View {
         return Group {
             if let sendTo = confirm.sendTo {
                 sendConfirmCard(to: sendTo, preview: preview, spoken: confirm.question)
+            } else if let runIn = confirm.runIn {
+                sendConfirmCard(to: runIn, preview: preview, spoken: confirm.question, run: true)
             } else {
                 genericConfirmCard(headline: headline, preview: preview, spoken: confirm.question)
             }
@@ -548,7 +550,7 @@ struct NumpadView: View {
     /// The last gate before a message leaves: who it's going to, what it
     /// says, and two pills — grey Cancel, blue Send. Cancel is the safe
     /// default and sits where a thumb lands first.
-    private func sendConfirmCard(to recipient: String, preview: String, spoken: String) -> some View {
+    private func sendConfirmCard(to recipient: String, preview: String, spoken: String, run: Bool = false) -> some View {
         VStack(spacing: 22) {
             Spacer(minLength: 0)
             VStack(spacing: 14) {
@@ -556,7 +558,8 @@ struct NumpadView: View {
                     .font(.system(.title, design: .rounded).weight(.bold))
                     .dynamicTypeSize(.large ... .accessibility4)
                     .foregroundStyle(.white)
-                Text("Are you sure you want to send this message to \(Text(recipient).bold())?")
+                (run ? Text("Are you sure you want to run this in \(Text(recipient).bold())?")
+                     : Text("Are you sure you want to send this message to \(Text(recipient).bold())?"))
                     .font(.system(.body, design: .rounded))
                     .dynamicTypeSize(.large ... .accessibility4)
                     .multilineTextAlignment(.center)
@@ -564,7 +567,8 @@ struct NumpadView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("Confirm action. Are you sure you want to send this message to \(recipient)? \(preview)")
+            .accessibilityLabel(run ? "Confirm action. Are you sure you want to run this in \(recipient)? \(preview)"
+                                    : "Confirm action. Are you sure you want to send this message to \(recipient)? \(preview)")
 
             if !preview.isEmpty {
                 previewQuote(preview)
@@ -572,7 +576,7 @@ struct NumpadView: View {
 
             HStack(spacing: 14) {
                 pillButton("Cancel", prominent: false) { respondConfirm(false) }
-                pillButton("Send", prominent: true) { respondConfirm(true) }
+                pillButton(run ? "Run" : "Send", prominent: true) { respondConfirm(true) }
             }
             Spacer(minLength: 0)
         }
