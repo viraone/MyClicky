@@ -50,7 +50,11 @@ enum MessagesActions {
     }
 
     /// Opens the conversation with `number` and waits for it to actually be
-    /// the one on screen.
+    /// the one on screen — without taking focus from the app the user is
+    /// working in. Messages switches threads (and comes up if it wasn't
+    /// running) but the frontmost app is unchanged afterwards: the URL is
+    /// handed to Messages with activation suppressed, and should Messages
+    /// activate itself regardless, focus is returned to the previous app.
     ///
     /// Via the `sms:` URL scheme rather than by driving the UI. Messages
     /// exposes almost nothing to Accessibility — clicking the sidebar row and
@@ -60,10 +64,12 @@ enum MessagesActions {
     static func openConversation(number: String) async -> Bool {
         let dialable = number.filter { $0.isNumber || $0 == "+" }
         guard !dialable.isEmpty, let url = URL(string: "sms:\(dialable)") else { return false }
-        guard NSWorkspace.shared.open(url) else { return false }
+        let frontBefore = NSWorkspace.shared.frontmostApplication
+        guard await openInBackground(url) else { return false }
 
         // Messages takes a moment to switch threads, and reporting success
         // before it has would let a send land in the previous conversation.
+        var opened = false
         for _ in 0..<12 {
             try? await Task.sleep(nanoseconds: 250_000_000)
             if let open = openConversation(), !open.isEmpty {
@@ -72,11 +78,42 @@ enum MessagesActions {
                 // Either the title became a name (a saved contact) or it shows
                 // the number we asked for, allowing for country-code prefixes.
                 if openDigits.isEmpty || openDigits.hasSuffix(wantDigits.suffix(7)) {
-                    return true
+                    opened = true
+                    break
                 }
             }
         }
-        return false
+        restoreFocus(to: frontBefore)
+        return opened
+    }
+
+    /// Hands `url` to Messages with `activates = false`. Falls back to a plain
+    /// open (which does activate) only if Messages can't be located on disk.
+    private static func openInBackground(_ url: URL) async -> Bool {
+        guard let messagesURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
+            log.notice("open conversation: Messages not found on disk — plain URL open")
+            return NSWorkspace.shared.open(url)
+        }
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = false
+        return await withCheckedContinuation { continuation in
+            NSWorkspace.shared.open([url], withApplicationAt: messagesURL, configuration: config) { _, error in
+                if let error { log.error("open conversation: \(error.localizedDescription, privacy: .public)") }
+                continuation.resume(returning: error == nil)
+            }
+        }
+    }
+
+    /// If Messages activated itself anyway (it does on first launch, and on
+    /// some thread switches), give focus back to the app the user was in.
+    /// This is the one place Messages verbs touch activation, and only ever
+    /// to undo a change Messages made.
+    private static func restoreFocus(to previous: NSRunningApplication?) {
+        guard let previous, previous.processIdentifier != running()?.processIdentifier,
+              let front = NSWorkspace.shared.frontmostApplication,
+              front.processIdentifier != previous.processIdentifier else { return }
+        log.notice("open conversation: Messages took focus — returning it to \(previous.localizedName ?? "?", privacy: .public)")
+        previous.activate()
     }
 
     /// Whether the name someone spoke plausibly refers to the conversation
@@ -169,6 +206,19 @@ enum MessagesActions {
         return Array(lines.suffix(limit))
     }
 
+    /// Background counterpart of `typeIntoOpenConversation`: sets the compose
+    /// box's value through Accessibility without activating Messages, so the
+    /// app the user is working in keeps focus. Any `needsFallback` result
+    /// means nothing was written — call `typeIntoOpenConversation` instead.
+    static func writeIntoOpenConversationInBackground(_ text: String) -> BackgroundWriteResult {
+        guard let app = running(), openConversation() != nil else { return .elementNotWritable }
+        guard let field = composeElement(in: app) else {
+            log.notice("background write: compose field not in the AX tree")
+            return .elementNotWritable
+        }
+        return AXActions.writeTextInBackground(to: field, text: text)
+    }
+
     /// Puts `text` into the compose box of the open conversation without
     /// sending it, replacing whatever was typed there. Returns false if no
     /// conversation is open.
@@ -181,7 +231,12 @@ enum MessagesActions {
         usleep(250_000)
         KeyboardTyper.press(KeyboardTyper.aKey, flags: .maskCommand)
         usleep(100_000)
-        KeyboardTyper.paste(text)
+        if text.isEmpty {
+            // Pasting nothing leaves the selection in place; Delete clears it.
+            KeyboardTyper.press(KeyboardTyper.deleteKey)
+        } else {
+            KeyboardTyper.paste(text)
+        }
         return true
     }
 
@@ -220,6 +275,20 @@ enum MessagesActions {
         guard let window = windowFrame(of: app) else { return nil }
         log.notice("compose field not in the AX tree — falling back to the window's bottom strip")
         return NSRect(x: window.midX - 40, y: window.minY + 34, width: 80, height: 12)
+    }
+
+    /// The compose box's AX element, when Messages exposes it at all (see
+    /// `composeField` for why it often doesn't).
+    private static func composeElement(in app: NSRunningApplication) -> AXUIElement? {
+        for placeholder in ["iMessage", "Text Message", "SMS", "Message"] {
+            if let element = AccessibilityFinder.element(
+                in: app, roles: [kAXTextAreaRole, kAXTextFieldRole],
+                matching: placeholder, exact: false, onScreenOnly: true, quick: true
+            ) {
+                return element
+            }
+        }
+        return nil
     }
 
     /// The conversation window's frame in AppKit coordinates (origin

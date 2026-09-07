@@ -14,6 +14,27 @@ struct AXElement {
     let enabled: Bool
 }
 
+/// Outcome of `AXActions.writeTextInBackground`. Anything but `.success`
+/// means the text is NOT in the field and the caller should fall back to the
+/// focus-and-return path (activate → click → paste).
+enum BackgroundWriteResult: Equatable {
+    /// The value was set and read back identical.
+    case success
+    /// The set call returned success but the value read back differs — the
+    /// target accepted the call and ignored it (typical of web `contenteditable`
+    /// boxes, whose real state lives in the DOM and only moves on input events).
+    case verificationFailed
+    /// `kAXValue` isn't settable on this element, or the set call failed.
+    case elementNotWritable
+    /// Accessibility isn't granted to this process (or AX is disabled).
+    case permissionDenied
+    /// Web content (browser app, or an element inside an `AXWebArea`) — a
+    /// known-unreliable target that is never attempted; go straight to fallback.
+    case unsupportedTarget
+
+    var needsFallback: Bool { self != .success }
+}
+
 /// Generic verbs over the frontmost (or a given) app, built entirely on top
 /// of `AccessibilityFinder`'s AX plumbing, `MouseClicker`, and `KeyboardTyper`
 /// — no new low-level input handling. Where `WhatsAppActions` hand-scripts
@@ -259,6 +280,113 @@ enum AXActions {
         }
         let event = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 2, wheel1: dy, wheel2: dx, wheel3: 0)
         event?.post(tap: .cghidEventTap)
+    }
+
+    // MARK: - Background write
+
+    /// Bundle IDs whose text fields are web content; routed straight to
+    /// `.unsupportedTarget` without trying.
+    private static let browserBundleIDs: Set<String> = [
+        "com.google.Chrome", "com.apple.Safari", "company.thebrowser.Browser",
+        "com.microsoft.edgemac", "com.brave.Browser", "org.mozilla.firefox",
+    ]
+
+    /// Sets `text` as the value of `element` — a text field in an app that is
+    /// running but not frontmost — through Accessibility alone.
+    ///
+    /// **No-foreground contract.** This never calls `activate`,
+    /// `makeKeyAndOrderFront`/`orderFront`, `AXRaise`, or posts a `CGEvent`.
+    /// The frontmost app keeps focus and key status for the whole call; the
+    /// target window stays where it is in the Cmd-Tab order, doesn't bounce,
+    /// and renders with an inactive title bar and no caret — that's the OS's
+    /// normal look for a non-key window, not a failure. Calling it repeatedly
+    /// (e.g. per streaming-transcript update) replaces the value each time and
+    /// the target redraws immediately.
+    ///
+    /// **Verify, then fall back.** After the set, the value is read back and
+    /// compared; a mismatch is `.verificationFailed` rather than a silent no-op.
+    /// Web content — a browser process or anything under an `AXWebArea` — is
+    /// detected first and returned as `.unsupportedTarget` without trying,
+    /// since `contenteditable` editors ignore raw AX sets. Callers should treat
+    /// any `needsFallback` result as "use the focus-and-return path instead".
+    @MainActor
+    static func writeTextInBackground(to element: AXUIElement, text: String) -> BackgroundWriteResult {
+        guard AXIsProcessTrusted() else {
+            log.notice("bgwrite: accessibility not granted")
+            return .permissionDenied
+        }
+        let frontBefore = NSWorkspace.shared.frontmostApplication
+        if isWebContent(element) {
+            log.notice("bgwrite: web content — not attempting")
+            return .unsupportedTarget
+        }
+        var settable: DarwinBoolean = false
+        let settableStatus = AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable)
+        if settableStatus == .apiDisabled { return .permissionDenied }
+        guard settableStatus == .success, settable.boolValue else {
+            log.notice("bgwrite: AXValue not settable (\(settableStatus.rawValue))")
+            return .elementNotWritable
+        }
+        let setStatus = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFString)
+        switch setStatus {
+        case .success: break
+        case .apiDisabled: return .permissionDenied
+        default:
+            log.notice("bgwrite: set failed (\(setStatus.rawValue))")
+            return .elementNotWritable
+        }
+        guard let readBack = AccessibilityFinder.attribute(element, kAXValueAttribute) as? String,
+              normalizedLines(readBack) == normalizedLines(text) else {
+            log.notice("bgwrite: read-back mismatch — target ignored the set")
+            return .verificationFailed
+        }
+        let frontAfter = NSWorkspace.shared.frontmostApplication
+        if frontBefore?.processIdentifier != frontAfter?.processIdentifier {
+            // Can't happen from this code path; logged so a regression is loud.
+            log.error("bgwrite: frontmost app changed during write (\(frontBefore?.localizedName ?? "?", privacy: .public) → \(frontAfter?.localizedName ?? "?", privacy: .public))")
+        }
+        log.notice("bgwrite: ok (\(text.count) chars)")
+        return .success
+    }
+
+    /// Finds the editable field in `app` whose label/placeholder contains
+    /// `label` and writes to it in the background. `.elementNotWritable` when
+    /// no such field is exposed.
+    @MainActor
+    static func writeTextInBackground(in app: NSRunningApplication, fieldMatching label: String, text: String) -> BackgroundWriteResult {
+        guard let element = AccessibilityFinder.element(in: app, roles: focusableRoles, matching: label,
+                                                        onScreenOnly: true, quick: true) else {
+            log.notice("bgwrite: no field matching \(label, privacy: .public) in \(app.localizedName ?? "?", privacy: .public)")
+            return .elementNotWritable
+        }
+        return writeTextInBackground(to: element, text: text)
+    }
+
+    /// True when `element` belongs to a browser, or sits under an `AXWebArea`
+    /// (embedded web views in otherwise-native apps).
+    private static func isWebContent(_ element: AXUIElement) -> Bool {
+        var pid: pid_t = 0
+        if AXUIElementGetPid(element, &pid) == .success,
+           let bundleID = NSRunningApplication(processIdentifier: pid)?.bundleIdentifier,
+           browserBundleIDs.contains(bundleID) {
+            return true
+        }
+        var current: AXUIElement? = element
+        for _ in 0..<40 {
+            guard let node = current else { break }
+            if let role = AccessibilityFinder.attribute(node, kAXRoleAttribute) as? String, role == "AXWebArea" {
+                return true
+            }
+            guard let parent = AccessibilityFinder.attribute(node, kAXParentAttribute),
+                  CFGetTypeID(parent) == AXUIElementGetTypeID() else { break }
+            current = parent as! AXUIElement
+        }
+        return false
+    }
+
+    /// Text views may normalise line endings on the way in; compare on `\n`.
+    private static func normalizedLines(_ text: String) -> String {
+        text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
     }
 
     // MARK: - Key mapping
