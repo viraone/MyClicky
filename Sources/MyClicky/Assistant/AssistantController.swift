@@ -109,6 +109,11 @@ final class AssistantController {
         open.canChooseDirectories = true
         open.allowsMultipleSelection = false
         open.level = .floating
+        // Start in the résumé folder on the Desktop so the usual attachment
+        // is one click away; fall back to the Desktop if it isn't there.
+        let desktop = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")
+        let resumeFolder = desktop.appendingPathComponent("VIRADETH_RESUME")
+        open.directoryURL = FileManager.default.fileExists(atPath: resumeFolder.path) ? resumeFolder : desktop
         NSApp.activate(ignoringOtherApps: true)
         open.begin { [weak self] response in
             guard response == .OK, let url = open.url, let self else { return }
