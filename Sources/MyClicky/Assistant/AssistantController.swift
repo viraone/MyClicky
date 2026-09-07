@@ -707,9 +707,20 @@ final class AssistantController {
     /// pending words aren't message dictation). Longer when the sentence is
     /// visibly unfinished — it trails off on "at", "the", "and", "where"…
     private func dictationGrace(for transcript: String) -> UInt64? {
-        guard ghostDraft != nil else { return nil }
+        // Any words said to an open Messages thread — a fresh message being
+        // previewed, or a revision to the draft — get the longer grace.
+        // "Actually change that … conversation to at the Greyhound bus" was
+        // split at the breath into two revisions (observed live).
+        let messagesActive = messagesDraftOpenedAt.map { Date().timeIntervalSince($0) < 10 * 60 } ?? false
+        guard ghostDraft != nil || messagesActive else { return nil }
         let pending = pendingTalkWords(in: Self.words(transcript), quiet: true)
         guard let last = pending.last.map(Self.normalizedWord) else { return nil }
+        // Commands to the thread ("send it", "erase that") and thread switches
+        // should still run promptly.
+        let utterance = pending.joined(separator: " ")
+        if Self.isSendIt(utterance) || Self.isEraseIt(utterance) || Self.isNeverMind(utterance) || Self.isAppCommand(utterance) {
+            return nil
+        }
         let dangling: Set<String> = ["a", "an", "the", "and", "or", "but", "so", "to", "at", "in", "on", "of", "for",
                                      "with", "from", "by", "about", "is", "are", "was", "be", "gonna", "going", "that",
                                      "where", "when", "what", "who", "how", "if", "because", "like", "um", "uh"]
