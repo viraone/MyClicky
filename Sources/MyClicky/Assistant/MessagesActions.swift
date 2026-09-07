@@ -86,9 +86,20 @@ enum MessagesActions {
                 }
             }
         }
-        if opened { unminimizeConversationWindow() }
+        if opened { unminimizeConversationWindow(); raiseConversationWindow() }
         restoreFocus(to: frontBefore)
         return opened
+    }
+
+    /// Opened without activation, the thread's window keeps its old place in
+    /// the stacking order — behind whatever else is on that screen, so the
+    /// user sees nothing change (observed with Copilot covering it). An AX
+    /// raise moves the window to the front of *all* apps' windows without
+    /// giving Messages keyboard focus (verified: frontmost app unchanged).
+    private static func raiseConversationWindow() {
+        guard let window = conversationWindow()?.element else { return }
+        let status = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+        if status != .success { log.notice("open conversation: AXRaise failed (\(status.rawValue))") }
     }
 
     /// A thread switched to inside a minimized window is invisible — the
