@@ -568,7 +568,9 @@ enum ActionPlanner {
 
         let jpegImage = includeScreenshot ? try? await screenshot() : nil
 
-        let json = try await claude.requestJSON(system: systemPrompt, userText: userText, jpegImage: jpegImage)
+        // Plans are short JSON over a screenshot; the person is waiting on the
+        // purple ring. Low effort still reasons enough to pick the right step.
+        let json = try await claude.requestJSON(system: systemPrompt, userText: userText, jpegImage: jpegImage, effort: "low")
         let data = try JSONSerialization.data(withJSONObject: json)
         return try JSONDecoder().decode(Plan.self, from: data)
     }

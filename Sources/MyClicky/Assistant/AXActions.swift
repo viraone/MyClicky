@@ -310,7 +310,7 @@ enum AXActions {
     /// since `contenteditable` editors ignore raw AX sets. Callers should treat
     /// any `needsFallback` result as "use the focus-and-return path instead".
     @MainActor
-    static func writeTextInBackground(to element: AXUIElement, text: String) -> BackgroundWriteResult {
+    static func writeTextInBackground(to element: AXUIElement, text: String, quiet: Bool = false) -> BackgroundWriteResult {
         guard AXIsProcessTrusted() else {
             log.notice("bgwrite: accessibility not granted")
             return .permissionDenied
@@ -345,7 +345,7 @@ enum AXActions {
             // Can't happen from this code path; logged so a regression is loud.
             log.error("bgwrite: frontmost app changed during write (\(frontBefore?.localizedName ?? "?", privacy: .public) → \(frontAfter?.localizedName ?? "?", privacy: .public))")
         }
-        log.notice("bgwrite: ok (\(text.count) chars)")
+        if !quiet { log.notice("bgwrite: ok (\(text.count) chars)") }
         return .success
     }
 

@@ -231,6 +231,53 @@ enum MessagesActions {
         return text?.isEmpty == false ? text : nil
     }
 
+    /// Live dictation preview: a handle on the open conversation's compose box
+    /// that repeated partial transcripts can be written into as the user
+    /// speaks, each write replacing the last. Only starts on an **empty**
+    /// compose box — with a draft already there, the next words are a
+    /// revision or a command ("send it"), not text to show live.
+    @MainActor
+    final class ComposeStream {
+        private let element: AXUIElement
+        /// The last text written, so an unchanged partial costs no AX call
+        /// and the caller knows what to hand Claude / clear.
+        private(set) var written = ""
+
+        fileprivate init(element: AXUIElement) { self.element = element }
+
+        /// Nil unless a conversation is open, its compose box is exposed to
+        /// Accessibility, and that box is currently empty.
+        static func begin() -> ComposeStream? {
+            guard let app = running(), openConversation() != nil, let field = composeElement(in: app) else { return nil }
+            let existing = (AccessibilityFinder.attribute(field, kAXValueAttribute) as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard existing.isEmpty else { return nil }
+            return ComposeStream(element: field)
+        }
+
+        /// Shows `text` in the compose box without touching focus. Returns
+        /// false once the box stops accepting background writes (the
+        /// conversation changed, Messages quit) — the caller should stop.
+        @discardableResult
+        func update(_ text: String) -> Bool {
+            guard text != written else { return true }
+            let result = AXActions.writeTextInBackground(to: element, text: text, quiet: true)
+            guard result == .success else {
+                log.notice("compose stream: \(String(describing: result), privacy: .public) — stopping")
+                return false
+            }
+            written = text
+            return true
+        }
+
+        /// Takes the preview back out (the words turned out to be a command).
+        func clear() {
+            guard !written.isEmpty else { return }
+            _ = AXActions.writeTextInBackground(to: element, text: "")
+            written = ""
+        }
+    }
+
     /// Background counterpart of `typeIntoOpenConversation`: sets the compose
     /// box's value through Accessibility without activating Messages, so the
     /// app the user is working in keeps focus. Any `needsFallback` result

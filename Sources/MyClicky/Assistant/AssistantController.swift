@@ -104,6 +104,13 @@ final class AssistantController {
     /// Words already run as segments this session, in transcript order.
     private var talkDispatched: [String] = []
     private var talkQueue: [String] = []
+    /// Live preview of the words being said into an open Messages thread —
+    /// see `streamGhostDraft`. Consumed by `handleDo` when the segment runs.
+    private var ghostDraft: MessagesActions.ComposeStream?
+    /// The segment (by dispatched-word count) the ghost decision was made
+    /// for, so the "is the box empty?" AX read happens once per segment, not
+    /// once per partial.
+    private var ghostDecidedFor: Int?
     /// The screen rect of the last highlight ring, so "click it" knows the target.
     private var lastHighlightRect: CGRect?
     /// Confirmations a DO plan is waiting on, keyed by id — resolved by
@@ -637,6 +644,45 @@ final class AssistantController {
         }
         guard panel.state.status == .listening else { return }
         panel.state.transcript = text
+        streamGhostDraft(text)
+    }
+
+    /// Streaming dictation insert: while the user is talking to a Messages
+    /// thread Clicky opened, the words appear in the compose box as they're
+    /// said — written in the background, so the app they're working in keeps
+    /// focus — and Claude's polished version replaces them when the sentence
+    /// ends. Only on an empty compose box: with a draft already there the
+    /// words are a revision or "send it", and previewing *those* over the
+    /// draft would be exactly wrong. Command-shaped partials ("open David's
+    /// conversation", "erase that") are never previewed.
+    private func streamGhostDraft(_ transcript: String) {
+        guard talkStreaming, messagesDraftOpenedAt.map({ Date().timeIntervalSince($0) < 10 * 60 }) ?? false else { return }
+        let pending = pendingTalkWords(in: Self.words(transcript), quiet: true)
+        // A single word is the recognizer clearing its throat; two words
+        // ("send it") are more likely a command than the start of a message.
+        guard pending.count >= 3 else { return }
+        let utterance = pending.joined(separator: " ")
+        if Self.isSendIt(utterance) || Self.isEraseIt(utterance) || Self.isNeverMind(utterance) || Self.isAppCommand(utterance) {
+            ghostDraft?.clear()
+            return
+        }
+        if ghostDraft == nil {
+            guard ghostDecidedFor != talkDispatched.count else { return }
+            ghostDecidedFor = talkDispatched.count
+            guard let stream = MessagesActions.ComposeStream.begin() else { return }
+            ghostDraft = stream
+            ActivityLog.recordAction("messages-ghost-start")
+        }
+        if ghostDraft?.update(utterance) == false {
+            ghostDraft = nil
+        }
+    }
+
+    /// Hands the live preview (if any) to whatever runs the segment: the
+    /// drafter replaces it with Claude's text; anything else clears it.
+    private func takeGhostDraft() -> MessagesActions.ComposeStream? {
+        defer { ghostDraft = nil; ghostDecidedFor = nil }
+        return ghostDraft
     }
 
     /// The recognizer went quiet: run what was said since the last pause.
@@ -644,13 +690,41 @@ final class AssistantController {
         guard talkStreaming, panel.state.status == .listening else { return }
         // The panel turns amber at 1.4s; give the sentence another moment
         // before acting so a mid-command breath doesn't split it in two.
+        // Dictating a message gets longer still — people breathe mid-sentence
+        // ("do you know where … the next open mic is") and splitting there
+        // sends half a message then treats the rest as a revision.
         let snapshot = panel.state.transcript
+        let grace = dictationGrace(for: snapshot) ?? 800_000_000
         Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 800_000_000)
+            try? await Task.sleep(nanoseconds: grace)
             guard let self, self.talkStreaming, self.panel.state.status == .listening,
                   self.panel.state.transcript == snapshot else { return }
             self.dispatchTalkSegment()
         }
+    }
+
+    /// Extra silence to allow before a pause ends a *message* (nil when the
+    /// pending words aren't message dictation). Longer when the sentence is
+    /// visibly unfinished — it trails off on "at", "the", "and", "where"…
+    private func dictationGrace(for transcript: String) -> UInt64? {
+        // Any words said to an open Messages thread — a fresh message being
+        // previewed, or a revision to the draft — get the longer grace.
+        // "Actually change that … conversation to at the Greyhound bus" was
+        // split at the breath into two revisions (observed live).
+        let messagesActive = messagesDraftOpenedAt.map { Date().timeIntervalSince($0) < 10 * 60 } ?? false
+        guard ghostDraft != nil || messagesActive else { return nil }
+        let pending = pendingTalkWords(in: Self.words(transcript), quiet: true)
+        guard let last = pending.last.map(Self.normalizedWord) else { return nil }
+        // Commands to the thread ("send it", "erase that") and thread switches
+        // should still run promptly.
+        let utterance = pending.joined(separator: " ")
+        if Self.isSendIt(utterance) || Self.isEraseIt(utterance) || Self.isNeverMind(utterance) || Self.isAppCommand(utterance) {
+            return nil
+        }
+        let dangling: Set<String> = ["a", "an", "the", "and", "or", "but", "so", "to", "at", "in", "on", "of", "for",
+                                     "with", "from", "by", "about", "is", "are", "was", "be", "gonna", "going", "that",
+                                     "where", "when", "what", "who", "how", "if", "because", "like", "um", "uh"]
+        return dangling.contains(last) ? 3_500_000_000 : 2_000_000_000
     }
 
     private func dispatchTalkSegment() {
@@ -671,7 +745,7 @@ final class AssistantController {
     /// Dino dad's conversation" arrived as "dad's conversation", observed
     /// live). So the skip only applies while the transcript still begins with
     /// what was dispatched; otherwise everything is new.
-    private func pendingTalkWords(in words: [String]) -> [String] {
+    private func pendingTalkWords(in words: [String], quiet: Bool = false) -> [String] {
         guard !talkDispatched.isEmpty else { return words }
         let prefix = talkDispatched.map(Self.normalizedWord)
         let current = words.prefix(prefix.count).map(Self.normalizedWord)
@@ -684,7 +758,9 @@ final class AssistantController {
         if current.count == prefix.count, agree * 3 >= prefix.count * 2 {
             return Array(words[prefix.count...])
         }
-        ActivityLog.recordAction("talk-transcript-restarted", ["dispatched": "\(prefix.count)", "now": "\(words.count)"])
+        if !quiet {
+            ActivityLog.recordAction("talk-transcript-restarted", ["dispatched": "\(prefix.count)", "now": "\(words.count)"])
+        }
         return words
     }
 
@@ -702,6 +778,7 @@ final class AssistantController {
         if !rest.isEmpty {
             enqueueTalk(rest)
         } else if !ranSomething {
+            takeGhostDraft()?.clear()
             talkSession = false
             panel.state.status = .idle
             panel.state.errorText = "Didn't catch that — try again, or type below."
@@ -869,6 +946,11 @@ final class AssistantController {
         panel.state.status = .thinking
         panel.state.answer = ""
         panel.state.errorText = nil
+        // With the study site open, the answer is also rendered in the page
+        // (under the box being edited) so it can be read there.
+        let siteBox = SiteEditActions.editContext()
+        let siteOpen = siteBox != nil || SiteEditActions.siteTabURL() != nil
+        if siteOpen { SiteEditActions.showThinking(question) }
 
         requestID += 1
         let id = requestID
@@ -878,6 +960,12 @@ final class AssistantController {
                 let image = try await capture.captureDisplayJPEG(screen: screen, maxDimension: 1600)
                 try Task.checkCancellation()
                 var context: String?
+                // A box in edit mode is what the question is about — "explain
+                // this", "what does TCP mean here" — so give Claude its text.
+                if let siteBox, let box = SiteEditActions.box(siteBox.boxID) {
+                    context = "The user is editing this section of a Mobile SDET study page (\(box.label)); "
+                        + "their question is about it unless they say otherwise:\n\n\(box.text)"
+                }
                 // Email questions: feed Claude a digest of the recent inbox.
                 if Self.isEmailIntent(question) {
                     panel.state.answer = "Checking your Gmail…"
@@ -913,6 +1001,7 @@ final class AssistantController {
                 guard id == requestID else { return }
                 panel.state.status = .answering
                 panel.state.answer = answer.text
+                if siteOpen { SiteEditActions.showReply(answer.text, question: question) }
                 if let box = answer.highlight {
                     let rect = Self.screenRect(fromNormalized: box, on: screen)
                     lastHighlightRect = rect
@@ -922,6 +1011,7 @@ final class AssistantController {
             } catch {
                 // Stopped by the user — the panel was already reset in stop().
                 guard id == requestID, !Task.isCancelled else { return }
+                if siteOpen { SiteEditActions.dismissReply() }
                 panel.state.status = .idle
                 panel.state.errorText = error.localizedDescription
             }
@@ -948,15 +1038,47 @@ final class AssistantController {
         guard !busy else { return }
         ActivityLog.recordAction("do", ["text": utterance])
         panel.state.logTalk(.command, utterance)
+        // A live preview of these words may already be in the Messages
+        // compose box. It stays only if this segment becomes the message.
+        let ghost = takeGhostDraft()
+        // A box in edit mode on the study site takes whatever is said as an
+        // edit to that box — checked before the Messages matchers so "delete
+        // the last sentence" edits the box rather than erasing a draft.
+        if let context = SiteEditActions.editContext() {
+            ghost?.clear()
+            if Self.isQuestionAboutBox(utterance) {
+                // "Explain TCP to me with an analogy" while a box is in edit
+                // mode is a question to read there, not a rewrite of the box.
+                handleQuestion(utterance)
+            } else if Self.isPublishIt(utterance) {
+                publishSite()
+            } else if Self.isDoneEditing(utterance) {
+                SiteEditActions.finishEditOnPage()
+                finishSiteEdit("Done editing — say “publish it” to push, or click another pencil.", ok: true)
+            } else if let apiKey = KeychainService.anthropicAPIKey() {
+                editSiteBox(context, instruction: utterance, apiKey: apiKey)
+            } else {
+                finishSiteEdit("No Anthropic API key found in Keychain.", ok: false)
+            }
+            return
+        }
+        if Self.isPublishIt(utterance), SiteEditActions.siteTabURL() != nil {
+            ghost?.clear()
+            publishSite()
+            return
+        }
         if Self.isSendIt(utterance) {
+            ghost?.clear()
             sendOpenDraft()
             return
         }
         if Self.isEraseIt(utterance), messagesDraftOpenedAt.map({ Date().timeIntervalSince($0) < 10 * 60 }) ?? false {
+            ghost?.clear()
             eraseOpenMessagesDraft()
             return
         }
         if Self.isNeverMind(utterance), gmailDraftOpenedAt != nil || messagesDraftOpenedAt != nil {
+            ghost?.clear()
             gmailDraftOpenedAt = nil
             messagesDraftOpenedAt = nil
             messagesDraftText = nil
@@ -968,6 +1090,7 @@ final class AssistantController {
             return
         }
         guard let apiKey = KeychainService.anthropicAPIKey() else {
+            ghost?.clear()
             let message = "No Anthropic API key found in Keychain.\n\nRun this once in Terminal:\n\(KeychainService.setupCommand)"
             panel.state.logTalk(.error, message)
             panel.state.errorText = message
@@ -983,22 +1106,25 @@ final class AssistantController {
         // …unless it's plainly a command — "actually, open David's
         // conversation" must not get typed to Dino Dad.
         let gateBypassed = Self.isAppCommand(utterance)
+        if gateBypassed { ghost?.clear() }
         let gmailActive = !gateBypassed && (gmailDraftOpenedAt.map { Date().timeIntervalSince($0) < 10 * 60 } ?? false)
         let messagesActive = !gateBypassed && (messagesDraftOpenedAt.map { Date().timeIntervalSince($0) < 10 * 60 } ?? false)
         let messagesFirst = (messagesDraftOpenedAt ?? .distantPast) > (gmailDraftOpenedAt ?? .distantPast)
         for target in messagesFirst ? ["messages", "gmail"] : ["gmail", "messages"] {
             if target == "gmail", gmailActive,
                let compose = GmailDrafter.openCompose(recipientHint: gmailDraftRecipient) {
+                ghost?.clear()
                 draftGmail(gist: utterance, compose: compose, apiKey: apiKey)
                 return
             }
             if target == "messages", messagesActive,
                let open = MessagesActions.openConversation(),
                messagesDraftRecipient.map({ MessagesActions.spokenNameMatches($0, conversation: open) }) ?? true {
-                draftMessage(gist: utterance, recipient: open, apiKey: apiKey)
+                draftMessage(gist: utterance, recipient: open, apiKey: apiKey, previewed: ghost != nil)
                 return
             }
         }
+        ghost?.clear()
         // Drive (and screenshot) the display the target app is actually on —
         // `activeScreen` follows the cursor, which on a multi-display setup
         // can point at a screen the app isn't even visible on, handing the
@@ -1176,6 +1302,7 @@ final class AssistantController {
         pendingChoices.removeAll()
         let wasStreaming = talkStreaming
         talkStreaming = false
+        takeGhostDraft()?.clear()
         talkSession = false
         panel.state.chaining = false
         talkQueue = []
@@ -1655,8 +1782,16 @@ final class AssistantController {
         if commandVerbs.contains(verb) { return true }
         let joined = words.joined(separator: " ")
         let phrases = ["write an email", "write a new email", "send an email", "new email", "email to ",
-                       "conversation with", "chat with", "thread with", "text conversation", "look up"]
-        return phrases.contains { joined.hasPrefix($0) || joined.hasPrefix("write " + $0) }
+                       "conversation with", "chat with", "thread with", "text conversation", "look up",
+                       "i wanna talk to", "i want to talk to", "i wanna text", "i want to text"]
+        if phrases.contains(where: { joined.hasPrefix($0) || joined.hasPrefix("write " + $0) }) { return true }
+        // "Actually I wanna talk to David — open up a text message with Dave":
+        // a change of recipient buried mid-sentence is still a command, not
+        // something to text the current thread (observed live).
+        let anywhere = ["open a conversation with", "open up a conversation with", "open a text message with",
+                        "open up a text message with", "open a text with", "open up a text with",
+                        "open a message with", "open up a message with", "switch to the conversation with"]
+        return anywhere.contains { joined.contains($0) }
     }
 
     private func draftGmail(gist: String, compose: GmailDrafter.Compose, apiKey: String) {
@@ -1768,19 +1903,142 @@ final class AssistantController {
         }
     }
 
-    private func draftMessage(gist: String, recipient: String, apiKey: String) {
+    /// `previewed`: the raw words are already showing in the compose box as a
+    /// live preview — they are *not* an existing draft to revise, and Claude's
+    /// text simply takes their place.
+    // MARK: - Study site editing
+
+    /// "Publish it", "push that", "deploy the site" — commit and push the
+    /// study site. Only consulted when the site is open in a browser.
+    private static func isPublishIt(_ utterance: String) -> Bool {
+        var words = utterance.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+        let leadIns: Set<String> = ["ok", "okay", "looks", "good", "great", "and", "now", "please", "then", "just",
+                                    "can", "could", "you", "let's", "lets", "hey", "clicky", "go", "ahead", "alright"]
+        while let first = words.first, leadIns.contains(first) { words.removeFirst() }
+        guard let verb = words.first, ["publish", "deploy", "push"].contains(verb), words.count <= 6 else { return false }
+        let filler: Set<String> = ["it", "that", "this", "the", "site", "page", "edit", "edits", "change", "changes",
+                                   "now", "please", "up", "out", "live", "to", "prod", "production", "github"]
+        return words.dropFirst().allSatisfy { filler.contains($0) }
+    }
+
+    /// A question to answer beside the box, as opposed to an instruction to
+    /// change it. Explicit edit verbs anywhere win ("explain … and put it in
+    /// the box" is an edit); otherwise a question opener is a question.
+    static func isQuestionAboutBox(_ utterance: String) -> Bool {
+        var words = utterance.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted.subtracting(CharacterSet(charactersIn: "'")))
+            .filter { !$0.isEmpty }
+        let editVerbs: Set<String> = ["replace", "change", "rewrite", "reword", "rephrase", "add", "append", "insert",
+                                      "put", "write", "delete", "remove", "shorten", "expand", "fix", "update", "swap",
+                                      "make", "turn", "edit", "correct"]
+        if words.contains(where: { editVerbs.contains($0) }) { return false }
+        let leadIns: Set<String> = ["hey", "clicky", "ok", "okay", "so", "um", "uh", "can", "could", "would", "you",
+                                    "please", "quick", "question", "i", "have", "a", "wanted", "to", "ask", "just"]
+        while let first = words.first, leadIns.contains(first) { words.removeFirst() }
+        guard let first = words.first else { return false }
+        let openers: Set<String> = ["what", "what's", "whats", "why", "how", "when", "where", "who", "which", "is", "are",
+                                    "does", "do", "did", "explain", "tell", "describe", "walk", "help", "clarify",
+                                    "summarize", "summarise", "define", "compare", "should", "will", "would", "can"]
+        if openers.contains(first) || utterance.hasSuffix("?") { return true }
+        // "It's talking about TCP — can you explain to me and use an analogy":
+        // the ask comes after some scene-setting. With no edit verb present,
+        // an explaining verb anywhere makes it a question.
+        let asks: Set<String> = ["explain", "clarify", "summarize", "summarise", "define", "describe", "elaborate"]
+        return words.contains(where: { asks.contains($0) })
+    }
+
+    private static func isDoneEditing(_ utterance: String) -> Bool {
+        let joined = utterance.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }.joined(separator: " ")
+        return ["done editing", "finish editing", "finished editing", "stop editing", "close the editor",
+                "exit edit mode", "leave edit mode", "i'm done", "im done", "that's done", "thats done"]
+            .contains { joined.hasSuffix($0) || joined == $0 }
+    }
+
+    /// Rewrites the box in edit mode per the spoken instruction: Claude
+    /// produces the new content, which lands in the live page (so it shows
+    /// on the other screen at once) and in the HTML file on disk (the copy
+    /// that persists). Focus never leaves the app the user is in.
+    private func editSiteBox(_ context: SiteEditActions.Context, instruction: String, apiKey: String) {
+        busy = true
+        synthesizer.stopSpeaking(at: .immediate)
+        ring.hide()
+        panel.state.status = .thinking
+        panel.state.answer = "Editing that box…"
+        panel.state.errorText = nil
+        remote.broadcast("STATUS \(panel.state.answer)")
+        ActivityLog.recordAction("site-edit", ["box": context.boxID, "text": instruction])
+        guard let box = SiteEditActions.box(context.boxID) else {
+            busy = false
+            finishSiteEdit("I see a box in edit mode but can't read it — turn on “Allow JavaScript from Apple Events” "
+                           + "in the browser's Develop menu, then try again.", ok: false)
+            return
+        }
+        requestID += 1
+        let id = requestID
+        currentTask = Task {
+            defer { if id == requestID { busy = false; currentTask = nil } }
+            var message: String
+            var ok = false
+            do {
+                let result = try await SiteEditDrafter.rewrite(box: box, instruction: instruction,
+                                                               claude: AnthropicService(apiKey: apiKey))
+                guard id == requestID else { return }
+                let onPage = SiteEditActions.setBoxOnPage(box.id, html: result.html)
+                try SiteEditActions.writeBoxToFile(box.id, html: result.html, in: context.file)
+                ok = true
+                ActivityLog.recordAction("site-edit-applied", ["box": box.id, "page": onPage ? "yes" : "no"])
+                message = result.summary
+                    + (onPage ? "" : " Saved to the file, but the page didn't update — reload to see it.")
+                    + " Keep going, or say “publish it”."
+            } catch {
+                message = "Couldn't make that edit: \(error.localizedDescription)"
+            }
+            finishSiteEdit(message, ok: ok)
+        }
+    }
+
+    private func publishSite() {
+        busy = true
+        panel.state.status = .thinking
+        panel.state.answer = "Publishing…"
+        remote.broadcast("STATUS Publishing…")
+        ActivityLog.recordAction("site-publish")
+        Task {
+            defer { busy = false }
+            // Publish the working copy the open page came from.
+            let repo = SiteEditActions.editContext().map { SiteEditActions.repo(containing: $0.file) } ?? SiteEditActions.repoURL
+            let result = await SiteEditActions.publish(repo: repo)
+            ActivityLog.recordAction("site-publish-done", ["ok": result.ok ? "yes" : "no"])
+            finishSiteEdit(result.message, ok: result.ok)
+            toast.show(result.message, icon: result.ok ? "arrow.up.circle.fill" : "exclamationmark.triangle.fill",
+                       tint: result.ok ? .green : .orange)
+        }
+    }
+
+    private func finishSiteEdit(_ message: String, ok: Bool) {
+        panel.state.status = .answering
+        panel.state.answer = message
+        panel.state.logTalk(ok ? .status : .error, message)
+        remote.broadcast("STATUS \(message)")
+    }
+
+    private func draftMessage(gist: String, recipient: String, apiKey: String, previewed: Bool = false) {
         busy = true
         synthesizer.stopSpeaking(at: .immediate)
         ring.hide()
         // What's really in the compose box counts as the draft — text left
         // there from before Clicky opened this thread included — so "erase
         // that" / "make it shorter" have something to act on.
-        let currentDraft = messagesDraftText ?? MessagesActions.currentComposeText()
+        let currentDraft = previewed ? nil : (messagesDraftText ?? MessagesActions.currentComposeText())
         panel.state.status = .thinking
         panel.state.answer = currentDraft == nil ? "Writing it…" : "Rewriting it…"
         panel.state.errorText = nil
         remote.broadcast("STATUS \(panel.state.answer)")
-        ActivityLog.recordAction("messages-draft", ["revision": currentDraft == nil ? "no" : "yes"])
+        ActivityLog.recordAction("messages-draft", ["revision": currentDraft == nil ? "no" : "yes", "previewed": previewed ? "yes" : "no"])
 
         requestID += 1
         let id = requestID
