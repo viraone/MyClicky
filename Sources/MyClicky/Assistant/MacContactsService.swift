@@ -82,9 +82,14 @@ enum MacContactsService {
             CNContactOrganizationNameKey as CNKeyDescriptor,
             CNContactPhoneNumbersKey as CNKeyDescriptor,
         ]
-        let contacts = (try? store.unifiedContacts(
+        let exact = (try? store.unifiedContacts(
             matching: CNContact.predicateForContacts(matchingName: trimmed), keysToFetch: keys
         )) ?? []
+        // Nothing matched what the recognizer heard? "Dino Dan" for "Dino Dad"
+        // and "Dan dad" for the same person were both observed live; names
+        // are exactly where speech recognition is weakest, so look for the
+        // contacts that sound closest before giving up.
+        let contacts = exact.isEmpty ? fuzzyContacts(like: trimmed, store: store, keys: keys) : exact
 
         var seen: Set<String> = []
         var matches: [Match] = []
@@ -115,6 +120,58 @@ enum MacContactsService {
             let bMobile = mobiles.contains(b.number)
             return aMobile != bMobile ? aMobile : false
         }
+    }
+
+    /// Contacts (with phone numbers) whose names are close to what was
+    /// heard: the best-scoring name, plus any within a whisker of it so a
+    /// genuine toss-up ("Dan dad": Dad or Dino Dad?) is asked about rather
+    /// than guessed. Empty when nothing is convincingly close.
+    static func fuzzyContacts(like spoken: String, store: CNContactStore, keys: [CNKeyDescriptor]) -> [CNContact] {
+        let request = CNContactFetchRequest(keysToFetch: keys)
+        request.unifyResults = true
+        var scored: [(contact: CNContact, score: Double)] = []
+        try? store.enumerateContacts(with: request) { contact, _ in
+            guard !contact.phoneNumbers.isEmpty else { return }
+            let name = CNContactFormatter.string(from: contact, style: .fullName) ?? contact.organizationName
+            let score = nameSimilarity(spoken, name)
+            if score >= 0.6 { scored.append((contact, score)) }
+        }
+        guard let best = scored.map(\.score).max() else { return [] }
+        return scored.filter { $0.score >= best - 0.12 }.sorted { $0.score > $1.score }.map(\.contact)
+    }
+
+    /// 0…1. The better of: the whole names compared as one string, and the
+    /// average of each spoken word matched to its closest word in the name
+    /// (and back, so "Dad" isn't a perfect match for "Dan Dad Smith").
+    static func nameSimilarity(_ spoken: String, _ name: String) -> Double {
+        let a = normalize(spoken), b = normalize(name)
+        guard !a.isEmpty, !b.isEmpty else { return 0 }
+        let whole = ratio(a.replacingOccurrences(of: " ", with: ""), b.replacingOccurrences(of: " ", with: ""))
+        let aw = a.split(separator: " ").map(String.init), bw = b.split(separator: " ").map(String.init)
+        func side(_ xs: [String], _ ys: [String]) -> Double {
+            xs.map { x in ys.map { ratio(x, $0) }.max() ?? 0 }.reduce(0, +) / Double(xs.count)
+        }
+        return max(whole, (side(aw, bw) + side(bw, aw)) / 2)
+    }
+
+    private static func ratio(_ a: String, _ b: String) -> Double {
+        let n = max(a.count, b.count)
+        return n == 0 ? 1 : 1 - Double(levenshtein(a, b)) / Double(n)
+    }
+
+    private static func levenshtein(_ a: String, _ b: String) -> Int {
+        let a = Array(a), b = Array(b)
+        if a.isEmpty { return b.count }
+        if b.isEmpty { return a.count }
+        var prev = Array(0...b.count), cur = [Int](repeating: 0, count: b.count + 1)
+        for i in 1...a.count {
+            cur[0] = i
+            for j in 1...b.count {
+                cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1))
+            }
+            swap(&prev, &cur)
+        }
+        return prev[b.count]
     }
 
     /// Every email address belonging to a contact whose name matches `query`
@@ -190,7 +247,7 @@ enum MacContactsService {
         return .several(people)
     }
 
-    private static func normalize(_ name: String) -> String {
+    static func normalize(_ name: String) -> String {
         name.lowercased()
             .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: nil)
             .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
