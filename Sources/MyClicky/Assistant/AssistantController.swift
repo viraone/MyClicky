@@ -946,6 +946,11 @@ final class AssistantController {
         panel.state.status = .thinking
         panel.state.answer = ""
         panel.state.errorText = nil
+        // With the study site open, the answer is also rendered in the page
+        // (under the box being edited) so it can be read there.
+        let siteBox = SiteEditActions.editContext()
+        let siteOpen = siteBox != nil || SiteEditActions.siteTabURL() != nil
+        if siteOpen { SiteEditActions.showThinking(question) }
 
         requestID += 1
         let id = requestID
@@ -955,6 +960,12 @@ final class AssistantController {
                 let image = try await capture.captureDisplayJPEG(screen: screen, maxDimension: 1600)
                 try Task.checkCancellation()
                 var context: String?
+                // A box in edit mode is what the question is about — "explain
+                // this", "what does TCP mean here" — so give Claude its text.
+                if let siteBox, let box = SiteEditActions.box(siteBox.boxID) {
+                    context = "The user is editing this section of a Mobile SDET study page (\(box.label)); "
+                        + "their question is about it unless they say otherwise:\n\n\(box.text)"
+                }
                 // Email questions: feed Claude a digest of the recent inbox.
                 if Self.isEmailIntent(question) {
                     panel.state.answer = "Checking your Gmail…"
@@ -990,6 +1001,7 @@ final class AssistantController {
                 guard id == requestID else { return }
                 panel.state.status = .answering
                 panel.state.answer = answer.text
+                if siteOpen { SiteEditActions.showReply(answer.text, question: question) }
                 if let box = answer.highlight {
                     let rect = Self.screenRect(fromNormalized: box, on: screen)
                     lastHighlightRect = rect
@@ -999,6 +1011,7 @@ final class AssistantController {
             } catch {
                 // Stopped by the user — the panel was already reset in stop().
                 guard id == requestID, !Task.isCancelled else { return }
+                if siteOpen { SiteEditActions.dismissReply() }
                 panel.state.status = .idle
                 panel.state.errorText = error.localizedDescription
             }
@@ -1033,7 +1046,11 @@ final class AssistantController {
         // the last sentence" edits the box rather than erasing a draft.
         if let context = SiteEditActions.editContext() {
             ghost?.clear()
-            if Self.isPublishIt(utterance) {
+            if Self.isQuestionAboutBox(utterance) {
+                // "Explain TCP to me with an analogy" while a box is in edit
+                // mode is a question to read there, not a rewrite of the box.
+                handleQuestion(utterance)
+            } else if Self.isPublishIt(utterance) {
                 publishSite()
             } else if Self.isDoneEditing(utterance) {
                 SiteEditActions.finishEditOnPage()
@@ -1904,6 +1921,32 @@ final class AssistantController {
         let filler: Set<String> = ["it", "that", "this", "the", "site", "page", "edit", "edits", "change", "changes",
                                    "now", "please", "up", "out", "live", "to", "prod", "production", "github"]
         return words.dropFirst().allSatisfy { filler.contains($0) }
+    }
+
+    /// A question to answer beside the box, as opposed to an instruction to
+    /// change it. Explicit edit verbs anywhere win ("explain … and put it in
+    /// the box" is an edit); otherwise a question opener is a question.
+    static func isQuestionAboutBox(_ utterance: String) -> Bool {
+        var words = utterance.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted.subtracting(CharacterSet(charactersIn: "'")))
+            .filter { !$0.isEmpty }
+        let editVerbs: Set<String> = ["replace", "change", "rewrite", "reword", "rephrase", "add", "append", "insert",
+                                      "put", "write", "delete", "remove", "shorten", "expand", "fix", "update", "swap",
+                                      "make", "turn", "edit", "correct"]
+        if words.contains(where: { editVerbs.contains($0) }) { return false }
+        let leadIns: Set<String> = ["hey", "clicky", "ok", "okay", "so", "um", "uh", "can", "could", "would", "you",
+                                    "please", "quick", "question", "i", "have", "a", "wanted", "to", "ask", "just"]
+        while let first = words.first, leadIns.contains(first) { words.removeFirst() }
+        guard let first = words.first else { return false }
+        let openers: Set<String> = ["what", "what's", "whats", "why", "how", "when", "where", "who", "which", "is", "are",
+                                    "does", "do", "did", "explain", "tell", "describe", "walk", "help", "clarify",
+                                    "summarize", "summarise", "define", "compare", "should", "will", "would", "can"]
+        if openers.contains(first) || utterance.hasSuffix("?") { return true }
+        // "It's talking about TCP — can you explain to me and use an analogy":
+        // the ask comes after some scene-setting. With no edit verb present,
+        // an explaining verb anywhere makes it a question.
+        let asks: Set<String> = ["explain", "clarify", "summarize", "summarise", "define", "describe", "elaborate"]
+        return words.contains(where: { asks.contains($0) })
     }
 
     private static func isDoneEditing(_ utterance: String) -> Bool {

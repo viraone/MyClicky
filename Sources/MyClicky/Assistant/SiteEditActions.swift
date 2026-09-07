@@ -106,6 +106,29 @@ enum SiteEditActions {
         return result == "true"
     }
 
+    // MARK: - Answer card on the page
+
+    /// Shows the "Clicky is thinking" card on the site tab, quoting the question.
+    static func showThinking(_ question: String) {
+        _ = BrowserTabReader.runJavaScript(
+            "window.clickyEdit && window.clickyEdit.thinking && window.clickyEdit.thinking(\(jsString(question)))",
+            inTabMatching: isSite)
+    }
+
+    /// Renders Clicky's answer on the site tab (under the box in edit mode,
+    /// else floating), so it can be read there rather than only in the panel.
+    @discardableResult
+    static func showReply(_ answer: String, question: String) -> Bool {
+        let js = "String(!!(window.clickyEdit && window.clickyEdit.reply && "
+            + "window.clickyEdit.reply(\(jsString(answer)), {question: \(jsString(question))})))"
+        return BrowserTabReader.runJavaScript(js, inTabMatching: isSite) == "true"
+    }
+
+    static func dismissReply() {
+        _ = BrowserTabReader.runJavaScript("window.clickyEdit && window.clickyEdit.dismiss && window.clickyEdit.dismiss()",
+                                           inTabMatching: isSite)
+    }
+
     static func finishEditOnPage() {
         _ = BrowserTabReader.runJavaScript("window.clickyEdit && window.clickyEdit.done()", inTabMatching: isSite)
     }
