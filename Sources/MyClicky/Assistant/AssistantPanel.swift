@@ -209,7 +209,7 @@ final class AssistantState: ObservableObject {
     /// Shrunk in place to a thin bar — mic, phase, nothing else. Distinct
     /// from `collapsed`, which tucks a dot into the screen corner.
     @Published var strip = false
-    @Published var tab: AssistantTab = .captureDictate
+    @Published var tab: AssistantTab = .ask
     /// Last dictation result (on the clipboard, paired with the capture if any).
     @Published var dictationText = ""
     /// Last region capture (saved to disk; on the clipboard, paired with the dictation if any).
@@ -800,7 +800,9 @@ struct AssistantPanelView: View {
                 .font(.system(size: 15, weight: .heavy, design: .monospaced))
                 .kerning(1.5)
                 .foregroundStyle(phase.color)
-            Text(phase.hint)
+            Text(phase == .done && state.chaining
+                 ? "still listening — ask your next question, or press STOP"
+                 : phase.hint)
                 .font(.system(size: 13.5, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.7))
                 .lineLimit(1)
