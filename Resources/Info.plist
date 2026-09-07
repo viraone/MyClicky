@@ -16,7 +16,7 @@
     <key>NSScreenCaptureUsageDescription</key><string>MyClicky captures the screen region you select with Control–Option–X, and the screen you ask about with Option–Command–C.</string>
     <key>NSMicrophoneUsageDescription</key><string>MyClicky listens to your question while you hold Option–Command–C.</string>
     <key>NSSpeechRecognitionUsageDescription</key><string>MyClicky transcribes your spoken question on-device.</string>
-    <key>NSAppleEventsUsageDescription</key><string>MyClicky reads your browser's active tab URL to identify the Google Drive file or email you're asking about.</string>
+    <key>NSAppleEventsUsageDescription</key><string>MyClicky reads your browser's active tab URL to identify the Google Drive file or email you're asking about, and deletes the selected photo(s) in Photos when you ask it to.</string>
     <key>NSCalendarsUsageDescription</key><string>MyClicky creates calendar events when you ask it to, by voice.</string>
     <key>NSCalendarsFullAccessUsageDescription</key><string>MyClicky creates calendar events when you ask it to, by voice.</string>
     <key>NSContactsUsageDescription</key><string>MyClicky looks up a phone number when you ask it to open someone's conversation in Messages by name.</string>

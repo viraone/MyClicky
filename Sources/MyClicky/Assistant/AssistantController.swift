@@ -978,8 +978,13 @@ final class AssistantController {
             return
         }
         if Self.isTrashIntent(question), !Self.isEmailIntent(question) {
-            ActivityLog.recordAction("trash", [:])
-            handleTrashCommand()
+            if PhotosActions.isFrontmost() {
+                ActivityLog.recordAction("trash", ["target": "photos"])
+                handlePhotosDeleteCommand()
+            } else {
+                ActivityLog.recordAction("trash", [:])
+                handleTrashCommand()
+            }
             return
         }
         ActivityLog.recordAction("ask", ["text": question])
@@ -1684,12 +1689,13 @@ final class AssistantController {
         return !refersToScreen
     }
 
-    /// Matches "move this to the trash", "trash this file", "delete this", etc.
+    /// Matches "move this to the trash", "trash this file", "delete this",
+    /// "delete these photos", etc.
     private static func isTrashIntent(_ question: String) -> Bool {
         let lowered = question.lowercased()
         let action = lowered.contains("trash") || lowered.contains("delete")
-        let target = lowered.contains("this") || lowered.contains("file")
-            || lowered.contains("it") || lowered.contains("doc")
+        let target = lowered.contains("this") || lowered.contains("these") || lowered.contains("file")
+            || lowered.contains("it") || lowered.contains("doc") || lowered.contains("photo")
         return action && target
     }
 
@@ -1742,6 +1748,55 @@ final class AssistantController {
             } catch {
                 guard id == requestID, !Task.isCancelled else { return }
                 fail(error.localizedDescription)
+            }
+        }
+    }
+
+    private func handlePhotosDeleteCommand() {
+        busy = true
+        panel.state.status = .thinking
+        panel.state.answer = ""
+        panel.state.errorText = nil
+
+        requestID += 1
+        let id = requestID
+        currentTask = Task {
+            defer { if id == requestID { busy = false; currentTask = nil } }
+            guard let count = PhotosActions.selectedCount() else {
+                fail("Nothing selected in Photos — select one or more photos first.")
+                return
+            }
+            guard id == requestID else { return }
+            panel.state.status = .answering
+            let (title, message): (String, String) = count == 1
+                ? ("Delete Photo?", "This photo will move to Recently Deleted. You can restore it for 30 days.")
+                : ("Delete \(count) Photos?", "These \(count) photos will move to Recently Deleted. You can restore them for 30 days.")
+            panel.state.answer = "Confirm \(count == 1 ? "deleting this photo" : "deleting \(count) photos")."
+            let cursor = NSEvent.mouseLocation
+            let screen = activeScreen ?? NSScreen.main ?? NSScreen.screens[0]
+            confirmPanel.show(
+                title: title,
+                message: message,
+                confirmLabel: "Delete",
+                near: cursor,
+                on: screen
+            ) { [weak self] confirmed in
+                guard let self else { return }
+                if confirmed {
+                    PhotosActions.deleteSelection { message, ok in
+                        if ok {
+                            self.panel.state.status = .answering
+                            let text = "Moved \(count) photo\(count == 1 ? "" : "s") to Recently Deleted."
+                            self.panel.state.answer = text
+                            self.speak(text)
+                        } else {
+                            self.fail(message)
+                        }
+                    }
+                } else {
+                    self.panel.state.status = .idle
+                    self.panel.state.answer = "Cancelled — nothing was deleted."
+                }
             }
         }
     }
