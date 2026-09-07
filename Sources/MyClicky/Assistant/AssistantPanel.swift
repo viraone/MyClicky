@@ -1524,15 +1524,11 @@ struct AssistantPanelView: View {
     /// Codex-style "+" at the foot of Capture + Dictate: a small menu whose
     /// one entry, "Files and folders", opens the macOS picker. Whatever is
     /// chosen lands in the capture preview exactly as a region grab would.
+    /// A native NSMenu rather than SwiftUI's `Menu`, which renders empty in
+    /// this non-activating panel.
     private var addMenu: some View {
-        Menu {
-            Section("Add") {
-                Button {
-                    state.onAttachFile?()
-                } label: {
-                    Label("Files and folders", systemImage: "paperclip")
-                }
-            }
+        Button {
+            showAddMenu()
         } label: {
             Image(systemName: "plus")
                 .font(.system(size: 15, weight: .semibold))
@@ -1542,10 +1538,24 @@ struct AssistantPanelView: View {
                 .overlay(Circle().strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
                 .contentShape(Circle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
+        .buttonStyle(.plain)
         .help("Add a file or folder from this Mac to the preview")
+    }
+
+    private func showAddMenu() {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        let header = NSMenuItem(title: "Add", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+        let files = NSMenuItem(title: "Files and folders", action: #selector(MenuAction.fire), keyEquivalent: "")
+        files.image = NSImage(systemSymbolName: "paperclip", accessibilityDescription: nil)
+        let action = MenuAction { state.onAttachFile?() }
+        files.target = action
+        menu.addItem(files)
+        // popUp blocks until dismissed, so the local target stays alive.
+        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+        _ = action
     }
 
     /// The break coach's countdown, and its on/off switch. Always visible so
@@ -1896,4 +1906,11 @@ private struct RecordingBars: View {
     private static let tall: [CGFloat] = [12, 20, 16, 20, 10]
     private static let short: [CGFloat] = [4, 8, 5, 6, 4]
     private static let speed: [Double] = [0.38, 0.30, 0.45, 0.34, 0.41]
+}
+
+/// Closure-backed target for one-off NSMenu items built from SwiftUI.
+private final class MenuAction: NSObject {
+    private let body: () -> Void
+    init(_ body: @escaping () -> Void) { self.body = body }
+    @objc func fire() { body() }
 }
