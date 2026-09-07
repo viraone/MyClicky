@@ -422,6 +422,9 @@ final class AssistantPanelController {
     /// (including any manual corner-resize) rather than snapping to a preset.
     private var savedFrame: NSRect?
     private var resizeStartFrame: NSRect?
+    /// Where on the bottom grip the pointer landed (screen y minus edge y),
+    /// so an edge drag moves the edge by exactly the hand's motion.
+    private var resizeGrabOffset: CGFloat?
 
     /// Shrinks the panel in place to a one-line bar, or restores it. The bar
     /// keeps the panel's top-right corner — where the chevron is — so it
@@ -525,6 +528,7 @@ final class AssistantPanelController {
         guard let panel, !state.collapsed, !state.strip else { return }
         guard let translation else {
             resizeStartFrame = nil
+            resizeGrabOffset = nil
             // Keep the size switch honest after a manual drag: snap to the
             // nearest preset.
             let f = panel.frame
@@ -540,11 +544,20 @@ final class AssistantPanelController {
 
         let anchor = corner.anchor(in: start)
         let original = corner.point(in: start)
-        // Flip the y sign: SwiftUI's translation is down-positive, AppKit's
-        // window coordinates are up-positive. An edge drag ignores the
-        // sideways component so the width holds.
-        let dragged = NSPoint(x: original.x + (corner.isEdge ? 0 : translation.width),
-                              y: original.y - translation.height)
+        let dragged: NSPoint
+        if corner.isEdge {
+            // The grip rides on the edge it moves, so a gesture translation
+            // measured in its own space chases itself and stutters. Track the
+            // pointer in screen space instead — the edge simply follows the
+            // mouse, keeping the grab offset from where the drag began.
+            let mouse = NSEvent.mouseLocation
+            if resizeGrabOffset == nil { resizeGrabOffset = mouse.y - original.y }
+            dragged = NSPoint(x: original.x, y: mouse.y - (resizeGrabOffset ?? 0))
+        } else {
+            // Flip the y sign: SwiftUI's translation is down-positive,
+            // AppKit's window coordinates are up-positive.
+            dragged = NSPoint(x: original.x + translation.width, y: original.y - translation.height)
+        }
 
         let width = min(max(abs(dragged.x - anchor.x), Self.minPanelSize.width), Self.maxPanelSize.width)
         let height = min(max(abs(dragged.y - anchor.y), Self.minPanelSize.height), Self.maxPanelSize.height)
@@ -558,7 +571,14 @@ final class AssistantPanelController {
         let clampedX = min(max(x, visible.minX), visible.maxX - width)
         let clampedY = min(max(y, visible.minY), visible.maxY - height)
 
-        panel.setFrame(NSRect(x: clampedX, y: clampedY, width: width, height: height), display: true)
+        let frame = NSRect(x: clampedX, y: clampedY, width: width, height: height)
+        guard frame != panel.frame else { return }
+        // No implicit animation: the frame must land on the very event that
+        // moved the pointer or the edge lags a beat behind the hand.
+        NSAnimationContext.beginGrouping()
+        NSAnimationContext.current.duration = 0
+        panel.setFrame(frame, display: true)
+        NSAnimationContext.endGrouping()
     }
 
     func hide() {
