@@ -952,6 +952,10 @@ final class AssistantController {
             sendOpenDraft()
             return
         }
+        if Self.isEraseIt(utterance), messagesDraftOpenedAt.map({ Date().timeIntervalSince($0) < 10 * 60 }) ?? false {
+            eraseOpenMessagesDraft()
+            return
+        }
         if Self.isNeverMind(utterance), gmailDraftOpenedAt != nil || messagesDraftOpenedAt != nil {
             gmailDraftOpenedAt = nil
             messagesDraftOpenedAt = nil
@@ -1601,6 +1605,27 @@ final class AssistantController {
         return words[(sendAt + 1)...].allSatisfy { filler.contains($0) }
     }
 
+    /// "Erase that", "delete the whole message", "clear it", "start over" —
+    /// empty the draft rather than revise it. The drafter can't express
+    /// "nothing" (an empty reply is treated as a failure), so left to Claude
+    /// this reads as a revision and the text simply stays put.
+    private static func isEraseIt(_ utterance: String) -> Bool {
+        var words = utterance.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+        let leadIns: Set<String> = ["actually", "ok", "okay", "hey", "clicky", "no", "wait", "please", "just", "can", "you", "let's", "lets", "and", "now"]
+        while let first = words.first, leadIns.contains(first) { words.removeFirst() }
+        let joined = words.joined(separator: " ")
+        if ["start over", "start again", "scrap that", "scrap it", "wipe it", "wipe that"].contains(where: { joined.hasPrefix($0) }) {
+            return true
+        }
+        let verbs: Set<String> = ["erase", "delete", "clear", "remove", "wipe", "scrap"]
+        guard let verb = words.first, verbs.contains(verb), words.count <= 7 else { return false }
+        let filler: Set<String> = ["it", "that", "this", "the", "whole", "entire", "all", "of", "message", "text",
+                                   "draft", "everything", "please", "now", "out", "away", "completely"]
+        return words.dropFirst().allSatisfy { filler.contains($0) }
+    }
+
     private static func isNeverMind(_ utterance: String) -> Bool {
         let t = utterance.lowercased().trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
         return ["never mind", "nevermind", "cancel", "cancel that", "stop", "forget it", "leave it"].contains(t)
@@ -1681,6 +1706,38 @@ final class AssistantController {
         } else {
             sendOpenGmailDraft()
         }
+    }
+
+    /// Empties the compose box of the open Messages thread — in the
+    /// background where possible — and forgets the draft, so the next thing
+    /// said is written fresh rather than as a revision of the erased text.
+    private func eraseOpenMessagesDraft() {
+        guard MessagesActions.openConversation() != nil else {
+            let message = "The conversation isn't open in Messages any more."
+            panel.state.status = .answering
+            panel.state.answer = message
+            panel.state.logTalk(.error, message)
+            remote.broadcast("STATUS \(message)")
+            return
+        }
+        let background = MessagesActions.writeIntoOpenConversationInBackground("")
+        if background.needsFallback {
+            log.notice("messages erase: background write \(String(describing: background), privacy: .public) — falling back to focus-and-type")
+        }
+        let ok = background == .success || MessagesActions.typeIntoOpenConversation("")
+        ActivityLog.recordAction("messages-draft-erase", ["via": background == .success ? "background" : "foreground", "ok": ok ? "yes" : "no"])
+        let message: String
+        if ok {
+            messagesDraftText = nil
+            messagesDraftOpenedAt = Date() // still talking to this thread
+            message = "Erased — tell me what to say instead."
+        } else {
+            message = "Couldn't clear the message box in Messages."
+        }
+        panel.state.status = .answering
+        panel.state.answer = message
+        panel.state.logTalk(ok ? .status : .error, message)
+        remote.broadcast("STATUS \(message)")
     }
 
     private func sendOpenMessagesDraft() {

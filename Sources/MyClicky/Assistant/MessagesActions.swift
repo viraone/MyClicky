@@ -231,7 +231,12 @@ enum MessagesActions {
         usleep(250_000)
         KeyboardTyper.press(KeyboardTyper.aKey, flags: .maskCommand)
         usleep(100_000)
-        KeyboardTyper.paste(text)
+        if text.isEmpty {
+            // Pasting nothing leaves the selection in place; Delete clears it.
+            KeyboardTyper.press(KeyboardTyper.deleteKey)
+        } else {
+            KeyboardTyper.paste(text)
+        }
         return true
     }
 

@@ -30,6 +30,7 @@ enum KeyboardTyper {
 
     static let returnKey: CGKeyCode = 36
     static let escapeKey: CGKeyCode = 53
+    static let deleteKey: CGKeyCode = 51
     static let aKey: CGKeyCode = 0
     static let vKey: CGKeyCode = 9
 
