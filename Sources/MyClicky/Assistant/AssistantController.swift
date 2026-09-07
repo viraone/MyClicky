@@ -185,10 +185,13 @@ final class AssistantController {
             // Phone-driven: the Mac panel is just a status readout, so park it
             // as the thin strip at the bottom of the work screen.
             if let screen = self.activeScreen { self.panel.showAsStrip(on: screen) }
-            // The desktop selection controls the phone's continuous voice stream.
-            let questionsOnly = self.panel.state.tab == .ask
-            if !questionsOnly { self.panel.state.tab = .talk }
-            self.beginTalkStreaming(questionsOnly: questionsOnly)
+            // The phone has its own ASK key, so TALK always means "do it" —
+            // whatever tab the Mac panel was left on. (Deferring to the Ask
+            // tab here turned "open Messages" into a question three times in
+            // a row after an ASK had parked the panel there.)
+            self.phoneAskInFlight = false
+            self.panel.state.tab = .talk
+            self.beginTalkStreaming(questionsOnly: false)
         }
         // Streaming silence is tracked independently of the answer UI state.
         remote.onStop = { [weak self] in self?.stop() }
