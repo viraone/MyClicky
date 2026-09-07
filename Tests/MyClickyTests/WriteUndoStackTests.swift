@@ -249,7 +249,7 @@ final class UndoPhraseTests: XCTestCase {
     func testUndoPhrasesMatch() {
         for phrase in ["undo", "Undo that", "undo it", "put it back", "put that back", "revert that", "revert",
                        "never mind, undo", "Clicky, undo that", "actually undo that", "oops undo", "take it back",
-                       "change it back", "undo the last one", "Okay, undo that please."] {
+                       "change it back", "undo the last one", "Okay, undo that please.", "Un Undo that", "undo undo that", "Un— undo"] {
             XCTAssertTrue(AssistantController.isUndoIt(phrase), "should match: \(phrase)")
         }
     }

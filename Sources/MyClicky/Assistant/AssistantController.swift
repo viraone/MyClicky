@@ -1081,7 +1081,11 @@ final class AssistantController {
         // — not gated on a Messages thread, so an empty stack still gets a
         // spoken "nothing to undo" rather than being dictated somewhere.
         if Self.isUndoIt(utterance) {
-            if let ghost, !ghost.written.isEmpty {
+            // A preview holding only the command's own words ("un undo that",
+            // previewed before the phrase was recognisable) isn't something
+            // Clicky started writing — clear it silently and undo for real.
+            let previewIsCommand = ghost.map { Self.isUndoIt($0.written) } ?? false
+            if let ghost, !ghost.written.isEmpty, !previewIsCommand {
                 // The last thing Clicky put on screen is the live preview
                 // itself — that's what "undo that" means here, not the
                 // landed write before it.
@@ -1854,12 +1858,22 @@ final class AssistantController {
     /// empty the draft rather than revise it. The drafter can't express
     /// "nothing" (an empty reply is treated as a failure), so left to Claude
     /// this reads as a revision and the text simply stays put.
+    /// "Un— undo that", "erase erase that": a repeated or half-said word in
+    /// front of the verb is a stutter, not a lead-in — drop it so the fast
+    /// paths still match (seen live: every "un undo that" fell to Claude).
+    private static func stripStutters(_ words: [String]) -> [String] {
+        var words = words
+        while words.count >= 2, words[1].hasPrefix(words[0]) { words.removeFirst() }
+        return words
+    }
+
     private static func isEraseIt(_ utterance: String) -> Bool {
         var words = utterance.lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { !$0.isEmpty }
         let leadIns: Set<String> = ["actually", "ok", "okay", "hey", "clicky", "no", "wait", "please", "just", "can", "you", "let's", "lets", "and", "now"]
         while let first = words.first, leadIns.contains(first) { words.removeFirst() }
+        words = stripStutters(words)
         let joined = words.joined(separator: " ")
         if ["start over", "start again", "scrap that", "scrap it", "wipe it", "wipe that", "get rid of"].contains(where: { joined.hasPrefix($0) }) {
             return true
@@ -1886,6 +1900,7 @@ final class AssistantController {
         let leadIns: Set<String> = ["actually", "ok", "okay", "hey", "clicky", "no", "wait", "please", "just", "can", "you",
                                     "let's", "lets", "and", "now", "never", "mind", "nevermind", "oops", "uh", "um", "sorry"]
         while let first = words.first, leadIns.contains(first) { words.removeFirst() }
+        words = stripStutters(words)
         guard !words.isEmpty else { return false }
         let filler: Set<String> = ["it", "that", "this", "the", "last", "one", "thing", "write", "change", "edit",
                                    "message", "text", "draft", "please", "now", "again"]
