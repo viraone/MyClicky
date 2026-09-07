@@ -1736,7 +1736,16 @@ final class AssistantController {
         messagesDraftOpenedAt = Date()
         messagesDraftRecipient = only.name
         messagesDraftText = nil
-        let note = "Opened \(only.display) in Messages — tell me what to say, then “send it”."
+        // A draft already sitting in the box means the next words are a
+        // revision and won't preview live — say so, or "nothing shows up
+        // while I talk" looks like a failure (observed live).
+        let note: String
+        if let leftover = MessagesActions.currentComposeText() {
+            let shown = leftover.count > 50 ? String(leftover.prefix(49)) + "…" : leftover
+            note = "Opened \(only.display) in Messages — there's already a draft here: “\(shown)”. Tell me what to change, or say “erase that” to start fresh."
+        } else {
+            note = "Opened \(only.display) in Messages — tell me what to say, then “send it”."
+        }
         panel.state.answer = note
         panel.state.logTalk(.status, note)
         return nil
