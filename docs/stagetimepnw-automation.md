@@ -21,27 +21,104 @@ Appium Inspector (`brew install --cask appium-inspector`) sits on Screen 2 too:
 connect to `127.0.0.1:4723` with the same capabilities as `conftest.py` and use
 it to read element labels/identifiers off the live simulator.
 
-### How Clicky fits in
+### Why two screens
 
-Clicky's assistant is editor-aware and screen-aware, so with Xcode frontmost
-on Screen 1 and the test output visible on Screen 2:
+The Appium loop has four things you need to see at once: the source (Xcode),
+the app (Simulator), the test output (pytest), and the element tree (Appium
+Inspector). On one screen you alt-tab between them and lose the traceback the
+moment you switch to Xcode. With two screens nothing ever hides: Screen 1 is
+"what the app is/does", Screen 2 is "what the tests say about it".
 
-- **Hold ⌥⌘C and ask** — the screen under your *cursor* is captured, so put the
-  cursor over Screen 2 and ask "why did this pytest fail?" or over the simulator
-  and ask "what's the accessibility label of the Create Account button?"
-- **Xcode frontmost + ⌥⌘C** — Clicky reads the focused Swift file via the
-  Accessibility API, so "add accessibility identifiers to every field in this
-  view" works on the real source, not pixels.
-- **⌃⌥X** — drag-capture a simulator frame or a red traceback to
-  `~/Desktop/VIRADETH_RESUME/` and paste it into a bug report / PR.
-- **⌥⌘V (Dictate)** — dictate a docstring or a commit message; it lands on the
-  clipboard cleaned up.
-- **Clicky Remote (iPhone)** — key `1` toggles the mic, `3` captures, `0`
-  brings up Ask, so you can drive Clicky without leaving the Xcode/Terminal
+### How Clicky picks what to look at
+
+Two rules from `AssistantController` / `EditorContextReader` decide what
+Clicky sends to Claude when you hold ⌥⌘C:
+
+1. **Which display?** The one the *mouse cursor* is on, not the one with the
+   active window. Move the pointer onto Screen 2 and Clicky screenshots Screen 2
+   even if Xcode on Screen 1 is still the active app.
+2. **Editor override.** If the *frontmost app* is Xcode (or VS Code, Cursor,
+   Android Studio, JetBrains, Sublime, Zed) **and** the keyboard focus is in the
+   editor text area, Clicky skips the screenshot and sends the focused file's
+   full text via the Accessibility API. Focus in the navigator or console
+   doesn't count — click inside the code first.
+
+So: **cursor position = screenshot target; frontmost editor = source-code
+target.** The four moves below all follow from that.
+
+### The four moves
+
+**1. Ask about a failure (cursor on Screen 2, ⌥⌘C).**
+pytest prints a red traceback in pane B. Click nothing — just move the pointer
+over the terminal, hold ⌥⌘C, say "why did this test fail and what predicate
+should I use instead?", release. Clicky screenshots Screen 2 (traceback +
+Appium log + Inspector tree if visible), sends it with your question, speaks
+the answer and shows it in the floating panel. The panel appears near the
+cursor, so it lands on Screen 2 and doesn't cover the simulator. Works for
+"what does this Appium error mean", "which capability is wrong in conftest",
+"read me the element hierarchy in Inspector".
+
+**2. Ask about the Swift source (Xcode frontmost, ⌥⌘C).**
+Click inside `AuthView.swift` in Xcode's editor so it has focus, hold ⌥⌘C,
+say "list every TextField, SecureField and Button in this file and give me an
+accessibilityIdentifier for each, matching the signin_ naming in LoginView".
+Clicky sends the real file text, so the answer references exact lines, not
+guessed pixels. Clicky **shows** the code in its panel; you paste it into
+Xcode yourself (Clicky doesn't type into Xcode). Also good for "what does
+handleSignUp validate before calling the network" — the answer is exactly what
+your negative tests should assert.
+
+**3. Ask about the app UI (cursor on the Simulator, ⌥⌘C).**
+Cursor over the simulator window (Xcode may still be active — the cursor
+rule wins for the screenshot, but if Xcode's editor has focus the editor
+override wins instead, so click the Simulator once first). Ask "what's the
+visible label of the primary button on this screen" or "is the Create Account
+button below the fold on this device". Cheaper than launching Inspector for a
+quick look.
+
+**4. Capture evidence (⌃⌥X, drag).**
+Press ⌃⌥X, drag a rectangle around the simulator frame or the red assertion
+line, release. A PNG lands in `~/Desktop/VIRADETH_RESUME/` with a timestamp,
+no dialog. Drop it into a GitHub issue, PR description, or a Claude/ChatGPT
+chat. Escape cancels.
+
+### Supporting moves
+
+- **⌥⌘V (Dictate)** — hold, speak a docstring or commit message, release; the
+  cleaned-up text is on the clipboard. Paste into Xcode or `git commit -m`.
+- **Type a question instead of speaking** — the Ask panel has a text field, useful
+  when pasting an exact error string.
+- **Clicky Remote (iPhone)** — with the phone on the desk: `0` shows Ask, `1`
+  toggles the mic, `2` Dictate, `3` Capture, Enter collapses the panel. Lets
+  you trigger Clicky without touching the Mac keyboard, so pytest/Xcode keep
   keyboard focus.
+- **Ask "click it"** — after Clicky highlights something in an answer, "click
+  it" moves the mouse there after a confirm dialog. Handy for "click the Rerun
+  button in Appium Inspector" while your hands are on the phone.
 
-Suggested loop: run pytest (pane B) → failure → cursor on the traceback →
-⌥⌘C "what element predicate should I use here?" → fix in Xcode/test → rerun.
+### The loop, end to end
+
+1. Pane C: backend up (`supabase start` or `python mock_supabase.py`).
+2. Pane A: `appium`.
+3. Pane B: `pytest -s tests/test_signup.py` → fails on
+   `signup_email_input` not found.
+4. Cursor → Screen 2, ⌥⌘C: "why can't Appium find signup_email_input?" →
+   answer: AuthView has no identifiers.
+5. Click into `AuthView.swift` in Xcode, ⌥⌘C: "give me accessibilityIdentifier
+   lines for every field and button here" → paste them in.
+6. ⌘R in Xcode to reinstall the app on the simulator.
+7. Pane B: rerun pytest → green.
+8. ⌃⌥X around the passing output + simulator success message → attach to the
+   PR.
+
+### Setup that makes this work
+
+System Settings → Privacy & Security, for MyClicky: **Screen Recording**
+(both moves 1 and 3 need it), **Accessibility** (move 2 reads Xcode's text;
+also needed for "click it"), **Microphone** and **Speech Recognition**.
+Arrange displays in System Settings → Displays so moving the mouse right from
+Screen 1 lands on Screen 2 — the cursor rule only feels natural if the
+physical layout matches.
 
 ## 2. "Mock server" — what actually needs mocking
 
