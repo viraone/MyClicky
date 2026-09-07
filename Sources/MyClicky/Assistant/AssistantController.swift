@@ -1195,8 +1195,16 @@ final class AssistantController {
         let gateBypassed = Self.isAppCommand(utterance) || Self.isTerminalCommand(utterance)
         if gateBypassed { ghost?.clear() }
         let gmailActive = !gateBypassed && (gmailDraftOpenedAt.map { Date().timeIntervalSince($0) < 10 * 60 } ?? false)
-        let messagesActive = !gateBypassed && (messagesDraftOpenedAt.map { Date().timeIntervalSince($0) < 10 * 60 } ?? false)
-        let messagesFirst = (messagesDraftOpenedAt ?? .distantPast) > (gmailDraftOpenedAt ?? .distantPast)
+        // A thread Clicky opened, or one the user is simply looking at: with
+        // Messages in front and a conversation showing, the next sentence is
+        // the message. (Seen live: "open Messages" via the planner, then "I
+        // will see you later today" — the planner typed it and proposed
+        // pressing Return, so a send card appeared before "send it" was said.)
+        let messagesInFront = [targetApp?.bundleIdentifier, NSWorkspace.shared.frontmostApplication?.bundleIdentifier]
+            .contains(MessagesActions.bundleID)
+        let messagesActive = !gateBypassed && ((messagesDraftOpenedAt.map { Date().timeIntervalSince($0) < 10 * 60 } ?? false)
+                                               || messagesInFront)
+        let messagesFirst = messagesInFront || (messagesDraftOpenedAt ?? .distantPast) > (gmailDraftOpenedAt ?? .distantPast)
         for target in messagesFirst ? ["messages", "gmail"] : ["gmail", "messages"] {
             if target == "gmail", gmailActive,
                let compose = GmailDrafter.openCompose(recipientHint: gmailDraftRecipient) {
