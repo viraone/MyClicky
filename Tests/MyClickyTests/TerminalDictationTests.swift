@@ -59,3 +59,48 @@ final class TerminalDictationTests: XCTestCase {
         }
     }
 }
+
+@MainActor
+final class TerminalTargetingTests: XCTestCase {
+    func testAgentDetectedFromProcessList() {
+        XCTAssertEqual(TerminalActions.agentName(in: ["login -pf viradeth", "-zsh"]), nil)
+        XCTAssertEqual(TerminalActions.agentName(in: ["-zsh", "node /opt/homebrew/lib/node_modules/@anthropic-ai/claude-code/cli.js"]), "Claude Code")
+        XCTAssertEqual(TerminalActions.agentName(in: ["copilot --model gpt-5"]), "Copilot CLI")
+        XCTAssertEqual(TerminalActions.agentName(in: ["/usr/local/bin/codex"]), "Codex")
+        // A plain argument mentioning an agent isn't the agent.
+        XCTAssertNil(TerminalActions.agentName(in: ["vim notes-about-claude.md"]))
+    }
+
+    func testSpokenAgentNormalises() {
+        XCTAssertEqual(TerminalActions.agentName(spoken: "Claude Code"), "Claude Code")
+        XCTAssertEqual(TerminalActions.agentName(spoken: "claude"), "Claude Code")
+        XCTAssertEqual(TerminalActions.agentName(spoken: "Copilot"), "Copilot CLI")
+        XCTAssertNil(TerminalActions.agentName(spoken: "the agent"))
+    }
+
+    func testScreenHintExtraction() {
+        XCTAssertEqual(AssistantController.extractScreenHint("run the tests on the other screen").1, .other)
+        XCTAssertEqual(AssistantController.extractScreenHint("run the tests on the other screen").0, "run the tests")
+        XCTAssertEqual(AssistantController.extractScreenHint("git status on screen 2").1, .index(2))
+        XCTAssertEqual(AssistantController.extractScreenHint("git status on the second monitor").1, .index(2))
+        XCTAssertEqual(AssistantController.extractScreenHint("ls on the left screen").1, .left)
+        XCTAssertNil(AssistantController.extractScreenHint("open the screen saver settings").1)
+    }
+
+    func testDictationCarriesAgentAndScreen() {
+        let d = AssistantController.terminalDictation("tell Claude to fix the failing test on the other screen", terminalActive: false)
+        XCTAssertEqual(d?.text, "fix the failing test")
+        XCTAssertEqual(d?.agent, true)
+        XCTAssertEqual(d?.agentName, "Claude Code")
+        XCTAssertEqual(d?.screen, .other)
+
+        let g = AssistantController.terminalDictation("ask the agent to explain this file", terminalActive: false)
+        XCTAssertEqual(g?.agent, true)
+        XCTAssertNil(g?.agentName)
+        XCTAssertNil(g?.screen)
+
+        let t = AssistantController.terminalDictation("in the terminal on screen 2 run npm test", terminalActive: false)
+        XCTAssertEqual(t?.text, "npm test")
+        XCTAssertEqual(t?.screen, .index(2))
+    }
+}

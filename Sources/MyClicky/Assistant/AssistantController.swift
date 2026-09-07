@@ -20,6 +20,7 @@ final class AssistantController {
     private let spotify = SpotifyService()
     private let confirmPanel = ConfirmActionPanelController()
     private let toast = ToastController()
+    private let hud = HUDController()
     private let remote = RemoteControlService()
     private let whatsappUnread = WhatsAppUnreadWatcher()
     private let gmailUnread = GmailUnreadWatcher()
@@ -649,6 +650,8 @@ final class AssistantController {
         }
         guard panel.state.status == .listening else { return }
         panel.state.transcript = text
+        hud.attach(to: panel.screen ?? activeScreen)
+        hud.hear(text)
         streamGhostDraft(text)
     }
 
@@ -1052,6 +1055,7 @@ final class AssistantController {
         guard !busy else { return }
         ActivityLog.recordAction("do", ["text": utterance])
         panel.state.logTalk(.command, utterance)
+        hud.decide("“\(utterance)”")
         // A live preview of these words may already be in the Messages
         // compose box. It stays only if this segment becomes the message.
         let ghost = takeGhostDraft()
@@ -1106,7 +1110,7 @@ final class AssistantController {
         // pressed. Focus stays where it is.
         if let dictation = Self.terminalDictation(utterance, terminalActive: terminalDraftIsCurrent) {
             ghost?.clear()
-            typeIntoTerminal(dictation.text, append: dictation.append, agent: dictation.agent)
+            typeIntoTerminal(dictation)
             return
         }
         if Self.isEraseIt(utterance), messagesDraftOpenedAt.map({ Date().timeIntervalSince($0) < 10 * 60 }) ?? false {
@@ -1312,6 +1316,7 @@ final class AssistantController {
                 self?.resolveConfirm(id: id, result: confirmed)
             }
             remote.broadcast(wire)
+            hud.decide(question.components(separatedBy: "\n\n").first ?? question, outcome: .pending)
         }
     }
 
@@ -1353,6 +1358,7 @@ final class AssistantController {
         // Whichever side answered, tell every phone so a stale prompt (e.g.
         // this one was answered here on the Mac, not on the phone) clears.
         remote.broadcast("CONFIRM_DONE \(id)\t\(result ? "YES" : "NO")")
+        hud.report(result ? "Confirmed" : "Cancelled", ok: result)
         continuation.resume(returning: result)
     }
 
@@ -2184,6 +2190,7 @@ final class AssistantController {
         remote.broadcast("STATUS \(message)")
         toast.show(message, icon: outcome.ok ? "arrow.uturn.backward.circle.fill" : "exclamationmark.triangle.fill",
                    tint: outcome.ok ? .cyan : .orange)
+        hud.report(message, ok: outcome.ok)
         if !panel.state.textOnlyMode { speak(message) }
     }
 
@@ -2552,6 +2559,44 @@ final class AssistantController {
         /// Addressed to the agent at the prompt (Claude Code, Copilot CLI…)
         /// — natural language, left exactly as spoken.
         let agent: Bool
+        /// Which agent, when one was named ("Claude Code"); nil for "the agent".
+        var agentName: String? = nil
+        /// "…on the other screen" / "…on screen 2" / "…on the left screen".
+        var screen: ScreenHint? = nil
+    }
+
+    enum ScreenHint: Equatable {
+        case other
+        case index(Int)
+        case left, right
+    }
+
+    /// Pulls a screen hint out of the sentence and returns what's left.
+    static func extractScreenHint(_ text: String) -> (String, ScreenHint?) {
+        let numbers = ["one": 1, "1": 1, "two": 2, "2": 2, "three": 3, "3": 3, "first": 1, "second": 2, "third": 3]
+        let patterns = [
+            "\\s*(?:on|in|at|to)\\s+(?:the\\s+)?(other|left|right|first|second|third)\\s+(?:screen|monitor|display)\\b",
+            "\\s*(?:on|in|at|to)\\s+(?:screen|monitor|display)\\s+(one|two|three|1|2|3)\\b",
+        ]
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+                  let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+                  let whole = Range(match.range, in: text), let word = Range(match.range(at: 1), in: text) else { continue }
+            let key = text[word].lowercased()
+            let hint: ScreenHint
+            switch key {
+            case "other": hint = .other
+            case "left": hint = .left
+            case "right": hint = .right
+            default:
+                guard let n = numbers[key] else { continue }
+                hint = .index(n)
+            }
+            var rest = text
+            rest.removeSubrange(whole)
+            return (rest.trimmingCharacters(in: .whitespacesAndNewlines), hint)
+        }
+        return (text, nil)
     }
 
     private static let terminalNouns = "(?:terminal|shell|console|command line|prompt)"
@@ -2575,6 +2620,8 @@ final class AssistantController {
                 }
             }
         }
+        let (rest, screenHint) = extractScreenHint(text)
+        text = rest
         let T = terminalNouns, A = agentNouns
         let shellPatterns = [
             "^(?:tell|ask)\\s+(?:the\\s+)?\(T)\\s+(?:to\\s+)?(.+)$",
@@ -2584,8 +2631,8 @@ final class AssistantController {
             "^\(T)[,:]\\s+(.+)$",
         ]
         let agentPatterns = [
-            "^(?:tell|ask)\\s+\(A)\\s+(?:to\\s+)?(.+)$",
-            "^(?:say|send)\\s+(?:this\\s+)?to\\s+\(A)[,:]?\\s+(.+)$",
+            "^(?:tell|ask)\\s+(\(A))\\s+(?:to\\s+)?(.+)$",
+            "^(?:say|send)\\s+(?:this\\s+)?to\\s+(\(A))[,:]?\\s+(.+)$",
         ]
         func capture(_ pattern: String) -> String? {
             guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
@@ -2595,11 +2642,17 @@ final class AssistantController {
             return captured.isEmpty ? nil : captured
         }
         for pattern in agentPatterns {
-            if let captured = capture(pattern) { return TerminalDictation(text: captured, append: false, agent: true) }
+            guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+                  let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+                  let who = Range(match.range(at: 1), in: text), let what = Range(match.range(at: 2), in: text) else { continue }
+            let captured = text[what].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !captured.isEmpty else { continue }
+            return TerminalDictation(text: captured, append: false, agent: true,
+                                     agentName: TerminalActions.agentName(spoken: String(text[who])), screen: screenHint)
         }
         for pattern in shellPatterns {
             if let captured = capture(pattern) {
-                return TerminalDictation(text: spokenSymbols(captured), append: false, agent: false)
+                return TerminalDictation(text: spokenSymbols(captured), append: false, agent: false, screen: screenHint)
             }
         }
         // A line is already at the prompt: "type --verbose" / "add dash v"
@@ -2653,17 +2706,46 @@ final class AssistantController {
         terminalDictation(utterance, terminalActive: false) != nil
     }
 
-    private func typeIntoTerminal(_ text: String, append: Bool, agent: Bool) {
-        guard let session = TerminalActions.session() else {
-            let message = "No terminal is open — open Terminal or iTerm first, then say that again."
-            finishTerminal(message, ok: false)
-            return
+    private func typeIntoTerminal(_ dictation: TerminalDictation) {
+        let text = dictation.text, append = dictation.append, agent = dictation.agent
+        // The display you're working on: where Clicky's panel is, else the
+        // frontmost app's window, else the cursor.
+        let working = panel.screen ?? Self.screenShowing(NSWorkspace.shared.frontmostApplication) ?? activeScreen
+        var request = TerminalActions.Request(agent: dictation.agentName, anyAgent: agent && dictation.agentName == nil)
+        let byX = NSScreen.screens.sorted { $0.frame.minX < $1.frame.minX }
+        switch dictation.screen {
+        case .other: request.otherScreenThan = working
+        case .index(let n): request.screenIndex = n
+        case .left: request.screenIndex = byX.first.flatMap { NSScreen.screens.firstIndex(of: $0) }.map { $0 + 1 }
+        case .right: request.screenIndex = byX.last.flatMap { NSScreen.screens.firstIndex(of: $0) }.map { $0 + 1 }
+        case nil: break
+        }
+        let session: TerminalActions.Session
+        if append, let existing = terminalTarget, existing.isValid, dictation.screen == nil, dictation.agentName == nil {
+            session = existing.session
+        } else {
+            switch TerminalActions.choose(request, workingScreen: working) {
+            case .one(let chosen): session = chosen
+            case .noTerminal:
+                finishTerminal("No terminal is open — open Terminal or iTerm first, then say that again.", ok: false)
+                return
+            case .noAgent(let name):
+                finishTerminal("I don't see \(name) running in any terminal tab.", ok: false)
+                return
+            case .none:
+                finishTerminal("No terminal window on that screen.", ok: false)
+                return
+            case .noScreen(let n):
+                let count = NSScreen.screens.count
+                finishTerminal("There's no screen \(n) — you have \(count) \(count == 1 ? "display" : "displays").", ok: false)
+                return
+            }
         }
         synthesizer.stopSpeaking(at: .immediate)
         let target: TerminalLineTarget
         let previous: String
-        if append, let existing = terminalTarget, existing.isValid,
-           existing.session.app.processIdentifier == session.app.processIdentifier {
+        if append, let existing = terminalTarget, existing.isValid, existing.session.windowID == session.windowID,
+           existing.session.tabIndex == session.tabIndex {
             target = existing
             previous = existing.typed
         } else {
@@ -2679,16 +2761,17 @@ final class AssistantController {
         terminalTarget = target
         terminalDraftOpenedAt = Date()
         WriteUndoStack.shared.forget(key: target.undoKey)
-        WriteUndoStack.shared.record(target: target, previousValue: previous, newValue: newValue, label: session.name)
+        WriteUndoStack.shared.record(target: target, previousValue: previous, newValue: newValue, label: session.label)
         if let frame = session.frame { ring.show(over: frame, duration: 1.8) }
         let shown = newValue.count > 80 ? String(newValue.prefix(80)) + "…" : newValue
         let verb = session.kind.stagesAtPrompt ? "Typed" : "Ready for"
-        let message = agent ? "\(verb) \(session.name): “\(shown)” — say “send it” to let it go, or “erase that”."
-                            : "\(verb) \(session.name): “\(shown)” — say “run it”, or “erase that”."
-        ActivityLog.recordAction("terminal-draft", ["app": session.name, "agent": agent ? "yes" : "no",
-                                                    "append": append ? "yes" : "no", "chars": String(newValue.count)])
+        let message = session.agent != nil ? "\(verb) \(session.label): “\(shown)” — say “send it” to let it go, or “erase that”."
+                                           : "\(verb) \(session.label): “\(shown)” — say “run it”, or “erase that”."
+        ActivityLog.recordAction("terminal-draft", ["app": session.label, "agent": agent ? "yes" : "no",
+                                                    "append": append ? "yes" : "no", "chars": String(newValue.count),
+                                                    "screen": dictation.screen.map { String(describing: $0) } ?? "auto"])
         finishTerminal(message, ok: true)
-        toast.show("\(session.name): \(shown)", icon: "terminal.fill", tint: .cyan)
+        toast.show("\(session.label): \(shown)", icon: "terminal.fill", tint: .cyan)
     }
 
     private func runOpenTerminalLine() async {
@@ -2698,14 +2781,21 @@ final class AssistantController {
         }
         let screen = activeScreen ?? NSScreen.main ?? NSScreen.screens[0]
         panel.state.status = .answering
-        panel.state.answer = "Run this in \(target.session.name)?"
         let line = target.typed
         let preview = line.count > 220 ? String(line.prefix(220)) + "…" : line
-        let confirmed = await requestConfirm(question: "Run in \(target.session.name)?\n\n\(preview)", screen: screen,
+        let confirmed: Bool
+        if let agent = target.session.agent {
+            panel.state.answer = "Send this to \(agent)?"
+            confirmed = await requestConfirm(question: "Send to \(target.session.label)?\n\n\(preview)", screen: screen,
+                                             kind: .send(recipient: agent))
+        } else {
+            panel.state.answer = "Run this in \(target.session.name)?"
+            confirmed = await requestConfirm(question: "Run in \(target.session.name)?\n\n\(preview)", screen: screen,
                                              kind: .run(where: target.session.name))
-        ActivityLog.recordAction("terminal-run-confirm", ["via": target.session.name, "ok": confirmed ? "yes" : "no"])
+        }
+        ActivityLog.recordAction("terminal-run-confirm", ["via": target.session.label, "ok": confirmed ? "yes" : "no"])
         guard confirmed else {
-            finishTerminal("Not run — the line is still staged; say “run it” when ready, or “erase that”.", ok: true)
+            finishTerminal("Not run — the line is still staged; say “run it” when ready, or “erase that”.", ok: true, hudOK: false)
             return
         }
         let seen = TerminalActions.run(line, in: target.session)
@@ -2713,8 +2803,8 @@ final class AssistantController {
         target.consume()
         terminalDraftOpenedAt = Date() // still talking to this terminal
         if let frame = target.session.frame { ring.show(over: frame, duration: 1.5) }
-        let message = seen == false ? "Sent it to \(target.session.name) but couldn't see it in the tab — check there."
-                                    : "Running in \(target.session.name)."
+        let message = seen == false ? "Sent it to \(target.session.label) but couldn't see it in the tab — check there."
+                                    : (target.session.agent != nil ? "Sent to \(target.session.label)." : "Running in \(target.session.name).")
         finishTerminal(message, ok: seen != false)
         toast.show(message, icon: seen == false ? "exclamationmark.triangle.fill" : "terminal.fill",
                    tint: seen == false ? .orange : .green)
@@ -2733,7 +2823,8 @@ final class AssistantController {
         finishTerminal(message, ok: result.landed)
     }
 
-    private func finishTerminal(_ message: String, ok: Bool) {
+    private func finishTerminal(_ message: String, ok: Bool, hudOK: Bool? = nil) {
+        hud.report(message, ok: hudOK ?? ok)
         panel.state.status = .answering
         panel.state.answer = message
         panel.state.logTalk(ok ? .status : .error, message)
