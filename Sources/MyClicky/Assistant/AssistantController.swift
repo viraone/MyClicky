@@ -662,7 +662,7 @@ final class AssistantController {
         // ("send it") are more likely a command than the start of a message.
         guard pending.count >= 3 else { return }
         let utterance = pending.joined(separator: " ")
-        if Self.isSendIt(utterance) || Self.isEraseIt(utterance) || Self.isNeverMind(utterance) || Self.isAppCommand(utterance) {
+        if Self.isSendIt(utterance) || Self.isEraseIt(utterance) || Self.isUndoIt(utterance) || Self.isNeverMind(utterance) || Self.isAppCommand(utterance) {
             ghostDraft?.clear()
             return
         }
@@ -715,10 +715,10 @@ final class AssistantController {
         guard ghostDraft != nil || messagesActive else { return nil }
         let pending = pendingTalkWords(in: Self.words(transcript), quiet: true)
         guard let last = pending.last.map(Self.normalizedWord) else { return nil }
-        // Commands to the thread ("send it", "erase that") and thread switches
-        // should still run promptly.
+        // Commands to the thread ("send it", "erase that", "undo") and thread
+        // switches should still run promptly.
         let utterance = pending.joined(separator: " ")
-        if Self.isSendIt(utterance) || Self.isEraseIt(utterance) || Self.isNeverMind(utterance) || Self.isAppCommand(utterance) {
+        if Self.isSendIt(utterance) || Self.isEraseIt(utterance) || Self.isUndoIt(utterance) || Self.isNeverMind(utterance) || Self.isAppCommand(utterance) {
             return nil
         }
         let dangling: Set<String> = ["a", "an", "the", "and", "or", "but", "so", "to", "at", "in", "on", "of", "for",
@@ -1077,6 +1077,26 @@ final class AssistantController {
             eraseOpenMessagesDraft()
             return
         }
+        // "Undo that" reverts Clicky's last background write wherever it went
+        // — not gated on a Messages thread, so an empty stack still gets a
+        // spoken "nothing to undo" rather than being dictated somewhere.
+        if Self.isUndoIt(utterance) {
+            // A preview holding only the command's own words ("un undo that",
+            // previewed before the phrase was recognisable) isn't something
+            // Clicky started writing — clear it silently and undo for real.
+            let previewIsCommand = ghost.map { Self.isUndoIt($0.written) } ?? false
+            if let ghost, !ghost.written.isEmpty, !previewIsCommand {
+                // The last thing Clicky put on screen is the live preview
+                // itself — that's what "undo that" means here, not the
+                // landed write before it.
+                ghost.clear()
+                confirmPreviewUndone()
+            } else {
+                ghost?.clear()
+                undoLastWrite()
+            }
+            return
+        }
         if Self.isNeverMind(utterance), gmailDraftOpenedAt != nil || messagesDraftOpenedAt != nil {
             ghost?.clear()
             gmailDraftOpenedAt = nil
@@ -1087,6 +1107,14 @@ final class AssistantController {
             panel.state.answer = message
             panel.state.logTalk(.status, message)
             remote.broadcast("STATUS \(message)")
+            return
+        }
+        // "Bring up a text message with Jason Katz" went to the planner and
+        // came back without an open_conversation step (observed live) — the
+        // phrasing is deterministic enough to route here without Claude.
+        if let name = Self.conversationOpenRequest(utterance) {
+            ghost?.clear()
+            openConversationDirect(named: name)
             return
         }
         guard let apiKey = KeychainService.anthropicAPIKey() else {
@@ -1577,6 +1605,86 @@ final class AssistantController {
         panel.growIfNeeded()
     }
 
+    /// The name in "open Dino Dad's conversation", "bring up a text message
+    /// with Jason Katz", "pull up my chat with Ben", "open up a text with
+    /// Dave" — or nil when the utterance isn't plainly a request to bring a
+    /// Messages thread on screen. Kept narrow: the verb must lead (after
+    /// lead-ins) and the thing opened must be a message/conversation noun,
+    /// so "open Safari" and "text him I'm late" don't match.
+    static func conversationOpenRequest(_ utterance: String) -> String? {
+        var words = utterance.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted.subtracting(CharacterSet(charactersIn: "'’-")))
+            .filter { !$0.isEmpty }
+        let leadIns: Set<String> = ["actually", "ok", "okay", "hey", "clicky", "can", "could", "would", "you", "please",
+                                    "now", "um", "uh", "so", "and", "then", "wait", "no", "instead", "just", "go", "let's", "lets"]
+        while let first = words.first, leadIns.contains(first) { words.removeFirst() }
+        let verbs: Set<String> = ["open", "bring", "pull", "show", "start", "switch", "get"]
+        guard let verb = words.first, verbs.contains(verb) else { return nil }
+        words.removeFirst()
+        let particles: Set<String> = ["up", "me", "to", "a", "an", "the", "my", "new", "our"]
+        while let first = words.first, particles.contains(first) { words.removeFirst() }
+        let nouns: Set<String> = ["text", "texts", "message", "messages", "imessage", "conversation", "convo", "chat", "thread", "sms"]
+        // "… a text message with X" / "… the conversation with X" / "… chat to X"
+        if let noun = words.first, nouns.contains(noun) {
+            words.removeFirst()
+            if let second = words.first, nouns.contains(second) { words.removeFirst() } // "text message"
+            guard let joiner = words.first, ["with", "to", "for", "from"].contains(joiner) else { return nil }
+            words.removeFirst()
+            return cleanedContactName(words)
+        }
+        // "… X's conversation" / "… X's thread"
+        if let index = words.firstIndex(where: { nouns.contains($0) }), index > 0,
+           words[(index + 1)...].allSatisfy({ ["please", "now", "in", "messages"].contains($0) }) {
+            var name = Array(words[..<index])
+            if let last = name.last {
+                name[name.count - 1] = last.replacingOccurrences(of: "'s", with: "").replacingOccurrences(of: "’s", with: "")
+            }
+            return cleanedContactName(name)
+        }
+        return nil
+    }
+
+    private static func cleanedContactName(_ words: [String]) -> String? {
+        var name = words
+        let trailing: Set<String> = ["please", "now", "in", "messages", "on", "imessage", "for", "me", "thanks"]
+        while let last = name.last, trailing.contains(last) { name.removeLast() }
+        guard !name.isEmpty, name.count <= 5 else { return nil }
+        return name.map { $0.prefix(1).uppercased() + $0.dropFirst() }.joined(separator: " ")
+    }
+
+    /// Fast path for `conversationOpenRequest`: the same opener the planner
+    /// would have called, without the round-trip (or the risk of a plan that
+    /// omits it).
+    private func openConversationDirect(named name: String) {
+        busy = true
+        synthesizer.stopSpeaking(at: .immediate)
+        ring.hide()
+        panel.state.status = .thinking
+        panel.state.answer = "Opening \(name)…"
+        panel.state.errorText = nil
+        remote.broadcast("STATUS \(panel.state.answer)")
+        ActivityLog.recordAction("messages-open-direct", ["name": name])
+        requestID += 1
+        let id = requestID
+        currentTask = Task {
+            defer { if id == requestID { busy = false; currentTask = nil } }
+            let reason = await openConversation(app: "Messages", named: name)
+            guard id == requestID else { return }
+            if let reason {
+                panel.state.status = .answering
+                panel.state.answer = reason
+                panel.state.logTalk(.error, reason)
+                remote.broadcast("STATUS \(reason.replacingOccurrences(of: "\n", with: " "))")
+            } else {
+                panel.state.status = .answering
+                remote.broadcast("STATUS \(panel.state.answer)")
+            }
+            busy = false
+            currentTask = nil
+            afterTalkSegment()
+        }
+    }
+
     /// Brings a named conversation on screen — the spoken alternative to
     /// reaching for the mouse when the thread you want isn't the one open.
     /// Sends nothing: it exists so the thread is visible *before* the
@@ -1632,7 +1740,16 @@ final class AssistantController {
         messagesDraftOpenedAt = Date()
         messagesDraftRecipient = only.name
         messagesDraftText = nil
-        let note = "Opened \(only.display) in Messages — tell me what to say, then “send it”."
+        // A draft already sitting in the box means the next words are a
+        // revision and won't preview live — say so, or "nothing shows up
+        // while I talk" looks like a failure (observed live).
+        let note: String
+        if let leftover = MessagesActions.currentComposeText() {
+            let shown = leftover.count > 50 ? String(leftover.prefix(49)) + "…" : leftover
+            note = "Opened \(only.display) in Messages — there's already a draft here: “\(shown)”. Tell me what to change, or say “erase that” to start fresh."
+        } else {
+            note = "Opened \(only.display) in Messages — tell me what to say, then “send it”."
+        }
         panel.state.answer = note
         panel.state.logTalk(.status, note)
         return nil
@@ -1741,12 +1858,22 @@ final class AssistantController {
     /// empty the draft rather than revise it. The drafter can't express
     /// "nothing" (an empty reply is treated as a failure), so left to Claude
     /// this reads as a revision and the text simply stays put.
+    /// "Un— undo that", "erase erase that": a repeated or half-said word in
+    /// front of the verb is a stutter, not a lead-in — drop it so the fast
+    /// paths still match (seen live: every "un undo that" fell to Claude).
+    private static func stripStutters(_ words: [String]) -> [String] {
+        var words = words
+        while words.count >= 2, words[1].hasPrefix(words[0]) { words.removeFirst() }
+        return words
+    }
+
     private static func isEraseIt(_ utterance: String) -> Bool {
         var words = utterance.lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { !$0.isEmpty }
         let leadIns: Set<String> = ["actually", "ok", "okay", "hey", "clicky", "no", "wait", "please", "just", "can", "you", "let's", "lets", "and", "now"]
         while let first = words.first, leadIns.contains(first) { words.removeFirst() }
+        words = stripStutters(words)
         let joined = words.joined(separator: " ")
         if ["start over", "start again", "scrap that", "scrap it", "wipe it", "wipe that", "get rid of"].contains(where: { joined.hasPrefix($0) }) {
             return true
@@ -1761,6 +1888,33 @@ final class AssistantController {
     private static func isNeverMind(_ utterance: String) -> Bool {
         let t = utterance.lowercased().trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
         return ["never mind", "nevermind", "cancel", "cancel that", "stop", "forget it", "leave it"].contains(t)
+    }
+
+    /// "Undo that", "undo", "put it back", "revert that", "never mind, undo"
+    /// — revert Clicky's last background write. Kept tight (a verb plus
+    /// filler) so "undo the second sentence" stays a revision for the drafter.
+    static func isUndoIt(_ utterance: String) -> Bool {
+        var words = utterance.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+        let leadIns: Set<String> = ["actually", "ok", "okay", "hey", "clicky", "no", "wait", "please", "just", "can", "you",
+                                    "let's", "lets", "and", "now", "never", "mind", "nevermind", "oops", "uh", "um", "sorry"]
+        while let first = words.first, leadIns.contains(first) { words.removeFirst() }
+        words = stripStutters(words)
+        guard !words.isEmpty else { return false }
+        let filler: Set<String> = ["it", "that", "this", "the", "last", "one", "thing", "write", "change", "edit",
+                                   "message", "text", "draft", "please", "now", "again"]
+        let phrases = ["put it back", "put that back", "put the text back", "put my text back", "take that back", "take it back",
+                       "bring it back", "bring that back", "change it back", "go back to what it was", "go back to how it was"]
+        for phrase in phrases.map({ $0.split(separator: " ").map(String.init) })
+        where words.count <= phrase.count + 3 && words.starts(with: phrase) {
+            // "Put it back on the shelf tomorrow" is dictation; only the bare
+            // phrase (plus filler) is the command.
+            return words.dropFirst(phrase.count).allSatisfy { filler.contains($0) }
+        }
+        let verbs: Set<String> = ["undo", "revert", "unsend"]
+        guard let verb = words.first, verbs.contains(verb), words.count <= 6 else { return false }
+        return words.dropFirst().allSatisfy { filler.contains($0) }
     }
 
     /// Speech that is clearly an instruction to Clicky rather than words for
@@ -1864,13 +2018,14 @@ final class AssistantController {
         if background.needsFallback {
             log.notice("messages erase: background write \(String(describing: background), privacy: .public) — falling back to focus-and-type")
         }
-        let ok = background == .success || MessagesActions.typeIntoOpenConversation("")
-        ActivityLog.recordAction("messages-draft-erase", ["via": background == .success ? "background" : "foreground", "ok": ok ? "yes" : "no"])
+        let ok = background.landed || MessagesActions.typeIntoOpenConversation("")
+        ActivityLog.recordAction("messages-draft-erase", ["via": background.landed ? "background" : "foreground",
+                                                          "result": String(describing: background), "ok": ok ? "yes" : "no"])
         let message: String
         if ok {
             messagesDraftText = nil
             messagesDraftOpenedAt = Date() // still talking to this thread
-            message = "Erased — tell me what to say instead."
+            message = background == .suspectedNoop ? "Already empty — tell me what to say." : "Erased — tell me what to say instead."
         } else {
             message = "Couldn't clear the message box in Messages."
         }
@@ -1878,6 +2033,70 @@ final class AssistantController {
         panel.state.answer = message
         panel.state.logTalk(ok ? .status : .error, message)
         remote.broadcast("STATUS \(message)")
+    }
+
+    /// "Undo that": pops the last background write off `WriteUndoStack` and
+    /// puts the previous text back through the same no-focus path, then
+    /// confirms on the panel/phone and out loud, with the ring on the field.
+    private func undoLastWrite() {
+        synthesizer.stopSpeaking(at: .immediate)
+        let target = WriteUndoStack.shared.last?.target
+        let outcome = WriteUndoStack.shared.undoLast()
+        let message = outcome.message
+        var details: [String: String] = ["ok": outcome.ok ? "yes" : "no", "remaining": String(WriteUndoStack.shared.count)]
+        if case .restored(let label, _, let forced) = outcome {
+            details["label"] = label
+            details["forced"] = forced ? "yes" : "no"
+            if let frame = target?.frame { ring.show(over: frame, duration: 2.5) }
+            // The compose box is the draft again — whatever it now holds is
+            // what "make it shorter" / "send it" act on.
+            if messagesDraftOpenedAt != nil {
+                messagesDraftText = MessagesActions.currentComposeText()
+                messagesDraftOpenedAt = Date()
+            }
+        }
+        ActivityLog.recordAction("write-undo", details)
+        panel.state.status = .answering
+        panel.state.answer = message
+        panel.state.logTalk(outcome.ok ? .status : .error, message)
+        remote.broadcast("STATUS \(message)")
+        toast.show(message, icon: outcome.ok ? "arrow.uturn.backward.circle.fill" : "exclamationmark.triangle.fill",
+                   tint: outcome.ok ? .cyan : .orange)
+        if !panel.state.textOnlyMode { speak(message) }
+    }
+
+    /// "Undo that" said in the same breath as the dictation, so the sentence
+    /// is still only the live preview in the compose box (the ghost handle
+    /// has already been consumed by the drafter): take it back out.
+    private func undoPreviewedDraft() {
+        let background = MessagesActions.writeIntoOpenConversationInBackground("")
+        let ok = background.landed || MessagesActions.typeIntoOpenConversation("")
+        if ok { confirmPreviewUndone() } else {
+            let message = "Couldn't take the preview back out of Messages."
+            ActivityLog.recordAction("write-undo", ["ok": "no", "preview": "yes", "result": String(describing: background)])
+            panel.state.status = .answering
+            panel.state.answer = message
+            panel.state.logTalk(.error, message)
+            remote.broadcast("STATUS \(message)")
+        }
+    }
+
+    /// The preview is gone (cleared by the caller); confirm like a real undo
+    /// and keep the thread in dictation mode for the next sentence.
+    private func confirmPreviewUndone() {
+        synthesizer.stopSpeaking(at: .immediate)
+        let name = MessagesActions.openConversation()
+        let message = "Undone — took back what I'd started writing\(name.map { " to \($0)" } ?? "")."
+        ActivityLog.recordAction("write-undo", ["ok": "yes", "preview": "yes", "remaining": String(WriteUndoStack.shared.count)])
+        if let frame = MessagesActions.composeFrame() { ring.show(over: frame, duration: 2.5) }
+        messagesDraftText = nil
+        if messagesDraftOpenedAt != nil { messagesDraftOpenedAt = Date() }
+        panel.state.status = .answering
+        panel.state.answer = message
+        panel.state.logTalk(.status, message)
+        remote.broadcast("STATUS \(message)")
+        toast.show(message, icon: "arrow.uturn.backward.circle.fill", tint: .cyan)
+        if !panel.state.textOnlyMode { speak(message) }
     }
 
     private func sendOpenMessagesDraft() {
@@ -1892,7 +2111,11 @@ final class AssistantController {
         panel.state.status = .thinking
         MessagesActions.sendTyped { [weak self] message, ok in
             guard let self else { return }
-            if ok { self.messagesDraftOpenedAt = nil; self.messagesDraftText = nil }
+            // The thread is still open after a send, and the next sentence is
+            // almost always a follow-up to it (observed live: "No I actually
+            // got work on Friday" right after "send it" fell to the planner
+            // and went nowhere). Keep drafting into it; only the text resets.
+            if ok { self.messagesDraftOpenedAt = Date(); self.messagesDraftText = nil }
             self.panel.state.status = .answering
             self.panel.state.answer = message
             self.panel.state.logTalk(ok ? .status : .error, message)
@@ -2054,7 +2277,15 @@ final class AssistantController {
                                                               senderName: NSFullUserName(), claude: claude)
                 guard id == requestID else { return }
                 guard case .write(let text) = outcome else {
-                    eraseOpenMessagesDraft()
+                    if outcome == .undo {
+                        // "…how you're doing — actually, undo that" in one
+                        // breath: the sentence was only ever previewed, so
+                        // there is no landed write to pop; the preview is
+                        // what goes (observed live).
+                        if previewed { undoPreviewedDraft() } else { undoLastWrite() }
+                    } else {
+                        eraseOpenMessagesDraft()
+                    }
                     return
                 }
                 // Prefer writing into the compose box without taking focus
@@ -2064,12 +2295,15 @@ final class AssistantController {
                 if background.needsFallback {
                     log.notice("messages draft: background write \(String(describing: background), privacy: .public) — falling back to focus-and-type")
                 }
-                ActivityLog.recordAction("messages-draft-insert", ["via": background == .success ? "background" : "foreground"])
-                if background == .success || MessagesActions.typeIntoOpenConversation(text) {
+                ActivityLog.recordAction("messages-draft-insert", ["via": background.landed ? "background" : "foreground",
+                                                                   "result": String(describing: background)])
+                if background.landed || MessagesActions.typeIntoOpenConversation(text) {
                     ok = true
                     messagesDraftText = text
                     messagesDraftOpenedAt = Date()
-                    message = "“\(text)” — say “send it”, or tell me what to change."
+                    message = background == .suspectedNoop
+                        ? "It already says “\(text)” — say “send it”, or tell me what to change."
+                        : "“\(text)” — say “send it”, or tell me what to change."
                 } else {
                     message = "Wrote it, but the conversation isn't open in Messages any more."
                 }
@@ -2080,6 +2314,10 @@ final class AssistantController {
             panel.state.answer = message
             panel.state.logTalk(ok ? .status : .error, message)
             remote.broadcast("STATUS \(message)")
+            // The landed-write confirmation lived only on the panel and the
+            // phone's status line — easy to miss with the panel behind other
+            // windows (observed live: "I didn't see it land").
+            if ok { toast.show("Written — say “send it” or “undo that”", icon: "text.bubble.fill", tint: .green) }
         }
     }
 

@@ -36,13 +36,20 @@ enum MessagesDrafter {
     {"action": "erase"} and nothing else. Only a request to remove the \
     WHOLE draft is an erase; "delete the second sentence" is a revision.
 
-    Reply with JSON only: {"action": "write", "text": "<the message>"} \
-    or {"action": "erase"}.
+    Undoing: when they want the LAST change reverted rather than the draft \
+    rewritten — "undo that", "undo", "put it back", "revert that", "go back \
+    to what it was", "never mind, undo" — reply {"action": "undo"} and \
+    nothing else. This restores the previous text exactly; don't try to \
+    reconstruct it yourself.
+
+    Reply with JSON only: {"action": "write", "text": "<the message>"}, \
+    {"action": "erase"}, or {"action": "undo"}.
     """
 
     enum Outcome: Equatable {
         case write(String)
         case erase
+        case undo
     }
 
     static func write(gist: String, recipient: String, transcript: [String], currentDraft: String?,
@@ -56,7 +63,9 @@ enum MessagesDrafter {
         // A one-line text in the sender's voice doesn't need deep thought, and the
         // user is watching the compose box wait: low effort is the latency knob.
         let json = try await claude.requestJSON(system: system, userText: payload, maxTokens: 600, timeout: 45, effort: "low")
-        if (json["action"] as? String)?.lowercased() == "erase" { return .erase }
+        let action = (json["action"] as? String)?.lowercased()
+        if action == "erase" { return .erase }
+        if action == "undo" { return .undo }
         guard let text = (json["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else {
             throw AnthropicService.ServiceError.emptyAnswer
         }

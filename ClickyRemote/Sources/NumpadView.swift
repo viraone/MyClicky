@@ -184,6 +184,20 @@ struct NumpadView: View {
             guard phase == .active else { return }
             client.resume()
         }
+        .onChange(of: client.status) { _, status in
+            // The Mac went away mid-recording (relaunched, slept, dropped off
+            // Wi-Fi). Left alone, the recorder keeps banking words and the next
+            // TALK tap — a *stop* — would fire the whole stale transcript at a
+            // freshly connected Mac as one command. Observed live: an old
+            // "open Jason Katz … undo that" replayed on tap, before a word was
+            // said. Drop the recording instead.
+            guard status != .connected, recorder.isListening else { return }
+            Task {
+                _ = await recorder.stop()
+                statusText = "Lost Clicky mid-recording — nothing sent. Tap again once it's back."
+                UINotificationFeedbackGenerator().notificationOccurred(.warning)
+            }
+        }
         .onChange(of: client.talkMessage) { _, message in
             // The Mac's replies to a spoken command show up in the status line.
             guard !message.isEmpty else { return }

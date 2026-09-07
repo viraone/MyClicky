@@ -239,20 +239,24 @@ enum MessagesActions {
     @MainActor
     final class ComposeStream {
         private let element: AXUIElement
+        private let label: String
         /// The last text written, so an unchanged partial costs no AX call
         /// and the caller knows what to hand Claude / clear.
         private(set) var written = ""
 
-        fileprivate init(element: AXUIElement) { self.element = element }
+        fileprivate init(element: AXUIElement, label: String) {
+            self.element = element
+            self.label = label
+        }
 
         /// Nil unless a conversation is open, its compose box is exposed to
         /// Accessibility, and that box is currently empty.
         static func begin() -> ComposeStream? {
-            guard let app = running(), openConversation() != nil, let field = composeElement(in: app) else { return nil }
+            guard let app = running(), let conversation = openConversation(), let field = composeElement(in: app) else { return nil }
             let existing = (AccessibilityFinder.attribute(field, kAXValueAttribute) as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard existing.isEmpty else { return nil }
-            return ComposeStream(element: field)
+            return ComposeStream(element: field, label: undoLabel(for: conversation))
         }
 
         /// Shows `text` in the compose box without touching focus. Returns
@@ -261,8 +265,15 @@ enum MessagesActions {
         @discardableResult
         func update(_ text: String) -> Bool {
             guard text != written else { return true }
-            let result = AXActions.writeTextInBackground(to: element, text: text, quiet: true)
-            guard result == .success else {
+            if written.isEmpty, !text.isEmpty {
+                // The partials are never undo steps; the polished write that
+                // replaces them is undone back to the box as it was before
+                // the preview started (empty, by `begin`'s contract), in one
+                // step. Re-armed after every `clear`.
+                WriteUndoStack.shared.beginCoalescing(AXWriteTarget(element: element), previousValue: "", label: label)
+            }
+            let result = AXActions.writeTextInBackground(to: element, text: text, quiet: true, undoable: false)
+            guard result.landed else {
                 log.notice("compose stream: \(String(describing: result), privacy: .public) — stopping")
                 return false
             }
@@ -272,10 +283,23 @@ enum MessagesActions {
 
         /// Takes the preview back out (the words turned out to be a command).
         func clear() {
+            WriteUndoStack.shared.endCoalescing(AXWriteTarget(element: element))
             guard !written.isEmpty else { return }
-            _ = AXActions.writeTextInBackground(to: element, text: "")
+            _ = AXActions.writeTextInBackground(to: element, text: "", undoable: false)
             written = ""
         }
+    }
+
+    /// The compose box's on-screen frame (AppKit coordinates), for the
+    /// confirmation ring; nil when it isn't exposed.
+    static func composeFrame() -> CGRect? {
+        guard let app = running(), let field = composeElement(in: app) else { return nil }
+        return AccessibilityFinder.frame(of: field)
+    }
+
+    /// What undo calls the compose box: "Messages · Dino Dad".
+    private static func undoLabel(for conversation: String) -> String {
+        "Messages · \(conversation)"
     }
 
     /// Background counterpart of `typeIntoOpenConversation`: sets the compose
@@ -283,12 +307,12 @@ enum MessagesActions {
     /// app the user is working in keeps focus. Any `needsFallback` result
     /// means nothing was written — call `typeIntoOpenConversation` instead.
     static func writeIntoOpenConversationInBackground(_ text: String) -> BackgroundWriteResult {
-        guard let app = running(), openConversation() != nil else { return .elementNotWritable }
+        guard let app = running(), let conversation = openConversation() else { return .elementNotWritable }
         guard let field = composeElement(in: app) else {
             log.notice("background write: compose field not in the AX tree")
             return .elementNotWritable
         }
-        return AXActions.writeTextInBackground(to: field, text: text)
+        return AXActions.writeTextInBackground(to: field, text: text, label: undoLabel(for: conversation))
     }
 
     /// Puts `text` into the compose box of the open conversation without

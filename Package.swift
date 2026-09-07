@@ -10,6 +10,12 @@ let package = Package(
             name: "MyClicky",
             path: "Sources/MyClicky",
             swiftSettings: [.swiftLanguageMode(.v5)]
-        )
+        ),
+        .testTarget(
+            name: "MyClickyTests",
+            dependencies: ["MyClicky"],
+            path: "Tests/MyClickyTests",
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
     ]
 )

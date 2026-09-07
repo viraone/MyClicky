@@ -138,7 +138,8 @@ enum ActionPlanner {
     - open_conversation: bring someone's Messages conversation on screen, by \
       name. {"verb":"open_conversation","app":"Messages","to":"Dino Dad"} \
       Use this for "open Dino Dad's conversation", "pull up my chat with \
-      Ben". NEVER try to do this with click/focus/type steps against the \
+      Ben", "bring up a text message with Jason", "open up a text with \
+      Dave", "start a message to Sam". NEVER try to do this with click/focus/type steps against the \
       sidebar or the search box — Messages doesn't expose either to \
       automation and such plans stall halfway. This verb opens the thread \
       and nothing else; it does not send.
