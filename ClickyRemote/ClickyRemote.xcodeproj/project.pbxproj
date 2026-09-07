@@ -15,7 +15,7 @@
 
 /* Begin PBXFileReference section */
 		27253BD6F61C4068F28E1B83 /* NumpadView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NumpadView.swift; sourceTree = "<group>"; };
-		3D0085676455D5774E8FAC42 /* ClickyRemote.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ClickyRemote.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		3D0085676455D5774E8FAC42 /* ClickyRemote.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = ClickyRemote.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		68E569B420BBB248B89D64D8 /* SpeechRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechRecorder.swift; sourceTree = "<group>"; };
 		86227D5231F0CBF8D14857D5 /* ClickyClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClickyClient.swift; sourceTree = "<group>"; };
 		D34AEED81DAFA7B380917FAC /* ClickyRemoteApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClickyRemoteApp.swift; sourceTree = "<group>"; };
@@ -77,6 +77,11 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					5E50B41D8072682432102E32 = {
+						DevelopmentTeam = V9MXHWMVTM;
+					};
+				};
 			};
 			buildConfigurationList = F9AB880AE756C4AB477BDC23 /* Build configuration list for PBXProject "ClickyRemote" */;
 			developmentRegion = en;
@@ -177,12 +182,14 @@
 				DEVELOPMENT_TEAM = V9MXHWMVTM;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Clicky Remote connects to the MyClicky app running on your Mac over your local network.";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Clicky Remote uses the microphone so you can speak questions to your Mac.";
+				INFOPLIST_KEY_CFBundleDisplayName = "Peeky Remote";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Peeky Remote uses the camera to snap a photo and send it to WhatsApp on your Mac.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Peeky Remote connects to the Peeky app running on your Mac over your local network.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Peeky Remote uses the microphone so you can speak questions to your Mac.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Your speech is transcribed on-device before being sent to your Mac.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -204,12 +211,14 @@
 				DEVELOPMENT_TEAM = V9MXHWMVTM;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
-				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Clicky Remote connects to the MyClicky app running on your Mac over your local network.";
-				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Clicky Remote uses the microphone so you can speak questions to your Mac.";
+				INFOPLIST_KEY_CFBundleDisplayName = "Peeky Remote";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Peeky Remote uses the camera to snap a photo and send it to WhatsApp on your Mac.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Peeky Remote connects to the Peeky app running on your Mac over your local network.";
+				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Peeky Remote uses the microphone so you can speak questions to your Mac.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Your speech is transcribed on-device before being sent to your Mac.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
