@@ -14,9 +14,9 @@ private let log = Logger(subsystem: "com.myclicky", category: "siteedit")
 /// that persists). "Publish it" commits and pushes.
 @MainActor
 enum SiteEditActions {
-    /// Where the site's working copy lives; the file edited is the one the
-    /// tab's URL path ends in (`cs198-analogy.html`).
-    nonisolated static let repoURL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Desktop/SDET_MASTER")
+    /// Where the site's working copy lives (repo viraone/sdet-master-clicky);
+    /// the file edited is the one the tab's URL path ends in (`cs198-analogy.html`).
+    nonisolated static let repoURL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Desktop/SDET_MASTER_CLICKY")
 
     struct Context {
         let tabURL: String
@@ -35,7 +35,8 @@ enum SiteEditActions {
     /// True for the study site's pages, hosted or opened from disk (the main
     /// checkout or any worktree of it).
     static func isSite(_ url: String) -> Bool {
-        url.contains("sdet-master-tracker") || url.contains("/SDET_MASTER/")
+        url.contains("sdet-master-clicky") || url.contains("/SDET_MASTER_CLICKY/")
+            || url.contains("sdet-master-tracker") || url.contains("/SDET_MASTER/")
     }
 
     /// The box in edit mode in the site tab, if there is one. Nil when no
