@@ -64,16 +64,53 @@ final class AssistantController {
     var onCaptureRequest: (() -> Void)?
 
     /// Shows a fresh region capture in the panel's Capture + Dictate tab and
-    /// puts it on the clipboard alongside the latest dictation.
-    func showCapture(image: NSImage, url: URL) {
+    /// puts it on the clipboard alongside the latest dictation. Also the
+    /// landing point for files added via the + menu, which set `kind`.
+    func showCapture(image: NSImage, url: URL, kind: AssistantState.AttachmentKind = .capture) {
         showPanel()
         panel.state.tab = .captureDictate
+        panel.state.attachmentKind = kind
         panel.state.captureImage = image
         panel.state.captureURL = url
         panel.state.editedCaptureImage = nil
         panel.state.clipboardChoice = .edited
         copyPairToClipboard()
-        captureFileWatcher.start(url: url)
+        // Only pixels can be "edited in Preview and reloaded" — a folder or
+        // a PDF changing on disk means nothing to the icon we show for it.
+        if kind == .file { captureFileWatcher.stop() } else { captureFileWatcher.start(url: url) }
+    }
+
+    /// The + menu's "Files and folders": a native picker, then the choice
+    /// goes through `showCapture` so it previews, copies, and opens on click
+    /// like any capture. The panel is non-activating, so the app has to be
+    /// brought forward for the picker to take keyboard focus.
+    private func attachFileFromMac() {
+        let open = NSOpenPanel()
+        open.title = "Add to Clicky"
+        open.message = "Choose a file or folder to show in the capture preview."
+        open.prompt = "Add"
+        open.canChooseFiles = true
+        open.canChooseDirectories = true
+        open.allowsMultipleSelection = false
+        open.level = .floating
+        NSApp.activate(ignoringOtherApps: true)
+        open.begin { [weak self] response in
+            guard response == .OK, let url = open.url, let self else { return }
+            self.showAttachment(url: url)
+        }
+    }
+
+    func showAttachment(url: URL) {
+        let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+        if !isDirectory, let image = NSImage(contentsOf: url), image.isValid, image.size.width > 0 {
+            ActivityLog.recordAction("attach", ["kind": "image", "name": url.lastPathComponent])
+            showCapture(image: image, url: url, kind: .image)
+        } else {
+            let icon = NSWorkspace.shared.icon(forFile: url.path)
+            icon.size = NSSize(width: 256, height: 256)
+            ActivityLog.recordAction("attach", ["kind": isDirectory ? "folder" : "file", "name": url.lastPathComponent])
+            showCapture(image: icon, url: url, kind: .file)
+        }
     }
 
     /// The saved capture's file changed on disk — normally because the user
@@ -91,6 +128,7 @@ final class AssistantController {
         panel.state.captureImage = nil
         panel.state.captureURL = nil
         panel.state.editedCaptureImage = nil
+        panel.state.attachmentKind = .capture
     }
     /// What the current listening session will do with what it hears.
     private enum RecordKind { case ask, dictate, talk }
@@ -142,6 +180,7 @@ final class AssistantController {
         panel.state.onStop = { [weak self] in self?.stop() }
         panel.state.onCopyAgain = { [weak self] in self?.copyPairToClipboard() }
         panel.state.onDismissCapture = { [weak self] in self?.dismissCapture() }
+        panel.state.onAttachFile = { [weak self] in self?.attachFileFromMac() }
         captureFileWatcher.onChange = { [weak self] image in self?.handleCaptureEdited(image) }
         panel.state.onReadAloud = { [weak self] in self?.replayAnswer() }
         panel.state.onToggleRecording = { [weak self] in self?.toggleRecording() }
@@ -914,7 +953,11 @@ final class AssistantController {
         guard image != nil || !text.isEmpty else { return }
 
         let item = NSPasteboardItem()
-        if let image, let tiff = image.tiffRepresentation {
+        // A non-image attachment is copied as the file itself (paste into
+        // Finder, Mail, Slack…), not as a picture of its icon.
+        if panel.state.attachmentKind == .file, let url = panel.state.captureURL {
+            item.setString(url.absoluteString, forType: .fileURL)
+        } else if let image, let tiff = image.tiffRepresentation {
             item.setData(tiff, forType: .tiff)
             if let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
                 item.setData(png, forType: .png)
