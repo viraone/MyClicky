@@ -110,6 +110,10 @@ final class AssistantController {
     /// True from the first word of a Talk session until its last segment has
     /// run — the copied preview survives across segments while this is set.
     private var talkSession = false
+    /// A question that came from the phone's ASK key is in flight: when its
+    /// answer lands, the panel is brought to the full Ask card even if
+    /// something shrank it meanwhile.
+    private var phoneAskInFlight = false
     /// Words already run as segments this session, in transcript order.
     private var talkDispatched: [String] = []
     private var talkQueue: [String] = []
@@ -160,15 +164,19 @@ final class AssistantController {
         // Clicky Remote (iOS app) commands over the local network.
         remote.onShow = { [weak self] in
             guard let self else { return }
-            if !self.talkStreaming && !self.busy { self.panel.state.tab = .ask }
+            // A finished TALK leaves `talkStreaming` set (holding its green
+            // "Done."); that must not pin the phone's next ASK to the Talk tab.
+            if !self.busy, !self.talkStreaming || self.streamQuestionsOnly { self.panel.state.tab = .ask }
             self.showPanel()
         }
         remote.onListen = { [weak self] in
             guard let self else { return }
             // Phone ASK: open the full card while the user is still speaking,
             // so the answer never lands in a corner dot or the one-line strip.
-            self.showPanel(listening: true, full: self.panel.state.tab == .ask)
-            if self.panel.state.tab == .ask { self.beginTalkStreaming(questionsOnly: true) }
+            let asking = self.panel.state.tab == .ask
+            if asking { self.phoneAskInFlight = true }
+            self.showPanel(listening: true, full: asking)
+            if asking { self.beginTalkStreaming(questionsOnly: true) }
         }
         remote.onListenTalk = { [weak self] in
             guard let self else { return }
@@ -366,6 +374,10 @@ final class AssistantController {
         }
         remote.onAsk = { [weak self] question in
             guard let self else { return }
+            // ASK from the phone always reads on the Ask tab, full size — the
+            // only exception is the Mac deliberately parked on Capture + Dictate.
+            if self.panel.state.tab != .captureDictate { self.panel.state.tab = .ask }
+            self.phoneAskInFlight = true
             self.showPanel(full: true)
             self.panel.state.transcript = question
             if self.talkStreaming, self.streamQuestionsOnly {
@@ -448,6 +460,16 @@ final class AssistantController {
         } else {
             panel.show(near: cursor, on: screen)
         }
+    }
+
+    /// Full Ask card for an answer that has just landed — no dot, no strip,
+    /// tall — without touching `status`, so the green "Done." stays put.
+    private func presentAskAnswerFull() {
+        let cursor = NSEvent.mouseLocation
+        let screen = NSScreen.screens.first(where: { NSMouseInRect(cursor, $0.frame, false) }) ?? NSScreen.main
+        guard let screen else { return }
+        if panel.state.tab != .captureDictate { panel.state.tab = .ask }
+        panel.presentFull(near: cursor, on: screen)
     }
 
     // MARK: - Break coach
@@ -953,6 +975,10 @@ final class AssistantController {
                     busy = false
                     currentTask = nil
                     if talkSession { afterTalkSegment() }
+                    if phoneAskInFlight {
+                        phoneAskInFlight = false
+                        presentAskAnswerFull()
+                    }
                 }
             }
             do {
@@ -1425,6 +1451,7 @@ final class AssistantController {
         talkStreaming = false
         takeGhostDraft()?.clear()
         talkSession = false
+        phoneAskInFlight = false
         panel.state.chaining = false
         talkQueue = []
         talkDispatched = []
@@ -2139,12 +2166,30 @@ final class AssistantController {
         let gmail = gmailDraftOpenedAt ?? .distantPast
         let messages = messagesDraftOpenedAt ?? .distantPast
         let terminal = terminalDraftOpenedAt ?? .distantPast
+        let recent = { (date: Date) in Date().timeIntervalSince(date) < 10 * 60 }
         Task { @MainActor [weak self] in
             guard let self else { return }
-            if terminal > messages, terminal > gmail, Date().timeIntervalSince(terminal) < 10 * 60 {
+            if terminal > messages, terminal > gmail, recent(terminal) {
                 await self.runOpenTerminalLine()
-            } else if messages > gmail, Date().timeIntervalSince(messages) < 10 * 60 {
+            } else if messages > gmail, recent(messages) {
                 await self.sendOpenMessagesDraft()
+            } else if recent(gmail) {
+                await self.sendOpenGmailDraft()
+            } else if MessagesActions.currentComposeText() != nil {
+                // Nothing Clicky drafted itself is current, but there's text
+                // sitting in an open Messages thread — typed by the planner
+                // ("open Messages", then dictating straight in) or by hand.
+                // Seen live: "looks good, send a text" after exactly that fell
+                // through to Gmail and answered "No Gmail draft from me".
+                await self.sendOpenMessagesDraft()
+            } else if MessagesActions.openConversation() != nil {
+                // Thread open, box empty: nothing to send here, and Gmail is
+                // not what they meant.
+                let message = "The message box in Messages is empty — tell me what to say first."
+                self.panel.state.status = .answering
+                self.panel.state.answer = message
+                self.panel.state.logTalk(.status, message)
+                self.remote.broadcast("STATUS \(message)")
             } else {
                 await self.sendOpenGmailDraft()
             }
@@ -2269,7 +2314,11 @@ final class AssistantController {
     }
 
     private func sendOpenMessagesDraft() async {
-        guard messagesDraftText != nil, let open = MessagesActions.openConversation() else {
+        // What's actually in the box wins over what we last wrote — the user
+        // may have edited it by hand since, or the planner may have typed it
+        // without going through the draft path at all.
+        let typed = MessagesActions.currentComposeText()
+        guard typed != nil || messagesDraftText != nil, let open = MessagesActions.openConversation() else {
             let message = "Nothing typed in Messages yet — tell me what to say first."
             panel.state.status = .answering
             panel.state.answer = message
@@ -2277,9 +2326,7 @@ final class AssistantController {
             remote.broadcast("STATUS \(message)")
             return
         }
-        // What's actually in the box wins over what we last wrote — the user
-        // may have edited it by hand since.
-        let body = MessagesActions.currentComposeText() ?? messagesDraftText ?? ""
+        let body = typed ?? messagesDraftText ?? ""
         guard await confirmSendOpenDraft(to: open, via: "Messages", body: body) else { return }
         panel.state.status = .thinking
         MessagesActions.sendTyped { [weak self] message, ok in
