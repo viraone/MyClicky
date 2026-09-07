@@ -387,6 +387,16 @@ final class AssistantPanelController {
         panel.setFrame(NSRect(origin: origin, size: size), display: true, animate: true)
     }
 
+    /// Brings the panel to its full card: out of the corner dot, out of the
+    /// strip, and stretched tall. Used when an answer is about to land that
+    /// was asked from the phone — the user is looking at the Mac only to read
+    /// it, so a dot or a one-line bar would hide the very thing they want.
+    func presentFull(near point: NSPoint, on screen: NSScreen) {
+        show(near: point, on: screen)
+        if state.strip { toggleStrip() }
+        growIfNeeded()
+    }
+
     /// Stretches the panel taller (or back to normal) in place, growing
     /// upward so the bottom edge — closest to wherever the user is
     /// working — doesn't shift. Keeps whatever width the user last set.

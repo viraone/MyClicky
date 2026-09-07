@@ -18,7 +18,12 @@ sign_identity=$(security find-identity -v -p codesigning | grep -m1 "Apple Devel
 codesign --force --deep --sign "${sign_identity:--}" "$app_dir"
 
 installed_app="/Applications/MyClicky.app"
+# Quit any running copy first: `open` on an app that is already running only
+# activates the old process, so a rebuild would otherwise never take effect.
+osascript -e 'tell application id "com.local.MyClicky" to quit' >/dev/null 2>&1 || true
+for _ in 1 2 3 4 5 6 7 8 9 10; do pgrep -xq MyClicky || break; sleep 0.3; done
 rm -rf "$installed_app"
 cp -R "$app_dir" "$installed_app"
+open "$installed_app"
 
 echo "$installed_app"
