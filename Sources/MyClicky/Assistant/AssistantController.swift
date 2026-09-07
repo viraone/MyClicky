@@ -1282,7 +1282,7 @@ final class AssistantController {
                 },
                 confirm: { [weak self] question in
                     guard let self, id == self.requestID else { return false }
-                    return await self.requestConfirm(question: question, screen: screen)
+                    return await self.confirmPlannerStep(question, screen: screen)
                 },
                 remember: { [weak self] text in
                     guard let self else { return }
@@ -2942,6 +2942,25 @@ final class AssistantController {
         panel.state.logTalk(ok ? .status : .error, message)
         remote.broadcast("STATUS \(message)")
         if !panel.state.textOnlyMode { speak(message) }
+    }
+
+    /// The planner gates its own irreversible steps with a free-text note
+    /// ("Sending message…"). When that step is a send and a compose is open,
+    /// the phone gets the same who-and-what card as every other send, not a
+    /// bare yes/no.
+    private func confirmPlannerStep(_ question: String, screen: NSScreen) async -> Bool {
+        let lowered = question.lowercased()
+        let sendShaped = lowered.contains("send") || lowered.contains("sending") || lowered.contains("reply")
+        guard sendShaped else { return await requestConfirm(question: question, screen: screen) }
+        if let recipient = MessagesActions.openConversation() {
+            let body = MessagesActions.currentComposeText() ?? messagesDraftText ?? ""
+            return await confirmSend(to: recipient, via: "Messages", body: body, screen: screen)
+        }
+        if let compose = GmailDrafter.openCompose(recipientHint: gmailDraftRecipient) {
+            let recipient = compose.to.isEmpty ? (gmailDraftRecipient ?? "this recipient") : compose.to
+            return await confirmSend(to: recipient, via: "Gmail", body: compose.body, screen: screen)
+        }
+        return await requestConfirm(question: question, screen: screen)
     }
 
     /// The preview. Shows who it resolved to and the opening of what's about
