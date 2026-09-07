@@ -73,8 +73,12 @@ import Network
 ///   DICTATE <text> – treat text as finished dictation (clipboard, paired with
 ///                    the latest capture, + cleanup)
 ///   STATUS <text>  – progress of the in-flight DO command ("Opening Mail…")
-///   CONFIRM <id>\t<question> – DO wants to run an irreversible step; answer
-///                    with CONFIRM_OK <id> or CONFIRM_NO <id>
+///   CONFIRM <id>\t<question>[\tSEND\t<recipient>] – DO wants to run an
+///                    irreversible step; answer with CONFIRM_OK <id> or
+///                    CONFIRM_NO <id>. Newlines inside a field travel as
+///                    U+2028 (the question may carry a "\n\n<preview>").
+///                    The SEND form is a message about to go out: the phone
+///                    shows a Cancel/Send card naming the recipient
 ///   CONFIRM_DONE <id>\tYES|NO – a CONFIRM was resolved (by the phone itself,
 ///                    or by someone answering it directly on the Mac's own
 ///                    panel) — clear that prompt if it's still showing
