@@ -86,20 +86,57 @@ enum MessagesActions {
                 }
             }
         }
-        if opened { unminimizeConversationWindow(); raiseConversationWindow() }
+        if opened {
+            unminimizeConversationWindow()
+            raiseConversationWindow()
+            if isConversationWindowCovered(by: frontBefore) {
+                // Nothing short of activation puts a window above the *active*
+                // app's own windows — and that is exactly the case when the
+                // user is talking to Clicky from the app sitting over Messages
+                // (observed: Copilot on the same screen). Seeing the thread
+                // beats keeping focus; the compose box is written via AX
+                // either way.
+                log.notice("open conversation: window hidden behind \(frontBefore?.localizedName ?? "?", privacy: .public) — activating Messages")
+                ActivityLog.recordAction("messages-open-activated", ["behind": frontBefore?.localizedName ?? "?"])
+                running()?.activate(options: [.activateAllWindows])
+                return true
+            }
+        }
         restoreFocus(to: frontBefore)
         return opened
     }
 
     /// Opened without activation, the thread's window keeps its old place in
     /// the stacking order — behind whatever else is on that screen, so the
-    /// user sees nothing change (observed with Copilot covering it). An AX
-    /// raise moves the window to the front of *all* apps' windows without
-    /// giving Messages keyboard focus (verified: frontmost app unchanged).
+    /// user sees nothing change. An AX raise moves the window above every
+    /// *other background* app's windows without giving Messages keyboard
+    /// focus (verified: frontmost app unchanged). It cannot lift it above the
+    /// active app — see the activation fallback in `openConversation`.
     private static func raiseConversationWindow() {
         guard let window = conversationWindow()?.element else { return }
         let status = AXUIElementPerformAction(window, kAXRaiseAction as CFString)
         if status != .success { log.notice("open conversation: AXRaise failed (\(status.rawValue))") }
+    }
+
+    /// Whether any on-screen window of `app` overlaps the conversation window
+    /// — i.e. after the raise the thread would still be (partly) hidden.
+    private static func isConversationWindowCovered(by app: NSRunningApplication?) -> Bool {
+        guard let app, app.processIdentifier != running()?.processIdentifier,
+              let window = conversationWindow()?.element,
+              let position = AccessibilityFinder.point(AccessibilityFinder.attribute(window, kAXPositionAttribute)),
+              let size = AccessibilityFinder.size(AccessibilityFinder.attribute(window, kAXSizeAttribute)) else { return false }
+        // Both AX position and CGWindowList bounds are top-left-origin global.
+        let frame = CGRect(origin: position, size: size)
+        let list = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
+        for info in list {
+            guard (info[kCGWindowOwnerPID as String] as? pid_t) == app.processIdentifier,
+                  (info[kCGWindowLayer as String] as? Int) == 0,
+                  let bounds = info[kCGWindowBounds as String] as? [String: CGFloat],
+                  let x = bounds["X"], let y = bounds["Y"], let w = bounds["Width"], let h = bounds["Height"],
+                  w > 50, h > 50 else { continue }
+            if CGRect(x: x, y: y, width: w, height: h).intersects(frame) { return true }
+        }
+        return false
     }
 
     /// A thread switched to inside a minimized window is invisible — the
