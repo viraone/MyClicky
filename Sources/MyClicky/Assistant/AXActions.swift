@@ -361,8 +361,11 @@ enum AXActions {
             log.notice("bgwrite: set failed (\(setStatus.rawValue))")
             return .elementNotWritable
         }
-        guard let readBack = AccessibilityFinder.attribute(element, kAXValueAttribute) as? String,
-              normalizedLines(readBack) == normalizedLines(text) else {
+        // Some targets (Messages' compose box among them) report an emptied
+        // field as a missing value rather than "" — read that as empty, or
+        // every clear-to-blank looks like a failed write.
+        let readBack = (AccessibilityFinder.attribute(element, kAXValueAttribute) as? String) ?? ""
+        guard normalizedLines(readBack) == normalizedLines(text) else {
             log.notice("bgwrite: read-back mismatch — target ignored the set")
             return .verificationFailed
         }
