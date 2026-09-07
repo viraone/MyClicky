@@ -113,9 +113,14 @@ struct TalkLogEntry: Identifiable, Equatable {
     let text: String
 }
 
-/// Which corner of the panel is being dragged to resize it.
+/// Which corner (or edge) of the panel is being dragged to resize it.
 enum PanelResizeCorner: Equatable {
     case topLeading, topTrailing, bottomLeading, bottomTrailing
+    /// The whole bottom edge: drag it up to shrink the panel, down to grow
+    /// it. Only the height changes; the top edge stays put.
+    case bottom
+
+    var isEdge: Bool { self == .bottom }
 
     /// The opposite corner, which stays put while this one moves.
     func anchor(in rect: NSRect) -> NSPoint {
@@ -123,7 +128,7 @@ enum PanelResizeCorner: Equatable {
         case .topLeading: NSPoint(x: rect.maxX, y: rect.minY)
         case .topTrailing: NSPoint(x: rect.minX, y: rect.minY)
         case .bottomLeading: NSPoint(x: rect.maxX, y: rect.maxY)
-        case .bottomTrailing: NSPoint(x: rect.minX, y: rect.maxY)
+        case .bottomTrailing, .bottom: NSPoint(x: rect.minX, y: rect.maxY)
         }
     }
 
@@ -133,7 +138,7 @@ enum PanelResizeCorner: Equatable {
         case .topLeading: NSPoint(x: rect.minX, y: rect.maxY)
         case .topTrailing: NSPoint(x: rect.maxX, y: rect.maxY)
         case .bottomLeading: NSPoint(x: rect.minX, y: rect.minY)
-        case .bottomTrailing: NSPoint(x: rect.maxX, y: rect.minY)
+        case .bottomTrailing, .bottom: NSPoint(x: rect.maxX, y: rect.minY)
         }
     }
 }
@@ -417,6 +422,9 @@ final class AssistantPanelController {
     /// (including any manual corner-resize) rather than snapping to a preset.
     private var savedFrame: NSRect?
     private var resizeStartFrame: NSRect?
+    /// Where on the bottom grip the pointer landed (screen y minus edge y),
+    /// so an edge drag moves the edge by exactly the hand's motion.
+    private var resizeGrabOffset: CGFloat?
 
     /// Shrinks the panel in place to a one-line bar, or restores it. The bar
     /// keeps the panel's top-right corner — where the chevron is — so it
@@ -520,6 +528,7 @@ final class AssistantPanelController {
         guard let panel, !state.collapsed, !state.strip else { return }
         guard let translation else {
             resizeStartFrame = nil
+            resizeGrabOffset = nil
             // Keep the size switch honest after a manual drag: snap to the
             // nearest preset.
             let f = panel.frame
@@ -535,21 +544,41 @@ final class AssistantPanelController {
 
         let anchor = corner.anchor(in: start)
         let original = corner.point(in: start)
-        // Flip the y sign: SwiftUI's translation is down-positive, AppKit's
-        // window coordinates are up-positive.
-        let dragged = NSPoint(x: original.x + translation.width, y: original.y - translation.height)
+        let dragged: NSPoint
+        if corner.isEdge {
+            // The grip rides on the edge it moves, so a gesture translation
+            // measured in its own space chases itself and stutters. Track the
+            // pointer in screen space instead — the edge simply follows the
+            // mouse, keeping the grab offset from where the drag began.
+            let mouse = NSEvent.mouseLocation
+            if resizeGrabOffset == nil { resizeGrabOffset = mouse.y - original.y }
+            dragged = NSPoint(x: original.x, y: mouse.y - (resizeGrabOffset ?? 0))
+        } else {
+            // Flip the y sign: SwiftUI's translation is down-positive,
+            // AppKit's window coordinates are up-positive.
+            dragged = NSPoint(x: original.x + translation.width, y: original.y - translation.height)
+        }
 
         let width = min(max(abs(dragged.x - anchor.x), Self.minPanelSize.width), Self.maxPanelSize.width)
         let height = min(max(abs(dragged.y - anchor.y), Self.minPanelSize.height), Self.maxPanelSize.height)
         let x = dragged.x >= anchor.x ? anchor.x : anchor.x - width
-        let y = dragged.y >= anchor.y ? anchor.y : anchor.y - height
+        // The bottom edge always hangs below its (top) anchor, even if the
+        // pointer overshoots above it.
+        let y = corner.isEdge || dragged.y < anchor.y ? anchor.y - height : anchor.y
 
         let screen = panel.screen ?? NSScreen.main
         let visible = screen?.visibleFrame ?? .zero
         let clampedX = min(max(x, visible.minX), visible.maxX - width)
         let clampedY = min(max(y, visible.minY), visible.maxY - height)
 
-        panel.setFrame(NSRect(x: clampedX, y: clampedY, width: width, height: height), display: true)
+        let frame = NSRect(x: clampedX, y: clampedY, width: width, height: height)
+        guard frame != panel.frame else { return }
+        // No implicit animation: the frame must land on the very event that
+        // moved the pointer or the edge lags a beat behind the hand.
+        NSAnimationContext.beginGrouping()
+        NSAnimationContext.current.duration = 0
+        panel.setFrame(frame, display: true)
+        NSAnimationContext.endGrouping()
     }
 
     func hide() {
@@ -848,6 +877,7 @@ struct AssistantPanelView: View {
         )
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(alignment: .trailing) { edgeChevron(expanded: true).padding(.trailing, 3) }
+        .overlay(alignment: .bottom) { bottomEdgeHandle }
         .overlay(alignment: .topLeading) { resizeHandle(.topLeading) }
         .overlay(alignment: .topTrailing) { resizeHandle(.topTrailing) }
         .overlay(alignment: .bottomLeading) { resizeHandle(.bottomLeading) }
@@ -1577,6 +1607,8 @@ struct AssistantPanelView: View {
                     .font(.system(size: 12, weight: .semibold))
                 Text("Read Response")
                     .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .lineLimit(1)
+                    .fixedSize()
             }
             .foregroundStyle(state.textOnlyMode ? state.accent.opacity(0.9) : .white.opacity(0.4))
             .padding(.horizontal, 10)
@@ -1600,11 +1632,16 @@ struct AssistantPanelView: View {
             }
             // Shell-prompt readout: `clicky on talk ❯` — the segments coloured
             // as a prompt colours them, the chevron in the phase colour.
+            // Each word is pinned to one line so a narrow panel never breaks
+            // "clicky" into "cli / cky"; in the half column the two constant
+            // words drop out and only `talk ❯ ready` remains.
             HStack(spacing: 6) {
-                Text("clicky")
-                    .foregroundStyle(Color(red: 0.35, green: 0.78, blue: 0.98))
-                Text("on")
-                    .foregroundStyle(.white.opacity(0.6))
+                if state.size != .half {
+                    Text("clicky")
+                        .foregroundStyle(Color(red: 0.35, green: 0.78, blue: 0.98))
+                    Text("on")
+                        .foregroundStyle(.white.opacity(0.6))
+                }
                 Text(promptTabName)
                     .foregroundStyle(Color(red: 0.72, green: 0.50, blue: 0.98))
                 Text("❯")
@@ -1614,6 +1651,9 @@ struct AssistantPanelView: View {
                     .foregroundStyle(state.accent.opacity(0.9))
             }
             .font(.system(size: 14, weight: .semibold, design: .monospaced))
+            .lineLimit(1)
+            .fixedSize()
+            .layoutPriority(1)
             .animation(.easeInOut(duration: 0.25), value: state.phase)
             if state.size != .half {
                 Text("⌥⌘C ask · ⌥⌘V dictate")
@@ -1711,6 +1751,8 @@ struct AssistantPanelView: View {
                 Text(on ? state.coachCountdown : "break coach off")
                     .font(.system(size: 13, weight: .semibold, design: .monospaced))
                     .monospacedDigit()
+                    .lineLimit(1)
+                    .fixedSize()
             }
             .foregroundStyle(on ? tint : .white.opacity(0.4))
             .padding(.horizontal, 10)
@@ -1865,6 +1907,26 @@ struct AssistantPanelView: View {
                     .onEnded { _ in state.onResize?(corner, nil) }
             )
             .help("Drag to resize")
+    }
+
+    /// Grab strip along the bottom edge: drag it up to shrink the panel (or
+    /// down to grow it) without touching the width. A short pill lights up
+    /// on hover so the edge reads as draggable.
+    private var bottomEdgeHandle: some View {
+        let hovering = resizeHoverCorner == .bottom
+        return Capsule()
+            .fill(.white.opacity(hovering ? 0.55 : 0.18))
+            .frame(width: 44, height: 4)
+            .padding(.vertical, 5)
+            .padding(.horizontal, 40)
+            .contentShape(Rectangle())
+            .onHover { hovering in resizeHoverCorner = hovering ? .bottom : nil }
+            .gesture(
+                DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                    .onChanged { value in state.onResize?(.bottom, value.translation) }
+                    .onEnded { _ in state.onResize?(.bottom, nil) }
+            )
+            .help("Drag up to shrink, down to grow")
     }
 
     @ViewBuilder
