@@ -1598,10 +1598,15 @@ final class AssistantController {
         // "Looks good to me, send it" — an approval may lead in.
         let approval: Set<String> = ["ok", "okay", "looks", "good", "great", "perfect", "yes", "yeah", "yep",
                                      "alright", "all", "right", "and", "now", "go", "ahead", "please", "then",
-                                     "that", "that's", "thats", "it's", "its", "fine", "cool", "nice", "to", "me", "just"]
-        guard let sendAt = words.firstIndex(of: "send"), words.count - sendAt <= 5,
+                                     "that", "that's", "thats", "it's", "its", "fine", "cool", "nice", "to", "me", "just",
+                                     "can", "could", "would", "you", "let's", "lets", "hey", "clicky", "hit", "press"]
+        // "sent" is a common transcription of "send"; "fire/shoot it off" are colloquial sends.
+        let sendVerbs: Set<String> = ["send", "sent", "fire", "shoot", "ship"]
+        guard let sendAt = words.firstIndex(where: { sendVerbs.contains($0) }), words.count - sendAt <= 6,
               words[..<sendAt].count <= 6, words[..<sendAt].allSatisfy({ approval.contains($0) }) else { return false }
-        let filler: Set<String> = ["it", "that", "this", "the", "email", "mail", "message", "draft", "now", "please", "off", "out"]
+        let filler: Set<String> = ["it", "that", "this", "the", "a", "email", "mail", "message", "text", "texts",
+                                   "sms", "imessage", "draft", "reply", "response", "now", "please", "off", "out",
+                                   "away", "over", "along", "him", "her", "them", "to", "for", "me", "button"]
         return words[(sendAt + 1)...].allSatisfy { filler.contains($0) }
     }
 
