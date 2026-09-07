@@ -290,6 +290,13 @@ enum MessagesActions {
         }
     }
 
+    /// The compose box's on-screen frame (AppKit coordinates), for the
+    /// confirmation ring; nil when it isn't exposed.
+    static func composeFrame() -> CGRect? {
+        guard let app = running(), let field = composeElement(in: app) else { return nil }
+        return AccessibilityFinder.frame(of: field)
+    }
+
     /// What undo calls the compose box: "Messages · Dino Dad".
     private static func undoLabel(for conversation: String) -> String {
         "Messages · \(conversation)"

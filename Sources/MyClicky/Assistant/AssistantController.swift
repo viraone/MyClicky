@@ -1081,8 +1081,16 @@ final class AssistantController {
         // — not gated on a Messages thread, so an empty stack still gets a
         // spoken "nothing to undo" rather than being dictated somewhere.
         if Self.isUndoIt(utterance) {
-            ghost?.clear()
-            undoLastWrite()
+            if let ghost, !ghost.written.isEmpty {
+                // The last thing Clicky put on screen is the live preview
+                // itself — that's what "undo that" means here, not the
+                // landed write before it.
+                ghost.clear()
+                confirmPreviewUndone()
+            } else {
+                ghost?.clear()
+                undoLastWrite()
+            }
             return
         }
         if Self.isNeverMind(utterance), gmailDraftOpenedAt != nil || messagesDraftOpenedAt != nil {
@@ -1945,6 +1953,40 @@ final class AssistantController {
         if !panel.state.textOnlyMode { speak(message) }
     }
 
+    /// "Undo that" said in the same breath as the dictation, so the sentence
+    /// is still only the live preview in the compose box (the ghost handle
+    /// has already been consumed by the drafter): take it back out.
+    private func undoPreviewedDraft() {
+        let background = MessagesActions.writeIntoOpenConversationInBackground("")
+        let ok = background.landed || MessagesActions.typeIntoOpenConversation("")
+        if ok { confirmPreviewUndone() } else {
+            let message = "Couldn't take the preview back out of Messages."
+            ActivityLog.recordAction("write-undo", ["ok": "no", "preview": "yes", "result": String(describing: background)])
+            panel.state.status = .answering
+            panel.state.answer = message
+            panel.state.logTalk(.error, message)
+            remote.broadcast("STATUS \(message)")
+        }
+    }
+
+    /// The preview is gone (cleared by the caller); confirm like a real undo
+    /// and keep the thread in dictation mode for the next sentence.
+    private func confirmPreviewUndone() {
+        synthesizer.stopSpeaking(at: .immediate)
+        let name = MessagesActions.openConversation()
+        let message = "Undone — took back what I'd started writing\(name.map { " to \($0)" } ?? "")."
+        ActivityLog.recordAction("write-undo", ["ok": "yes", "preview": "yes", "remaining": String(WriteUndoStack.shared.count)])
+        if let frame = MessagesActions.composeFrame() { ring.show(over: frame, duration: 2.5) }
+        messagesDraftText = nil
+        if messagesDraftOpenedAt != nil { messagesDraftOpenedAt = Date() }
+        panel.state.status = .answering
+        panel.state.answer = message
+        panel.state.logTalk(.status, message)
+        remote.broadcast("STATUS \(message)")
+        toast.show(message, icon: "arrow.uturn.backward.circle.fill", tint: .cyan)
+        if !panel.state.textOnlyMode { speak(message) }
+    }
+
     private func sendOpenMessagesDraft() {
         guard messagesDraftText != nil, MessagesActions.openConversation() != nil else {
             let message = "Nothing typed in Messages yet — tell me what to say first."
@@ -2119,7 +2161,15 @@ final class AssistantController {
                                                               senderName: NSFullUserName(), claude: claude)
                 guard id == requestID else { return }
                 guard case .write(let text) = outcome else {
-                    if outcome == .undo { undoLastWrite() } else { eraseOpenMessagesDraft() }
+                    if outcome == .undo {
+                        // "…how you're doing — actually, undo that" in one
+                        // breath: the sentence was only ever previewed, so
+                        // there is no landed write to pop; the preview is
+                        // what goes (observed live).
+                        if previewed { undoPreviewedDraft() } else { undoLastWrite() }
+                    } else {
+                        eraseOpenMessagesDraft()
+                    }
                     return
                 }
                 // Prefer writing into the compose box without taking focus
