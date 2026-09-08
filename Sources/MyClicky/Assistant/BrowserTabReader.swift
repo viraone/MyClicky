@@ -321,6 +321,7 @@ enum BrowserTabReader {
                             set i to i + 1
                             if (URL of t contains "\#(needle)") then
                                 set active tab index of w to i
+                                set minimized of w to false
                                 set index of w to 1
                                 return "1"
                             end if
@@ -338,6 +339,7 @@ enum BrowserTabReader {
                     repeat with t in tabs of w
                         if (URL of t contains "\#(needle)") then
                             set current tab of w to t
+                            set miniaturized of w to false
                             set index of w to 1
                             return "1"
                         end if
