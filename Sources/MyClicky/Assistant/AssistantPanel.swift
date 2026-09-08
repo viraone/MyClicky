@@ -614,6 +614,7 @@ final class AssistantPanelController {
     }
 
     var isVisible: Bool { panel?.isVisible ?? false }
+    var frame: NSRect? { panel?.frame }
     /// The display the panel is showing on — where the user has chosen to work.
     var screen: NSScreen? {
         guard let panel, panel.isVisible else { return nil }
@@ -652,8 +653,74 @@ final class AssistantPanelController {
             self.state.onStop?()
             return true
         }
+        // Track which display the panel lives on, including hand drags, so
+        // the phone's screen switch can follow reality.
+        NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification, object: panel, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.noteScreenChange() }
+        }
+        NotificationCenter.default.addObserver(forName: NSWindow.didChangeScreenNotification, object: panel, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.noteScreenChange() }
+        }
         self.panel = panel
         return panel
+    }
+
+    // MARK: - Display switching (the phone's SCREEN lever)
+
+    /// Fires with the 1-based index of the display the panel is on whenever
+    /// that changes (or nil when hidden). Indexes follow `NSScreen.screens`,
+    /// where the built-in display is first when present.
+    var onScreenChange: ((Int?) -> Void)?
+    private var lastReportedScreen: Int?
+    /// Where the panel last sat on each display, keyed by display ID, so
+    /// flipping back lands it exactly where it was left.
+    private var framePerDisplay: [CGDirectDisplayID: NSRect] = [:]
+
+    /// 1-based index of the display the panel is currently on, or nil.
+    var currentScreenIndex: Int? {
+        guard let screen else { return nil }
+        return NSScreen.screens.firstIndex(of: screen).map { $0 + 1 }
+    }
+
+    private func noteScreenChange() {
+        guard let panel, panel.isVisible, let screen else { return }
+        if let id = Self.displayID(of: screen) { framePerDisplay[id] = panel.frame }
+        let index = currentScreenIndex
+        guard index != lastReportedScreen else { return }
+        lastReportedScreen = index
+        onScreenChange?(index)
+    }
+
+    private static func displayID(of screen: NSScreen) -> CGDirectDisplayID? {
+        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber).map { CGDirectDisplayID($0.uint32Value) }
+    }
+
+    /// Moves the panel to display `index` (1-based). Restores wherever it
+    /// last sat on that display; the first visit lands bottom-centre. Keeps
+    /// the current card size and leaves dot/strip states alone. Returns the
+    /// screen it landed on, or nil when there is no such display.
+    @discardableResult
+    func move(toScreenIndex index: Int) -> NSScreen? {
+        let screens = NSScreen.screens
+        guard index >= 1, index <= screens.count else { return nil }
+        let target = screens[index - 1]
+        let panel = ensurePanel()
+        if let current = screen, let id = Self.displayID(of: current) { framePerDisplay[id] = panel.frame }
+        if state.collapsed { expand() }
+        let visible = target.visibleFrame
+        let size = panel.frame.size
+        var origin: NSPoint
+        if let id = Self.displayID(of: target), let saved = framePerDisplay[id], saved.size == size {
+            origin = saved.origin
+        } else {
+            origin = NSPoint(x: visible.midX - size.width / 2, y: visible.minY + 120)
+        }
+        origin.x = min(max(origin.x, visible.minX + 8), visible.maxX - size.width - 8)
+        origin.y = min(max(origin.y, visible.minY + 8), visible.maxY - size.height - 8)
+        panel.setFrame(NSRect(origin: origin, size: size), display: true, animate: panel.isVisible)
+        panel.orderFrontRegardless()
+        noteScreenChange()
+        return target
     }
 }
 
