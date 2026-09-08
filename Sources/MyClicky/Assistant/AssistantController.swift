@@ -52,6 +52,13 @@ final class AssistantController {
     private var driveCleanupTask: Task<Void, Never>?
 
     private var activeScreen: NSScreen?
+    /// The display the user is working on, decided at the moment it's needed:
+    /// wherever Peeky's panel currently sits — they put it there, and they can
+    /// drag it to another screen mid-recording. `activeScreen` is only where
+    /// the panel was opened and goes stale the moment it's moved.
+    private var workingScreen: NSScreen {
+        panel.screen ?? activeScreen ?? NSScreen.main ?? NSScreen.screens[0]
+    }
     private var busy = false
     /// The Claude request currently in flight, so Stop can cancel it.
     private var currentTask: Task<Void, Never>?
@@ -1019,8 +1026,7 @@ final class AssistantController {
             panel.state.status = .idle
             return
         }
-        let screen = activeScreen ?? NSScreen.main
-        guard let screen else { return }
+        let screen = workingScreen
 
         busy = true
         synthesizer.stopSpeaking(at: .immediate)
@@ -1291,7 +1297,7 @@ final class AssistantController {
         // The display Peeky's panel sits on is the one the user is working
         // on — they put it there. With two Safari windows on two screens,
         // this is what picks the right one to read.
-        let screen = panel.screen ?? Self.screenShowing(targetApp) ?? activeScreen ?? NSScreen.main ?? NSScreen.screens[0]
+        let screen = panel.screen ?? Self.screenShowing(targetApp) ?? workingScreen
         if let targetApp { AccessibilityFinder.raiseWindow(of: targetApp, on: screen) }
 
         busy = true
@@ -1483,7 +1489,7 @@ final class AssistantController {
             remote.broadcast("READ No Anthropic API key found in Keychain on your Mac.")
             return
         }
-        let screen = activeScreen ?? NSScreen.main ?? NSScreen.screens[0]
+        let screen = workingScreen
         toast.show("Reading the screen for your phone…", icon: "text.viewfinder", tint: .blue)
 
         busy = true
@@ -1586,7 +1592,7 @@ final class AssistantController {
     }
 
     private func handleClickCommand(_ question: String) {
-        let screen = activeScreen ?? NSScreen.main ?? NSScreen.screens[0]
+        let screen = workingScreen
 
         // "Click it" → reuse the element we just highlighted.
         if Self.refersToLastHighlight(question), let rect = lastHighlightRect {
@@ -1764,7 +1770,7 @@ final class AssistantController {
                 panel.state.status = .answering
                 panel.state.answer = "Confirm moving “\(info.name)” to the trash."
                 let cursor = NSEvent.mouseLocation
-                let screen = activeScreen ?? NSScreen.main ?? NSScreen.screens[0]
+                let screen = workingScreen
                 confirmPanel.show(
                     title: "Move to Trash?",
                     message: "“\(info.name)” will move to your Drive trash. You can restore it for 30 days.",
@@ -1808,7 +1814,7 @@ final class AssistantController {
                 : ("Delete \(count) Photos?", "These \(count) photos will move to Recently Deleted. You can restore them for 30 days.")
             panel.state.answer = "Confirm \(count == 1 ? "deleting this photo" : "deleting \(count) photos")."
             let cursor = NSEvent.mouseLocation
-            let screen = activeScreen ?? NSScreen.main ?? NSScreen.screens[0]
+            let screen = workingScreen
             confirmPanel.show(
                 title: title,
                 message: message,
@@ -2275,7 +2281,7 @@ final class AssistantController {
     /// what, on the phone and on the Mac; a spoken "yes" / "send" or "no" /
     /// "cancel" answers it too. Cancel leaves the draft exactly where it was.
     private func confirmSendOpenDraft(to recipient: String, via app: String, body: String) async -> Bool {
-        let screen = activeScreen ?? NSScreen.main ?? NSScreen.screens[0]
+        let screen = workingScreen
         panel.state.status = .answering
         let ask = "Send this to \(recipient)?"
         panel.state.answer = ask
@@ -2946,7 +2952,7 @@ final class AssistantController {
             finishTerminal("Nothing staged for the terminal yet — say “tell the terminal …” first.", ok: false)
             return
         }
-        let screen = activeScreen ?? NSScreen.main ?? NSScreen.screens[0]
+        let screen = workingScreen
         panel.state.status = .answering
         let line = target.typed
         let preview = line.count > 220 ? String(line.prefix(220)) + "…" : line
