@@ -37,7 +37,17 @@ struct AnthropicService {
     Respond with ONLY a JSON object of this exact shape, no markdown fences, \
     no extra text:
     {"answer": "your answer here", "box_2d": [ymin, xmin, ymax, xmax] or null}
+    The "answer" value must be a valid JSON string: escape any double quotes \
+    as \\" and any line breaks as \\n, especially when quoting code or comments.
     """
+
+    /// Token ceiling for the first attempt. Sonnet 5 thinks by default and
+    /// max_tokens caps thinking *plus* the reply, so this has to leave room
+    /// for both — the old 1024 was sized for a non-thinking model.
+    private static let askMaxTokens = 8_000
+    /// Ceiling for the automatic second attempt when the first came back
+    /// with no text at all (a long think can consume the whole budget).
+    private static let askRetryMaxTokens = 16_000
 
     func ask(question: String, jpegImage: Data, context: String? = nil,
              onStatus: (@Sendable @MainActor (String) -> Void)? = nil) async throws -> AssistantAnswer {
@@ -53,12 +63,9 @@ struct AnthropicService {
         }
         userContent.append(["type": "text", "text": question])
 
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model": model,
-            // Sonnet 5 thinks by default, and max_tokens caps thinking *plus*
-            // the reply — the old 1024 was sized for a non-thinking model and
-            // would now truncate the answer mid-sentence.
-            "max_tokens": 8_000,
+            "max_tokens": Self.askMaxTokens,
             // This answer gets spoken aloud the moment it lands, so latency is
             // the thing to protect. Low effort still reasons more than Sonnet
             // 4.5 did with no thinking at all.
@@ -69,18 +76,47 @@ struct AnthropicService {
                 "content": userContent,
             ]],
         ]
-        let request = try makeRequest(body: body, timeout: 60)
 
-        // Rate limits (HTTP 429) and transient overloads (529) come with a
-        // retry-after hint. Wait it out and retry automatically.
-        var data = Data()
+        // Two attempts. The second only happens when the first produced no
+        // usable answer text at all — a blank reply is a model-side hiccup
+        // (or the thinking budget running out), not something the user did,
+        // so it must never surface as a dead end on the first try.
+        var lastFailure = ServiceError.emptyAnswer
+        for attempt in 0..<2 {
+            let data = try await send(body: body, timeout: 60, onStatus: onStatus)
+            if let reason = Self.refusalReason(from: data) { throw ServiceError.refused(reason) }
+            let envelope = Self.envelope(from: data)
+
+            if let text = envelope.text, let decoded = Self.decodeAnswer(text) {
+                return decoded
+            }
+
+            let stop = envelope.stopReason ?? "unknown"
+            log.error("ask attempt \(attempt + 1): no usable answer (stop_reason=\(stop, privacy: .public), blocks=\(envelope.blockTypes.joined(separator: ","), privacy: .public), text=\(envelope.text?.count ?? 0) chars): \(envelope.text?.prefix(300) ?? "", privacy: .private)")
+            lastFailure = .noAnswerText(stopReason: stop)
+            guard attempt == 0 else { break }
+
+            if envelope.stopReason == "max_tokens" {
+                // Thinking consumed the whole budget before the reply started.
+                body["max_tokens"] = Self.askRetryMaxTokens
+                await onStatus?("Claude ran long — trying again with more room…")
+            } else {
+                await onStatus?("Claude sent back a blank reply — trying again…")
+            }
+        }
+        throw lastFailure
+    }
+
+    /// POSTs `body` and returns the raw 200 payload. Rate limits (HTTP 429)
+    /// and transient overloads (529) come with a retry-after hint; those are
+    /// waited out and retried automatically. Any other non-200 is an error.
+    private func send(body: [String: Any], timeout: TimeInterval,
+                      onStatus: (@Sendable @MainActor (String) -> Void)?) async throws -> Data {
+        let request = try makeRequest(body: body, timeout: timeout)
         for attempt in 0..<3 {
             let (respData, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else { throw ServiceError.badResponse }
-            if http.statusCode == 200 {
-                data = respData
-                break
-            }
+            if http.statusCode == 200 { return respData }
             let message = Self.errorMessage(from: respData) ?? "HTTP \(http.statusCode)"
             if (http.statusCode == 429 || http.statusCode == 529), attempt < 2 {
                 let retryAfter = (http.value(forHTTPHeaderField: "retry-after")).flatMap(TimeInterval.init)
@@ -93,16 +129,7 @@ struct AnthropicService {
             }
             throw ServiceError.api(message)
         }
-        if let reason = Self.refusalReason(from: data) { throw ServiceError.refused(reason) }
-        guard let payloadText = Self.answerText(from: data),
-              let json = Self.parseJSONObject(from: payloadText),
-              let answer = json["answer"] as? String, !answer.isEmpty else {
-            throw ServiceError.emptyAnswer
-        }
-        return AssistantAnswer(
-            text: answer.trimmingCharacters(in: .whitespacesAndNewlines),
-            highlight: Self.normalizedBox(from: json["box_2d"])
-        )
+        throw ServiceError.badResponse
     }
 
     /// A short break check-in from Peeky in the role of a coach who knows
@@ -214,28 +241,7 @@ struct AnthropicService {
             "messages": [["role": "user", "content": userContent]],
         ]
         if let effort { body["output_config"] = ["effort": effort] }
-        let request = try makeRequest(body: body, timeout: timeout)
-
-        var data = Data()
-        for attempt in 0..<3 {
-            let (respData, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse else { throw ServiceError.badResponse }
-            if http.statusCode == 200 {
-                data = respData
-                break
-            }
-            let message = Self.errorMessage(from: respData) ?? "HTTP \(http.statusCode)"
-            if (http.statusCode == 429 || http.statusCode == 529), attempt < 2 {
-                let retryAfter = (http.value(forHTTPHeaderField: "retry-after")).flatMap(TimeInterval.init)
-                let delay = min(retryAfter ?? 15, 60)
-                if let onStatus {
-                    await onStatus("Claude is rate-limited — retrying in \(Int(delay.rounded()))s…")
-                }
-                try await Task.sleep(nanoseconds: UInt64((delay + 1) * 1_000_000_000))
-                continue
-            }
-            throw ServiceError.api(message)
-        }
+        let data = try await send(body: body, timeout: timeout, onStatus: onStatus)
         if let reason = Self.refusalReason(from: data) { throw ServiceError.refused(reason) }
         guard let payloadText = Self.answerText(from: data) else { throw ServiceError.emptyAnswer }
         guard let json = Self.parseJSONObject(from: payloadText) else {
@@ -355,13 +361,136 @@ struct AnthropicService {
     }
 
     private static func answerText(from data: Data) -> String? {
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let content = json["content"] as? [[String: Any]] else { return nil }
+        envelope(from: data).text
+    }
+
+    /// The parts of a Messages response that decide what to do next.
+    struct Envelope {
+        let stopReason: String?
+        /// All text blocks joined; nil when there were none (thinking-only
+        /// replies, budget exhaustion, or a malformed payload).
+        let text: String?
+        let blockTypes: [String]
+    }
+
+    static func envelope(from data: Data) -> Envelope {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return Envelope(stopReason: nil, text: nil, blockTypes: [])
+        }
+        let content = json["content"] as? [[String: Any]] ?? []
         let texts = content.compactMap { block -> String? in
             guard block["type"] as? String == "text" else { return nil }
             return block["text"] as? String
         }
-        return texts.isEmpty ? nil : texts.joined()
+        let joined = texts.joined()
+        return Envelope(
+            stopReason: json["stop_reason"] as? String,
+            text: joined.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : joined,
+            blockTypes: content.compactMap { $0["type"] as? String }
+        )
+    }
+
+    /// Turns whatever the model wrote into an answer, in order of trust:
+    ///
+    /// 1. The requested JSON object, parsed strictly (with the usual fence
+    ///    and raw-newline tolerance).
+    /// 2. The `"answer"` string lifted straight out of the text even when the
+    ///    object is invalid JSON — an unescaped `"` inside a quoted code
+    ///    comment is the classic way a perfectly good answer used to be thrown
+    ///    away as "empty".
+    /// 3. The text itself, when the model skipped the wrapper and just spoke.
+    ///
+    /// Only genuinely empty text yields nil. The box is best-effort at every
+    /// level: a missing or broken box never costs the user the answer.
+    static func decodeAnswer(_ raw: String) -> AssistantAnswer? {
+        let text = stripFences(raw).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+
+        if let json = parseJSONObject(from: text) {
+            if let answer = json["answer"] as? String,
+               !answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return AssistantAnswer(text: answer.trimmingCharacters(in: .whitespacesAndNewlines),
+                                       highlight: normalizedBox(from: json["box_2d"]))
+            }
+            // A well-formed object with no answer in it (e.g. only a box, or
+            // "answer": null) — nothing here worth speaking.
+            if json["answer"] == nil || json["answer"] is NSNull,
+               json.keys.allSatisfy({ $0 == "answer" || $0 == "box_2d" }) {
+                return nil
+            }
+        }
+
+        if let lenient = leniently(extractAnswerFrom: text) {
+            return lenient
+        }
+
+        // Prose reply: the model dropped the JSON wrapper. If it still looks
+        // like a JSON object with no answer key we already gave up above, so
+        // anything reaching here is meant to be read as-is.
+        guard !(text.hasPrefix("{") && text.hasSuffix("}")) else { return nil }
+        return AssistantAnswer(text: text, highlight: nil)
+    }
+
+    /// Pulls the `"answer": "…"` value out of a JSON-shaped string that
+    /// doesn't parse, tolerating unescaped quotes and raw newlines inside
+    /// the value by anchoring the end on the `"box_2d"` key (or the closing
+    /// brace) rather than on the next quote.
+    private static func leniently(extractAnswerFrom text: String) -> AssistantAnswer? {
+        guard let keyRange = text.range(of: #""answer"\s*:\s*""#, options: .regularExpression) else {
+            return nil
+        }
+        let valueStart = keyRange.upperBound
+        let tail: Substring
+        if let boxKey = text.range(of: #""box_2d"\s*:"#, options: .regularExpression),
+           boxKey.lowerBound > valueStart {
+            tail = text[valueStart..<boxKey.lowerBound]
+        } else if let brace = text.lastIndex(of: "}"), brace > valueStart {
+            tail = text[valueStart..<brace]
+        } else {
+            tail = text[valueStart...]
+        }
+        // Drop the closing quote and the comma that led into the next key.
+        var value = String(tail).trimmingCharacters(in: .whitespacesAndNewlines)
+        if value.hasSuffix(",") { value.removeLast() }
+        value = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if value.hasSuffix("\"") { value.removeLast() }
+        let answer = unescapeJSONString(value).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !answer.isEmpty else { return nil }
+
+        var box: CGRect?
+        if let boxRange = text.range(of: #""box_2d"\s*:\s*\[[^\]]*\]"#, options: .regularExpression),
+           let open = text[boxRange].firstIndex(of: "["),
+           let data = String(text[open..<boxRange.upperBound]).data(using: .utf8),
+           let numbers = try? JSONSerialization.jsonObject(with: data) {
+            box = normalizedBox(from: numbers)
+        }
+        return AssistantAnswer(text: answer, highlight: box)
+    }
+
+    private static func unescapeJSONString(_ value: String) -> String {
+        // Wrapping in quotes and handing it to the real parser handles every
+        // escape form; fall back to the common ones by hand if it still won't.
+        if let data = "\"\(value)\"".data(using: .utf8),
+           let decoded = try? JSONSerialization.jsonObject(with: data, options: .fragmentsAllowed) as? String {
+            return decoded
+        }
+        return value
+            .replacingOccurrences(of: "\\n", with: "\n")
+            .replacingOccurrences(of: "\\t", with: "\t")
+            .replacingOccurrences(of: "\\\"", with: "\"")
+            .replacingOccurrences(of: "\\\\", with: "\\")
+    }
+
+    private static func stripFences(_ text: String) -> String {
+        var s = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard s.hasPrefix("```") else { return s }
+        if let firstBreak = s.firstIndex(of: "\n") {
+            s = String(s[s.index(after: firstBreak)...])
+        } else {
+            s = String(s.dropFirst(3))
+        }
+        if s.hasSuffix("```") { s = String(s.dropLast(3)) }
+        return s
     }
 
     private static func errorMessage(from data: Data) -> String? {
@@ -377,6 +506,9 @@ struct AnthropicService {
         /// The model replied in prose where JSON was asked for. Carries the
         /// prose, which is usually the model explaining why it couldn't.
         case notJSON(String)
+        /// Both attempts at an `ask` came back with no answer text. Carries
+        /// the API's stop_reason so the message can say what actually happened.
+        case noAnswerText(stopReason: String)
         var errorDescription: String? {
             switch self {
             case .badResponse: "Unexpected response from Claude."
@@ -384,6 +516,10 @@ struct AnthropicService {
             case .notJSON: "Claude answered in prose instead of the format I asked for."
             case .refused(let reason): "Claude declined this one (\(reason))."
             case .api(let message): "Claude error: \(message)"
+            case .noAnswerText(let stop):
+                stop == "max_tokens"
+                    ? "Claude thought for too long and never got to the answer, even with extra room. Try a shorter or more specific question."
+                    : "Claude sent back a blank reply twice in a row (stop: \(stop)). Ask again — this is on Claude's side, not yours."
             }
         }
     }
