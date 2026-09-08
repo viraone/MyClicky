@@ -51,6 +51,9 @@ final class AssistantController {
     /// ChatGPT…): "send it" runs it, "erase that" / "undo that" take it back.
     private var chatSiteDraftOpenedAt: Date?
     private var chatSiteTarget: ChatSiteTarget?
+    /// Set when "open AI Studio" had to load the page fresh, so the first
+    /// dictation waits for it rather than failing on an empty tab.
+    private var chatSiteOpenedFreshAt: Date?
     /// The in-flight inventory/flagging pass, so Cancel and a second ⌥⌘D can
     /// stop it rather than stacking a second scan on top.
     private var driveCleanupTask: Task<Void, Never>?
@@ -1300,6 +1303,15 @@ final class AssistantController {
             remote.broadcast("STATUS \(message)")
             return
         }
+        // "Open AI Studio" / "go to ChatGPT": select the tab (or open the
+        // site) and make it the dictation target — no planner, no guessing
+        // at an app called "AI Studio" (seen live: the planner tried exactly
+        // that and failed).
+        if let site = ChatSiteActions.openRequest(utterance) {
+            ghost?.clear()
+            openChatSite(site)
+            return
+        }
         // "Bring up a text message with Jason Katz" went to the planner and
         // came back without an open_conversation step (observed live) — the
         // phrasing is deterministic enough to route here without Claude.
@@ -1326,14 +1338,20 @@ final class AssistantController {
         // conversation" must not get typed to Dino Dad.
         let gateBypassed = Self.isAppCommand(utterance) || Self.isTerminalCommand(utterance)
         if gateBypassed { ghost?.clear() }
-        // An AI chat site is in front (AI Studio, ChatGPT, Gemini…): the
-        // sentence is the prompt, typed into its box word for word. The tab
-        // being looked at is what makes it dictation, not a command.
-        if !gateBypassed, BrowserTabReader.supportedBundleIDs.contains(targetApp?.bundleIdentifier ?? ""),
-           let site = ChatSiteActions.frontSite() {
-            ghost?.clear()
-            dictateIntoChatSite(utterance, site: site, apiKey: apiKey)
-            return
+        // An AI chat site is the target — Peeky just opened it, or its tab is
+        // in front (AI Studio, ChatGPT, Gemini…): the sentence is the prompt,
+        // typed into its box word for word. Once Peeky opened it, it stays
+        // the target even while the person looks at another window or their
+        // phone (seen live: the frontmost app was Peeky's own transcript).
+        if !gateBypassed {
+            let opened = chatSiteDraftIsCurrent ? chatSiteTarget?.site : nil
+            let inFront = BrowserTabReader.supportedBundleIDs.contains(targetApp?.bundleIdentifier ?? "")
+                ? ChatSiteActions.frontSite() : nil
+            if let site = opened ?? inFront {
+                ghost?.clear()
+                dictateIntoChatSite(utterance, site: site, apiKey: apiKey)
+                return
+            }
         }
         let gmailActive = !gateBypassed && (gmailDraftOpenedAt.map { Date().timeIntervalSince($0) < 10 * 60 } ?? false)
         // A thread Peeky opened, or one the user is simply looking at: with
@@ -3123,9 +3141,38 @@ final class AssistantController {
         return base + joiner + capped
     }
 
+    private func openChatSite(_ site: ChatSiteActions.Site) {
+        synthesizer.stopSpeaking(at: .immediate)
+        ring.hide()
+        let existed = ChatSiteActions.open(site)
+        let target = (chatSiteTarget?.site == site ? chatSiteTarget : nil) ?? ChatSiteTarget(site: site)
+        target.typed = ""
+        chatSiteTarget = target
+        chatSiteDraftOpenedAt = Date()
+        chatSiteOpenedFreshAt = existed ? nil : Date()
+        ActivityLog.recordAction("chatsite-open", ["site": site.name, "existed": existed ? "yes" : "no"])
+        let message = "\(site.name) is up — tell me what to ask, then say “send it”."
+        finishChatSite(message, ok: true, speak: false)
+        toast.show(message, icon: "bubble.left.and.text.bubble.right.fill", tint: .cyan)
+    }
+
+    /// The box, waiting briefly for a page Peeky just opened to finish loading.
+    private func readChatSiteBox(_ site: ChatSiteActions.Site) -> String? {
+        var attempts = 1
+        if let fresh = chatSiteOpenedFreshAt, Date().timeIntervalSince(fresh) < 20 { attempts = 8 }
+        for attempt in 0..<attempts {
+            if let text = ChatSiteActions.read(site) {
+                chatSiteOpenedFreshAt = nil
+                return text
+            }
+            if attempt < attempts - 1 { usleep(500_000) }
+        }
+        return nil
+    }
+
     private func dictateIntoChatSite(_ utterance: String, site: ChatSiteActions.Site, apiKey: String) {
         synthesizer.stopSpeaking(at: .immediate)
-        guard let existing = ChatSiteActions.read(site) else {
+        guard let existing = readChatSiteBox(site) else {
             finishChatSite("I can't reach the prompt box in \(site.name) — check the browser allows JavaScript from Apple Events.", ok: false, speak: true)
             return
         }

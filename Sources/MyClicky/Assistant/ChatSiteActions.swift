@@ -19,6 +19,10 @@ enum ChatSiteActions {
     struct Site: Equatable {
         let name: String
         let hosts: [String]
+        /// Where "open X" goes when no tab is already showing it.
+        let home: String
+        /// How people say it: "ai studio", "chat gpt", "gpt"…
+        let aliases: [String]
         /// Tried in order; the last visible, enabled match wins.
         let inputSelectors: [String]
         /// Send / Run buttons, tried in order. Falls back to a real Return.
@@ -30,38 +34,85 @@ enum ChatSiteActions {
     }
 
     static let sites: [Site] = [
-        Site(name: "AI Studio", hosts: ["aistudio.google.com"],
+        Site(name: "AI Studio", hosts: ["aistudio.google.com"], home: "https://aistudio.google.com/",
+             aliases: ["ai studio", "google ai studio", "a i studio", "aistudio"],
              inputSelectors: ["div.tiptap.ProseMirror[contenteditable='true']", "div.ProseMirror[contenteditable='true']",
                               "ms-prompt-input-wrapper textarea", "textarea[placeholder*='prompt' i]",
                               "textarea[aria-label*='prompt' i]", "textarea", "div[contenteditable='true']"],
              submitSelectors: ["button[aria-label='Send message']", "button[aria-label*='Send' i]", "ms-run-button button",
                                "button[aria-label='Run']", "button[aria-label*='Run' i]", "button[type='submit']"]),
-        Site(name: "ChatGPT", hosts: ["chatgpt.com", "chat.openai.com"],
+        Site(name: "ChatGPT", hosts: ["chatgpt.com", "chat.openai.com"], home: "https://chatgpt.com/",
+             aliases: ["chatgpt", "chat gpt", "chat g p t", "gpt", "openai", "open ai"],
              inputSelectors: ["#prompt-textarea", "div.ProseMirror[contenteditable='true']", "textarea"],
              submitSelectors: ["button[data-testid='send-button']", "button[aria-label*='Send' i]"]),
-        Site(name: "Claude", hosts: ["claude.ai"],
+        Site(name: "Claude", hosts: ["claude.ai"], home: "https://claude.ai/new",
+             aliases: ["claude", "claude ai", "cloud ai", "anthropic"],
              inputSelectors: ["div.ProseMirror[contenteditable='true']", "div[contenteditable='true']", "textarea"],
              submitSelectors: ["button[aria-label*='Send' i]"]),
-        Site(name: "Gemini", hosts: ["gemini.google.com"],
+        Site(name: "Gemini", hosts: ["gemini.google.com"], home: "https://gemini.google.com/app",
+             aliases: ["gemini", "google gemini"],
              inputSelectors: [".ql-editor[contenteditable='true']", "rich-textarea div[contenteditable='true']",
                               "div[contenteditable='true']"],
              submitSelectors: ["button[aria-label*='Send' i]", ".send-button"]),
-        Site(name: "Perplexity", hosts: ["perplexity.ai"],
+        Site(name: "Perplexity", hosts: ["perplexity.ai"], home: "https://www.perplexity.ai/",
+             aliases: ["perplexity"],
              inputSelectors: ["textarea", "div[contenteditable='true']"],
              submitSelectors: ["button[aria-label*='Submit' i]", "button[type='submit']"]),
-        Site(name: "Copilot", hosts: ["copilot.microsoft.com"],
+        Site(name: "Copilot", hosts: ["copilot.microsoft.com"], home: "https://copilot.microsoft.com/",
+             aliases: ["microsoft copilot", "copilot web", "copilot site"],
              inputSelectors: ["textarea", "div[contenteditable='true']"],
              submitSelectors: ["button[aria-label*='Submit' i]", "button[type='submit']"]),
-        Site(name: "Grok", hosts: ["grok.com"],
+        Site(name: "Grok", hosts: ["grok.com"], home: "https://grok.com/",
+             aliases: ["grok"],
              inputSelectors: ["textarea", "div[contenteditable='true']"],
              submitSelectors: ["button[aria-label*='Submit' i]", "button[type='submit']"]),
-        Site(name: "Poe", hosts: ["poe.com"],
+        Site(name: "Poe", hosts: ["poe.com"], home: "https://poe.com/",
+             aliases: ["poe"],
              inputSelectors: ["textarea", "div[contenteditable='true']"],
              submitSelectors: ["button[aria-label*='Send' i]", "button[type='submit']"]),
     ]
 
     static func site(for url: String) -> Site? {
         sites.first { $0.matches(url) }
+    }
+
+    /// "Open AI Studio", "go to ChatGPT", "bring up Gemini", "switch to
+    /// Claude" → the site. Only these opening verbs count, so "ask ChatGPT
+    /// about…" stays with the planner and "gpt" inside a sentence is text.
+    static func openRequest(_ utterance: String) -> Site? {
+        var text = utterance.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        let leadIns = ["actually", "ok", "okay", "hey", "peeky", "clicky", "please", "now", "um", "uh", "so", "and", "then",
+                       "can you", "could you", "would you", "let's", "lets", "just", "go ahead and"]
+        var stripped = true
+        while stripped {
+            stripped = false
+            for lead in leadIns where text.hasPrefix(lead + " ") {
+                text.removeFirst(lead.count + 1)
+                stripped = true
+            }
+        }
+        let verbs = ["open up", "open", "go to", "switch to", "bring up", "pull up", "show me", "show", "launch", "take me to",
+                     "jump to", "get me", "go over to"]
+        guard let verb = verbs.first(where: { text.hasPrefix($0 + " ") }) else { return nil }
+        var rest = String(text.dropFirst(verb.count + 1))
+        for filler in ["the ", "a ", "my ", "up "] where rest.hasPrefix(filler) { rest.removeFirst(filler.count) }
+        for suffix in [" please", " for me", " tab", " website", " site", " page", " in chrome", " in safari", " in the browser"]
+        where rest.hasSuffix(suffix) { rest.removeLast(suffix.count) }
+        rest = rest.trimmingCharacters(in: .whitespaces)
+        return sites.first { $0.aliases.contains(rest) || $0.name.lowercased() == rest }
+    }
+
+    /// Brings the site to the front: selects an existing tab anywhere in any
+    /// running browser, else opens its home page in the default browser.
+    /// Returns whether a tab already existed.
+    @discardableResult
+    static func open(_ site: Site) -> Bool {
+        if let host = site.hosts.first, BrowserTabReader.selectTab(urlContains: host) != nil { return true }
+        if let url = URL(string: site.home) { NSWorkspace.shared.open(url) }
+        return false
     }
 
     /// The chat site showing in the active tab of the frontmost browser, if

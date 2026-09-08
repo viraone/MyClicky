@@ -17,6 +17,23 @@ final class ChatSiteDictationTests: XCTestCase {
         XCTAssertNil(ChatSiteActions.site(for: "https://github.com/viraone/MyClicky"))
     }
 
+    // MARK: "Open X"
+
+    func testOpenRequestsResolveSites() {
+        XCTAssertEqual(ChatSiteActions.openRequest("open AI Studio")?.name, "AI Studio")
+        XCTAssertEqual(ChatSiteActions.openRequest("Open up Google AI Studio, please")?.name, "AI Studio")
+        XCTAssertEqual(ChatSiteActions.openRequest("hey peeky go to chat GPT")?.name, "ChatGPT")
+        XCTAssertEqual(ChatSiteActions.openRequest("bring up Gemini")?.name, "Gemini")
+        XCTAssertEqual(ChatSiteActions.openRequest("switch to the Claude tab")?.name, "Claude")
+    }
+
+    func testOpenRequestsIgnoreOtherThings() {
+        XCTAssertNil(ChatSiteActions.openRequest("open Messages"))
+        XCTAssertNil(ChatSiteActions.openRequest("ask ChatGPT about DNS"))
+        XCTAssertNil(ChatSiteActions.openRequest("open a conversation with David"))
+        XCTAssertNil(ChatSiteActions.openRequest("what does gpt stand for"))
+    }
+
     // MARK: Revision vs. more dictation
 
     func testCorrectionsAreRevisions() {
