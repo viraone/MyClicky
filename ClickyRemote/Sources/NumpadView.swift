@@ -1653,7 +1653,7 @@ struct NumpadView: View {
             // a hero tile), then a 2×2 grid of hero keys each two rows tall —
             // ASK | DICTATE over CAPTURE | TALK — so the four mic/capture
             // actions line up exactly.
-            let switchRows: CGFloat = 1.35
+            let switchRows: CGFloat = 1.55
             let rowH = (geo.size.height - topInset - gap * 5) / (5 + switchRows)
             let heroH = rowH * 2 + gap
             let heroW = (geo.size.width - gap) / 2
@@ -1998,17 +1998,25 @@ struct ScreenSwitch: View {
         GeometryReader { geo in
             let h = geo.size.height
             let plateInset: CGFloat = 4
-            let bezel: CGFloat = min(h * 0.46, 64)
-            let travel = h * 0.19
+            let bezel: CGFloat = min(h * 0.62, 96)
+            let travel = h * 0.22
             ZStack {
                 plate
+                // Engraved rule across the middle: the plate reads as two
+                // equal halves, SCREEN 2 above, SCREEN 1 below, and the
+                // lever's pivot sits exactly on it.
+                VStack(spacing: 0) {
+                    Rectangle().fill(Color.black.opacity(0.35)).frame(height: 1.5)
+                    Rectangle().fill(Color.white.opacity(0.45)).frame(height: 1)
+                }
+                .padding(.horizontal, plateInset + 14)
                 HStack(spacing: 0) {
                     Spacer()
                     engraving
                     Spacer()
                     ZStack {
                         bezelView(size: bezel)
-                        leverView(length: h * 0.36, travel: travel)
+                        leverView(length: h * 0.34, travel: travel)
                     }
                     .frame(width: bezel + 24)
                     Spacer()
@@ -2110,12 +2118,12 @@ struct ScreenSwitch: View {
     }
 
     private var engraving: some View {
-        VStack(alignment: .trailing, spacing: 0) {
+        VStack(spacing: 0) {
             engravedLabel("SCREEN 2", sub: "MONITOR", on: current == 2)
-            Spacer()
+                .frame(maxHeight: .infinity)
             engravedLabel("SCREEN 1", sub: "MACBOOK", on: current == 1)
+                .frame(maxHeight: .infinity)
         }
-        .padding(.vertical, 10)
     }
 
     private func engravedLabel(_ text: String, sub: String, on: Bool) -> some View {
@@ -2136,11 +2144,9 @@ struct ScreenSwitch: View {
     /// Two indicator lamps on the right: green ACTIVE on the chosen screen.
     private var lamps: some View {
         VStack(spacing: 0) {
-            lamp(on: current == 2)
-            Spacer()
-            lamp(on: current == 1)
+            lamp(on: current == 2).frame(maxHeight: .infinity)
+            lamp(on: current == 1).frame(maxHeight: .infinity)
         }
-        .padding(.vertical, 14)
     }
 
     private func lamp(on: Bool) -> some View {
@@ -2149,9 +2155,9 @@ struct ScreenSwitch: View {
             .fill(RadialGradient(colors: lit ? [Color(red: 0.55, green: 1, blue: 0.55), Color(red: 0.05, green: 0.65, blue: 0.2)]
                                              : [Color(white: 0.30), Color(white: 0.12)],
                                  center: .topLeading, startRadius: 0, endRadius: 8))
-            .frame(width: 11, height: 11)
+            .frame(width: 15, height: 15)
             .overlay(Circle().strokeBorder(Color.black.opacity(0.7), lineWidth: 1))
-            .shadow(color: lit ? Color.green.opacity(0.9) : .clear, radius: 6)
+            .shadow(color: lit ? Color.green.opacity(0.9) : .clear, radius: 7)
             .animation(.easeInOut(duration: 0.2), value: lit)
     }
 
@@ -2183,16 +2189,16 @@ struct ScreenSwitch: View {
         return ZStack(alignment: .top) {
             Capsule()
                 .fill(LinearGradient(colors: [Color(white: 0.9), Color(white: 0.45)], startPoint: .leading, endPoint: .trailing))
-                .frame(width: 9, height: length * 0.55)
-                .offset(y: -length * 0.55)
+                .frame(width: 13, height: length * 0.50)
+                .offset(y: -length * 0.50)
             Capsule()
                 .fill(LinearGradient(colors: [red.lighter(0.30), red, red.darker(0.25)], startPoint: .leading, endPoint: .trailing))
                 .overlay(Capsule().strokeBorder(Color.black.opacity(0.35), lineWidth: 1))
-                .frame(width: 20, height: length * 0.62)
-                .offset(y: -length * 1.05)
-                .shadow(color: .black.opacity(0.55), radius: 3, x: 2, y: 3)
+                .frame(width: 30, height: length * 0.66)
+                .offset(y: -length * 1.02)
+                .shadow(color: .black.opacity(0.55), radius: 4, x: 3, y: 4)
         }
-        .frame(width: 24, height: 1)
+        .frame(width: 34, height: 1)
         .rotationEffect(angle, anchor: .bottom)
         .offset(y: pressed ? 1 : 0)
         .scaleEffect(pressed ? 0.98 : 1, anchor: .bottom)
