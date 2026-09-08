@@ -74,3 +74,21 @@ final class ChatSiteDictationTests: XCTestCase {
         XCTAssertEqual(AssistantController.tidyPromptSegment("   ", appendingTo: "Hello"), "Hello")
     }
 }
+
+@MainActor
+final class TalkReplayGuardTests: XCTestCase {
+    func testWholeTranscriptAfterRunIsEmptyRemainder() {
+        let ran = ["Open", "AI", "studio", "Explain", "to", "me", "TCP", "networking", "Send", "it"]
+        XCTAssertEqual(AssistantController.remainder(after: ran, in: ran), [])
+    }
+
+    func testTrailingWordsAreTheRemainder() {
+        let ran = ["open", "messages"]
+        XCTAssertEqual(AssistantController.remainder(after: ran, in: ["Open,", "Messages", "send", "hi"]), ["send", "hi"])
+    }
+
+    func testFreshTranscriptIsNotAReplay() {
+        XCTAssertNil(AssistantController.remainder(after: ["open", "messages"], in: ["close", "the", "window"]))
+        XCTAssertNil(AssistantController.remainder(after: [], in: ["open", "messages"]))
+    }
+}

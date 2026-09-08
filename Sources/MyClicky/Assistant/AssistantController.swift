@@ -191,6 +191,12 @@ final class AssistantController {
     private var phoneAskInFlight = false
     /// Words already run as segments this session, in transcript order.
     private var talkDispatched: [String] = []
+    /// Everything the last Talk session ran, kept after it ends: the phone
+    /// sends its whole transcript once more when TALK is stopped, and if
+    /// streaming already finished by then that must not run again as one
+    /// giant command (observed live: it replayed "open AI Studio … send it"
+    /// through the planner and sat on the Talk tab while an ASK waited).
+    private var talkRanWords: [String] = []
     private var talkQueue: [String] = []
     /// Live preview of the words being said into an open Messages thread —
     /// see `streamGhostDraft`. Consumed by `handleDo` when the segment runs.
@@ -249,6 +255,13 @@ final class AssistantController {
             guard let self else { return }
             // Phone ASK: open the full card while the user is still speaking,
             // so the answer never lands in a corner dot or the one-line strip.
+            // The phone has its own TALK key, so a LISTEN is always a question:
+            // a Talk that is still finishing (or holding its "Done.") hands the
+            // panel over rather than pinning the Ask to the Talk tab.
+            if self.panel.state.tab == .talk {
+                if self.busy || self.talkStreaming { self.abandonWork() }
+                self.panel.state.tab = .ask
+            }
             let asking = self.panel.state.tab == .ask
             if asking { self.phoneAskInFlight = true }
             self.showPanel(listening: true, full: asking)
@@ -455,6 +468,9 @@ final class AssistantController {
             guard let self else { return }
             // ASK from the phone always reads on the Ask tab, full size — the
             // only exception is the Mac deliberately parked on Capture + Dictate.
+            // A Talk still running would make handleQuestion drop the question
+            // on its busy guard; the user's ASK wins.
+            if self.busy, !self.streamQuestionsOnly { self.abandonWork() }
             if self.panel.state.tab != .captureDictate { self.panel.state.tab = .ask }
             self.phoneAskInFlight = true
             self.showPanel(full: true)
@@ -480,6 +496,20 @@ final class AssistantController {
                 self.panel.state.transcript = utterance
                 self.finishTalkStreaming(final: utterance)
                 return
+            }
+            // The phone's final transcript after streaming already ended:
+            // run only what hasn't run, which is usually nothing.
+            var utterance = utterance
+            let words = Self.words(utterance)
+            if let rest = Self.remainder(after: self.talkRanWords, in: words) {
+                self.talkRanWords = words
+                if rest.isEmpty {
+                    ActivityLog.recordAction("talk-final-already-ran", ["text": utterance])
+                    return
+                }
+                utterance = rest.joined(separator: " ")
+            } else {
+                self.talkRanWords = []
             }
             let targetApp = NSWorkspace.shared.frontmostApplication
             self.showPanel()
@@ -748,6 +778,7 @@ final class AssistantController {
         talkStreaming = true
         talkSession = true
         talkDispatched = []
+        talkRanWords = []
         talkQueue = []
         panel.state.copiedPreview = nil
         panel.state.answer = ""
@@ -875,21 +906,24 @@ final class AssistantController {
     /// what was dispatched; otherwise everything is new.
     private func pendingTalkWords(in words: [String], quiet: Bool = false) -> [String] {
         guard !talkDispatched.isEmpty else { return words }
-        let prefix = talkDispatched.map(Self.normalizedWord)
-        let current = words.prefix(prefix.count).map(Self.normalizedWord)
-        if current.count == prefix.count, current == prefix {
-            return Array(words[prefix.count...])
-        }
-        // The recognizer may also revise earlier words ("open" → "Open,"),
-        // so accept a mostly-matching prefix before declaring a restart.
-        let agree = zip(current, prefix).filter { $0 == $1 }.count
-        if current.count == prefix.count, agree * 3 >= prefix.count * 2 {
-            return Array(words[prefix.count...])
-        }
+        if let rest = Self.remainder(after: talkDispatched, in: words) { return rest }
         if !quiet {
-            ActivityLog.recordAction("talk-transcript-restarted", ["dispatched": "\(prefix.count)", "now": "\(words.count)"])
+            ActivityLog.recordAction("talk-transcript-restarted", ["dispatched": "\(talkDispatched.count)", "now": "\(words.count)"])
         }
         return words
+    }
+
+    /// `words` minus the leading `ran` words, or nil when `words` doesn't
+    /// start with them (a fresh transcript). The recognizer may revise
+    /// earlier words ("open" → "Open,"), so a mostly-matching prefix counts.
+    static func remainder(after ran: [String], in words: [String]) -> [String]? {
+        guard !ran.isEmpty else { return nil }
+        let prefix = ran.map(normalizedWord)
+        let current = words.prefix(prefix.count).map(normalizedWord)
+        guard current.count == prefix.count else { return nil }
+        if current == prefix { return Array(words[prefix.count...]) }
+        let agree = zip(current, prefix).filter { $0 == $1 }.count
+        return agree * 3 >= prefix.count * 2 ? Array(words[prefix.count...]) : nil
     }
 
     private static func normalizedWord(_ word: String) -> String {
@@ -903,6 +937,7 @@ final class AssistantController {
         let words = Self.words(final)
         let rest = pendingTalkWords(in: words).joined(separator: " ")
         let ranSomething = !talkDispatched.isEmpty || !talkQueue.isEmpty || busy
+        talkRanWords = words
         talkDispatched = []
         if !rest.isEmpty {
             enqueueTalk(rest)
@@ -1603,28 +1638,8 @@ final class AssistantController {
     /// Stops whatever Peeky is doing right now: cancels the in-flight
     /// request, silences speech, and returns the panel to Ready.
     private func stop() {
-        requestID += 1
-        currentTask?.cancel()
-        currentTask = nil
-        busy = false
-        synthesizer.stopSpeaking(at: .immediate)
-        panel.state.isSpeaking = false
-        ring.hide()
-        googleAuth.onStatus = nil
-        for continuation in pendingConfirms.values { continuation.resume(returning: false) }
-        pendingConfirms.removeAll()
-        for continuation in pendingChoices.values { continuation.resume(returning: nil) }
-        pendingChoices.removeAll()
         let wasStreaming = talkStreaming
-        streamPauseTask?.cancel()
-        streamTranscript = ""
-        talkStreaming = false
-        takeGhostDraft()?.clear()
-        talkSession = false
-        phoneAskInFlight = false
-        panel.state.chaining = false
-        talkQueue = []
-        talkDispatched = []
+        abandonWork()
         if wasStreaming, panel.state.status != .listening {
             remote.broadcast("STOP")
             speech.stop()
@@ -1644,6 +1659,34 @@ final class AssistantController {
         } else if panel.state.status == .answering {
             panel.state.status = .idle
         }
+    }
+
+    /// The cancelling half of `stop()`: drops the in-flight request and any
+    /// Talk session without touching the listening state or telling the
+    /// phone to stop — for when the phone itself is taking over (a new ASK).
+    private func abandonWork() {
+        requestID += 1
+        currentTask?.cancel()
+        currentTask = nil
+        busy = false
+        synthesizer.stopSpeaking(at: .immediate)
+        panel.state.isSpeaking = false
+        ring.hide()
+        googleAuth.onStatus = nil
+        for continuation in pendingConfirms.values { continuation.resume(returning: false) }
+        pendingConfirms.removeAll()
+        for continuation in pendingChoices.values { continuation.resume(returning: nil) }
+        pendingChoices.removeAll()
+        if talkStreaming { talkRanWords = talkDispatched }
+        streamPauseTask?.cancel()
+        streamTranscript = ""
+        talkStreaming = false
+        takeGhostDraft()?.clear()
+        talkSession = false
+        phoneAskInFlight = false
+        panel.state.chaining = false
+        talkQueue = []
+        talkDispatched = []
     }
 
     /// Maps a normalized (0–1, top-left origin) image box back to AppKit
