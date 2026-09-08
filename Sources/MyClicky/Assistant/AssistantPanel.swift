@@ -156,6 +156,7 @@ final class AssistantState: ObservableObject {
             // machinery so a stale timer can't flip a later state.
             speechIdleTask?.cancel()
             speechActive = status == .listening
+            updateMicLive()
         }
     }
     @Published var transcript = "" {
@@ -192,6 +193,25 @@ final class AssistantState: ObservableObject {
     /// A Talk recording is still open after a command ran: the panel stays
     /// green until the next words arrive.
     @Published var chaining = false
+    /// A phone-driven recording is open (TALK or ASK stream), whatever the
+    /// panel's own status is showing. Mirrors the controller's flag.
+    @Published var streaming = false {
+        didSet { if streaming != oldValue { updateMicLive() } }
+    }
+    /// The mic is hot — locally or on the phone — and words are being
+    /// captured right now. This is what the red REC badge follows; it is
+    /// deliberately independent of `phase`, because a green "Done" with the
+    /// stream still open is exactly the moment it must not go quiet.
+    var micLive: Bool { status == .listening || streaming }
+    /// When the current hot-mic stretch began, for the elapsed readout.
+    @Published var micLiveSince: Date?
+    private func updateMicLive() {
+        if micLive {
+            if micLiveSince == nil { micLiveSince = Date() }
+        } else {
+            micLiveSince = nil
+        }
+    }
     /// Talk tab log: every command spoken and every line Peeky reported
     /// back, timestamped. ⌘K clears it like a terminal.
     @Published var talkLog: [TalkLogEntry] = []
@@ -696,6 +716,7 @@ struct AssistantPanelView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 4)
+            if state.micLive { recBadge }
             micIndicator
             if state.canStop && state.status != .listening {
                 stopButton
@@ -796,6 +817,9 @@ struct AssistantPanelView: View {
                     .fill(state.accent)
                     .frame(width: 14, height: 14)
                     .shadow(color: state.accent.opacity(0.8), radius: 5)
+                if state.micLive {
+                    RecRing()
+                }
             }
             .frame(width: 44, height: 44)
         }
@@ -807,6 +831,7 @@ struct AssistantPanelView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .center) {
                 tabBar
+                if state.micLive { recBadge }
                 Spacer()
                 sizeSwitch
                 headerButton("arrow.down.right.and.arrow.up.left", help: "Minimize to corner") {
@@ -1575,6 +1600,11 @@ struct AssistantPanelView: View {
     /// What it records follows the tab — a question on Ask, a dictation on
     /// Capture + Dictate, a command to carry out on Talk. (⌥⌘C / ⌥⌘V still
     /// work as system-wide shortcuts.)
+    private var recBadge: some View {
+        RecBadge(since: state.micLiveSince)
+            .transition(.opacity.combined(with: .scale(scale: 0.9)))
+    }
+
     private var micIndicator: some View {
         let listening = state.status == .listening
         let idleHelp: String = switch state.tab {
@@ -2086,6 +2116,67 @@ struct AssistantPanelView: View {
 /// to draw — the phone keeps the microphone — so the motion is synthetic,
 /// but it only ever runs while partial transcripts are arriving, which is the
 /// truth the user needs: words are being heard *right now*.
+/// The one signal that never lies about the microphone: a pulsing red dot,
+/// "REC", and how long it has been open. Shown in every form of the panel
+/// whenever `micLive` is true, regardless of the phase colour — the phase
+/// says what Peeky is doing, this says the mic is still hot.
+private struct RecBadge: View {
+    let since: Date?
+    @State private var pulsing = false
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(Color.red)
+                    .frame(width: 9, height: 9)
+                    .shadow(color: .red.opacity(pulsing ? 0.9 : 0.3), radius: pulsing ? 6 : 2)
+                    .opacity(pulsing ? 1 : 0.45)
+                    .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: pulsing)
+                Text("REC")
+                    .font(.system(size: 12, weight: .heavy, design: .monospaced))
+                    .kerning(1.2)
+                Text(Self.elapsed(since: since, now: context.date))
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .monospacedDigit()
+                    .opacity(0.85)
+            }
+            .foregroundStyle(Color(red: 1, green: 0.42, blue: 0.42))
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .background(
+                Capsule().fill(Color.red.opacity(0.16))
+                    .overlay(Capsule().strokeBorder(Color.red.opacity(0.7), lineWidth: 1))
+            )
+        }
+        .onAppear { pulsing = true }
+        .onDisappear { pulsing = false }
+        .help("The microphone is still recording. Press STOP or the mic to end it.")
+        .accessibilityLabel("Recording")
+    }
+
+    static func elapsed(since: Date?, now: Date) -> String {
+        guard let since else { return "0:00" }
+        let total = max(0, Int(now.timeIntervalSince(since)))
+        return String(format: "%d:%02d", total / 60, total % 60)
+    }
+}
+
+/// Red halo around the corner dot while the mic is hot, so a minimized
+/// Peeky still shows it is recording.
+private struct RecRing: View {
+    @State private var pulsing = false
+    var body: some View {
+        Circle()
+            .strokeBorder(Color.red.opacity(pulsing ? 0.95 : 0.35), lineWidth: 2.5)
+            .shadow(color: .red.opacity(pulsing ? 0.8 : 0.2), radius: pulsing ? 8 : 2)
+            .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: pulsing)
+            .onAppear { pulsing = true }
+            .onDisappear { pulsing = false }
+            .allowsHitTesting(false)
+    }
+}
+
 private struct RecordingBars: View {
     let color: Color
     @State private var animating = false
