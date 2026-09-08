@@ -286,9 +286,10 @@ final class AssistantState: ObservableObject {
     /// True while the panel is stretched taller to give a long answer more
     /// room, instead of leaving it all in a small scrolling area.
     @Published var size: PanelSize = .normal
-    /// Kept for call sites that only care whether there's room for a long
-    /// answer.
-    var isTall: Bool { size == .tall }
+    /// Whether there's already room for a long answer. Both the wide tall
+    /// card and the half column are full height; only the short default
+    /// card isn't.
+    var isTall: Bool { size != .normal }
     /// True whenever a request is in flight or speech is playing — i.e. when
     /// the Stop button should be shown.
     var canStop: Bool { status == .thinking || status == .listening || isSpeaking }
@@ -495,6 +496,8 @@ final class AssistantPanelController {
     /// that has to be read rather than glanced at — a copied passage lands in
     /// a panel sized for one line of status and is otherwise clipped away
     /// entirely, header showing and nothing beneath it.
+    /// Never changes a layout the user chose that already has room: the half
+    /// column is full height and stays a half column.
     func growIfNeeded() {
         guard !state.isTall else { return }
         setSize(.tall)
