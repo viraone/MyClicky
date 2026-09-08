@@ -491,7 +491,20 @@ final class AssistantController {
         remote.onRead = { [weak self] in self?.handleReadScreen() }
         remote.greeting = { [weak self] in
             ["WHATSAPP_UNREAD \(self?.whatsappUnread.count ?? 0)",
-             "GMAIL_UNREAD \(self?.gmailUnread.count ?? 0)"]
+             "GMAIL_UNREAD \(self?.gmailUnread.count ?? 0)",
+             self?.screensLine() ?? "SCREENS 1 1"]
+        }
+        remote.onScreen = { [weak self] index in self?.switchScreen(to: index) }
+        panel.onScreenChange = { [weak self] _ in
+            guard let self else { return }
+            self.remote.broadcast(self.screensLine())
+        }
+        NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.remote.broadcast(self.screensLine())
+            }
         }
         whatsappUnread.onChange = { [weak self] count in
             self?.remote.broadcast("WHATSAPP_UNREAD \(count)")
@@ -532,6 +545,34 @@ final class AssistantController {
         } else {
             panel.show(near: cursor, on: screen)
         }
+    }
+
+    /// `SCREENS <count> <current>` — how many displays are attached and which
+    /// one (1-based) Peeky is on; 0 when the panel is hidden. The phone's
+    /// lever draws itself from this and nothing else.
+    private func screensLine() -> String {
+        "SCREENS \(NSScreen.screens.count) \(panel.currentScreenIndex ?? 0)"
+    }
+
+    /// The phone's screen lever: put Peeky's panel and the pointer on display
+    /// `index`, so everything that follows the pointer or the panel — ASK
+    /// screenshots, TALK targets, CAPTURE — happens on that screen.
+    private func switchScreen(to index: Int) {
+        guard let target = panel.move(toScreenIndex: index) else {
+            remote.broadcast(screensLine())
+            return
+        }
+        activeScreen = target
+        // Warp the pointer to the panel so "the display under the pointer"
+        // agrees with the lever. Cocoa's frame is bottom-left; CoreGraphics
+        // wants top-left, measured from the primary display's top edge.
+        let panelFrame = panel.frame ?? target.visibleFrame
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? target.frame.height
+        let point = CGPoint(x: panelFrame.midX, y: primaryHeight - panelFrame.maxY - 24)
+        CGWarpMouseCursorPosition(point)
+        CGAssociateMouseAndMouseCursorPosition(1)
+        ActivityLog.recordAction("screen-switch", ["to": "\(index)"])
+        remote.broadcast(screensLine())
     }
 
     /// Full Ask card for an answer that has just landed — no dot, no strip,

@@ -24,6 +24,10 @@ final class ClickyClient: ObservableObject {
     /// Whether the browser window playing YouTube is currently minimized —
     /// drives the Collapse/Expand label on the YouTube pad.
     @Published var youtubeCollapsed = false
+    /// Displays attached to the Mac, and which one (1-based) Peeky is on —
+    /// 0 when its panel is hidden. Straight from the Mac's `SCREENS` line.
+    @Published var screenCount = 1
+    @Published var currentScreen = 0
 
     /// Progress of an in-flight DO command, or a READ description — shown in
     /// large text and spoken aloud by TALK mode.
@@ -155,6 +159,12 @@ final class ClickyClient: ObservableObject {
                         } else if line.hasPrefix("SAVE_PHOTO_STATUS ") {
                             let parts = line.dropFirst(18).split(separator: "\t", maxSplits: 1).map(String.init)
                             if parts.count == 2 { self.onSavePhotoStatus?(parts[1], parts[0] == "OK") }
+                        } else if line.hasPrefix("SCREENS ") {
+                            let parts = line.dropFirst(8).split(separator: " ").compactMap { Int($0) }
+                            if parts.count == 2 {
+                                self.screenCount = max(1, parts[0])
+                                self.currentScreen = parts[1]
+                            }
                         } else if line.hasPrefix("YOUTUBE_STATE ") {
                             self.youtubeCollapsed = line.dropFirst(14).trimmingCharacters(in: .whitespaces) == "COLLAPSED"
                         } else if line.hasPrefix("STATUS ") {
@@ -333,6 +343,8 @@ final class ClickyClient: ObservableObject {
     /// Recording ended with nothing to send — take the Mac out of listening too.
     func stopListening() { send("STOP") }
     func collapse() { send("COLLAPSE") }
+    /// Put Peeky (panel and pointer) on display n, 1-based.
+    func screen(_ n: Int) { send("SCREEN \(n)") }
     func tab(_ name: String) { send("TAB \(name)") }
     func capture() { send("CAPTURE") }
     func gmail(_ action: String) { send("GMAIL \(action)") }

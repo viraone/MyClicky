@@ -112,6 +112,9 @@ final class RemoteControlService {
     var onConfirmResponse: ((String, Bool) -> Void)?
     var onChoiceResponse: ((String, Int?) -> Void)?
     var onRead: (() -> Void)?
+    /// `SCREEN <n>`: put Peeky (panel and pointer) on display n, 1-based in
+    /// the order macOS lists them — 1 is the built-in display when present.
+    var onScreen: ((Int) -> Void)?
     /// Lines to send to a phone as soon as it connects (current state, e.g. unread counts).
     var greeting: (() -> [String])?
 
@@ -238,6 +241,8 @@ final class RemoteControlService {
             onChoiceResponse?(String(line.dropFirst(10)).trimmingCharacters(in: .whitespaces), nil)
         } else if line == "READ" {
             onRead?()
+        } else if line.hasPrefix("SCREEN ") {
+            if let n = Int(line.dropFirst(7).trimmingCharacters(in: .whitespaces)) { onScreen?(n) }
         }
     }
 }

@@ -1647,14 +1647,22 @@ struct NumpadView: View {
         GeometryReader { geo in
             let gap: CGFloat = 12
             let topInset: CGFloat = 12
-            // Five equal rows: a one-row PEEKY bar across the top (it only
-            // shows/hides the Mac panel, so it doesn't need a hero tile), then
-            // a 2×2 grid of hero keys each two rows tall — ASK | DICTATE over
-            // CAPTURE | TALK — so the four mic/capture actions line up exactly.
-            let rowH = (geo.size.height - topInset - gap * 4) / 5
+            // Six rows and a bit: the screen lever on top (a rack-mount
+            // toggle that puts Peeky on the monitor or the MacBook), a one-row
+            // PEEKY bar (it only shows/hides the Mac panel, so it doesn't need
+            // a hero tile), then a 2×2 grid of hero keys each two rows tall —
+            // ASK | DICTATE over CAPTURE | TALK — so the four mic/capture
+            // actions line up exactly.
+            let switchRows: CGFloat = 1.35
+            let rowH = (geo.size.height - topInset - gap * 5) / (5 + switchRows)
             let heroH = rowH * 2 + gap
             let heroW = (geo.size.width - gap) / 2
             VStack(spacing: gap) {
+                ScreenSwitch(count: client.screenCount, current: client.currentScreen) { n in
+                    client.screen(n)
+                    statusText = n == 2 ? "Peeky → Screen 2 (your monitor)" : "Peeky → Screen 1 (MacBook)"
+                }
+                .frame(width: geo.size.width, height: rowH * switchRows)
                 key("0", label: "PEEKY", icon: "sparkles", tint: Snes.purple, lit: true,
                     h: rowH, w: geo.size.width, banner: true)
                 HStack(alignment: .top, spacing: gap) {
@@ -1968,6 +1976,245 @@ struct NumpadView: View {
 }
 
 /// Super Nintendo palette.
+/// A rack-mount toggle for which display Peeky is on: a brushed-steel plate,
+/// "SCREEN 2" (the monitor) engraved above and "SCREEN 1" (the MacBook) below,
+/// and a red lever that snaps up or down with a heavy click. The lever draws
+/// itself from what the Mac reports, so dragging Peeky by hand on the Mac
+/// moves the lever too. With one display the lever is pinned down and greyed.
+struct ScreenSwitch: View {
+    let count: Int
+    /// 1-based display Peeky is on; 0 when the panel is hidden.
+    let current: Int
+    let onFlip: (Int) -> Void
+
+    /// Where the lever is drawn: -1 up (Screen 2), +1 down (Screen 1). While
+    /// the Mac hasn't said yet, or Peeky is hidden, it rests where it was.
+    @State private var lever: CGFloat = 1
+    @State private var pressed = false
+
+    private var enabled: Bool { count >= 2 }
+
+    var body: some View {
+        GeometryReader { geo in
+            let h = geo.size.height
+            let plateInset: CGFloat = 4
+            let bezel: CGFloat = min(h * 0.46, 64)
+            let travel = h * 0.19
+            ZStack {
+                plate
+                HStack(spacing: 0) {
+                    Spacer()
+                    engraving
+                    Spacer()
+                    ZStack {
+                        bezelView(size: bezel)
+                        leverView(length: h * 0.36, travel: travel)
+                    }
+                    .frame(width: bezel + 24)
+                    Spacer()
+                    lamps
+                    Spacer()
+                }
+                .padding(.horizontal, plateInset + 10)
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        guard enabled else { return }
+                        pressed = true
+                        // Follow the finger a little, so it feels like a real lever.
+                        let pull = max(-1, min(1, value.translation.height / (travel * 1.2)))
+                        lever = resting + pull * 0.6
+                    }
+                    .onEnded { value in
+                        pressed = false
+                        guard enabled else { snap(to: 1); return }
+                        let target: Int
+                        if abs(value.translation.height) > 10 {
+                            target = value.translation.height < 0 ? 2 : 1
+                        } else {
+                            // A tap flips to the other position.
+                            target = (current == 2) ? 1 : 2
+                        }
+                        UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
+                        snap(to: target == 2 ? -1 : 1)
+                        onFlip(target)
+                    }
+            )
+            .onAppear { snap(to: resting, animated: false) }
+            .onChange(of: current) { _, _ in snap(to: resting) }
+            .onChange(of: count) { _, _ in snap(to: resting) }
+            .opacity(enabled ? 1 : 0.55)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Screen switch")
+            .accessibilityValue(current == 2 ? "Screen 2, monitor" : "Screen 1, MacBook")
+            .accessibilityHint(enabled ? "Flips Peeky to the other display" : "Only one display is attached")
+        }
+    }
+
+    /// Where the lever belongs given what the Mac says.
+    private var resting: CGFloat {
+        guard enabled else { return 1 }
+        if current >= 2 { return -1 }
+        if current == 1 { return 1 }
+        return lever < 0 ? -1 : 1
+    }
+
+    private func snap(to value: CGFloat, animated: Bool = true) {
+        if animated {
+            withAnimation(.interpolatingSpring(mass: 0.6, stiffness: 420, damping: 18)) { lever = value }
+        } else {
+            lever = value
+        }
+    }
+
+    private var plate: some View {
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(
+                LinearGradient(colors: [Color(white: 0.70), Color(white: 0.56), Color(white: 0.66), Color(white: 0.52)],
+                               startPoint: .topLeading, endPoint: .bottomTrailing)
+            )
+            .overlay(
+                // Brushed grain.
+                Canvas { ctx, size in
+                    var y: CGFloat = 0
+                    var i = 0
+                    while y < size.height {
+                        let alpha = (i % 3 == 0) ? 0.10 : 0.05
+                        ctx.stroke(Path { p in p.move(to: CGPoint(x: 0, y: y)); p.addLine(to: CGPoint(x: size.width, y: y)) },
+                                   with: .color(.white.opacity(alpha)), lineWidth: 0.5)
+                        y += 2
+                        i += 1
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(LinearGradient(colors: [.white.opacity(0.55), .black.opacity(0.45)],
+                                                 startPoint: .top, endPoint: .bottom), lineWidth: 1.5)
+            )
+            .overlay(alignment: .topLeading) { screw.padding(7) }
+            .overlay(alignment: .topTrailing) { screw.padding(7) }
+            .overlay(alignment: .bottomLeading) { screw.padding(7) }
+            .overlay(alignment: .bottomTrailing) { screw.padding(7) }
+            .shadow(color: .black.opacity(0.5), radius: 3, y: 3)
+    }
+
+    private var screw: some View {
+        Circle()
+            .fill(RadialGradient(colors: [Color(white: 0.85), Color(white: 0.35)], center: .topLeading, startRadius: 0, endRadius: 7))
+            .frame(width: 8, height: 8)
+            .overlay(Image(systemName: "plus").font(.system(size: 5, weight: .black)).foregroundStyle(.black.opacity(0.6)))
+    }
+
+    private var engraving: some View {
+        VStack(alignment: .trailing, spacing: 0) {
+            engravedLabel("SCREEN 2", sub: "MONITOR", on: current == 2)
+            Spacer()
+            engravedLabel("SCREEN 1", sub: "MACBOOK", on: current == 1)
+        }
+        .padding(.vertical, 10)
+    }
+
+    private func engravedLabel(_ text: String, sub: String, on: Bool) -> some View {
+        VStack(alignment: .trailing, spacing: 1) {
+            Text(text)
+                .font(.system(size: 17, weight: .black, design: .monospaced))
+                .kerning(1.0)
+            Text(sub)
+                .font(.system(size: 8.5, weight: .bold, design: .monospaced))
+                .kerning(1.6)
+                .opacity(0.75)
+        }
+        .foregroundStyle(on && enabled ? Color.white : Color(white: 0.16))
+        .shadow(color: on && enabled ? .white.opacity(0.6) : .white.opacity(0.35), radius: on ? 3 : 0, y: on ? 0 : 1)
+        .animation(.easeInOut(duration: 0.2), value: on)
+    }
+
+    /// Two indicator lamps on the right: green ACTIVE on the chosen screen.
+    private var lamps: some View {
+        VStack(spacing: 0) {
+            lamp(on: current == 2)
+            Spacer()
+            lamp(on: current == 1)
+        }
+        .padding(.vertical, 14)
+    }
+
+    private func lamp(on: Bool) -> some View {
+        let lit = on && enabled
+        return Circle()
+            .fill(RadialGradient(colors: lit ? [Color(red: 0.55, green: 1, blue: 0.55), Color(red: 0.05, green: 0.65, blue: 0.2)]
+                                             : [Color(white: 0.30), Color(white: 0.12)],
+                                 center: .topLeading, startRadius: 0, endRadius: 8))
+            .frame(width: 11, height: 11)
+            .overlay(Circle().strokeBorder(Color.black.opacity(0.7), lineWidth: 1))
+            .shadow(color: lit ? Color.green.opacity(0.9) : .clear, radius: 6)
+            .animation(.easeInOut(duration: 0.2), value: lit)
+    }
+
+    private func bezelView(size: CGFloat) -> some View {
+        ZStack {
+            // Hex nut.
+            HexNut()
+                .fill(LinearGradient(colors: [Color(white: 0.80), Color(white: 0.40)], startPoint: .top, endPoint: .bottom))
+                .overlay(HexNut().stroke(Color.black.opacity(0.5), lineWidth: 1))
+                .frame(width: size, height: size)
+            // Threaded collar.
+            Circle()
+                .fill(RadialGradient(colors: [Color(white: 0.75), Color(white: 0.25)], center: .center, startRadius: size * 0.1, endRadius: size * 0.36))
+                .frame(width: size * 0.62, height: size * 0.62)
+                .overlay(Circle().strokeBorder(Color.black.opacity(0.6), lineWidth: 1))
+            // Socket hole.
+            Circle()
+                .fill(Color.black.opacity(0.85))
+                .frame(width: size * 0.30, height: size * 0.30)
+        }
+    }
+
+    private func leverView(length: CGFloat, travel: CGFloat) -> some View {
+        // A lever pivoting at the socket, drawn pointing straight up and
+        // rotated: lever -1 → 0° (up, Screen 2), +1 → 180° (down, Screen 1),
+        // with a few degrees of overshoot so it reads as leaning on its stop.
+        let angle = Angle(degrees: 90 + Double(lever) * 96)
+        let red = Color(red: 0.80, green: 0.16, blue: 0.12)
+        return ZStack(alignment: .top) {
+            Capsule()
+                .fill(LinearGradient(colors: [Color(white: 0.9), Color(white: 0.45)], startPoint: .leading, endPoint: .trailing))
+                .frame(width: 9, height: length * 0.55)
+                .offset(y: -length * 0.55)
+            Capsule()
+                .fill(LinearGradient(colors: [red.lighter(0.30), red, red.darker(0.25)], startPoint: .leading, endPoint: .trailing))
+                .overlay(Capsule().strokeBorder(Color.black.opacity(0.35), lineWidth: 1))
+                .frame(width: 20, height: length * 0.62)
+                .offset(y: -length * 1.05)
+                .shadow(color: .black.opacity(0.55), radius: 3, x: 2, y: 3)
+        }
+        .frame(width: 24, height: 1)
+        .rotationEffect(angle, anchor: .bottom)
+        .offset(y: pressed ? 1 : 0)
+        .scaleEffect(pressed ? 0.98 : 1, anchor: .bottom)
+    }
+}
+
+/// Six-sided nut, flat sides top and bottom.
+private struct HexNut: Shape {
+    func path(in rect: CGRect) -> Path {
+        let c = CGPoint(x: rect.midX, y: rect.midY)
+        let r = min(rect.width, rect.height) / 2
+        var p = Path()
+        for i in 0..<6 {
+            let a = CGFloat(i) * .pi / 3 + .pi / 6
+            let pt = CGPoint(x: c.x + r * cos(a), y: c.y + r * sin(a))
+            if i == 0 { p.move(to: pt) } else { p.addLine(to: pt) }
+        }
+        p.closeSubpath()
+        return p
+    }
+}
+
 enum Snes {
     static let body = Color(red: 0.72, green: 0.72, blue: 0.75)      // light grey plastic
     static let bodyLight = Color(red: 0.86, green: 0.86, blue: 0.88)
