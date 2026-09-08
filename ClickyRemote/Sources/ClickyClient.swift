@@ -171,6 +171,10 @@ final class ClickyClient: ObservableObject {
                             let text = String(line.dropFirst(7))
                             self.talkMessage = text
                             self.speak(text)
+                        } else if line.hasPrefix("STATUS_QUIET ") {
+                            // Shown, not spoken: dictation is in progress and
+                            // the mic would hear the phone talking.
+                            self.talkMessage = String(line.dropFirst(13))
                         } else if line.hasPrefix("READ ") {
                             let text = String(line.dropFirst(5))
                             self.talkMessage = text

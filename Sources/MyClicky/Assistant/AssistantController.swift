@@ -3212,7 +3212,7 @@ final class AssistantController {
         panel.state.status = .thinking
         panel.state.answer = "Changing it…"
         panel.state.errorText = nil
-        remote.broadcast("STATUS \(panel.state.answer)")
+        remote.broadcast("STATUS_QUIET \(panel.state.answer)")
         ActivityLog.recordAction("chatsite-revise", ["site": site.name])
 
         requestID += 1
@@ -3288,12 +3288,14 @@ final class AssistantController {
                        ok: true, speak: false)
     }
 
+    /// `speak` covers both the Mac's voice and the phone's: while dictating,
+    /// the mic is open, so a status is shown on the phone but not read out.
     private func finishChatSite(_ message: String, ok: Bool, speak: Bool) {
         hud.report(message, ok: ok)
         panel.state.status = .answering
         panel.state.answer = message
         panel.state.logTalk(ok ? .status : .error, message)
-        remote.broadcast("STATUS \(message)")
+        remote.broadcast("\(speak ? "STATUS" : "STATUS_QUIET") \(message)")
         if speak, !panel.state.textOnlyMode { self.speak(message) }
     }
 
