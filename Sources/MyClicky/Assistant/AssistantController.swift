@@ -169,7 +169,9 @@ final class AssistantController {
     /// from import to the closing script tag … (pause) … open Dino Dad's
     /// conversation … (pause) … send that to Dino Dad … STOP" runs as three
     /// commands, each starting the moment the user stops talking.
-    private var talkStreaming = false
+    private var talkStreaming = false {
+        didSet { panel.state.streaming = talkStreaming }
+    }
     private var streamQuestionsOnly = false
     private var streamTranscript = ""
     private var streamPauseTask: Task<Void, Never>?
