@@ -84,9 +84,9 @@ enum PanelSize: Int, CaseIterable, Comparable {
 enum AssistantTab: String, CaseIterable {
     /// Listed first so it's the leftmost tab: asking is what the panel is
     /// for most of the time.
-    case ask = "Peek Ask"
+    case ask = "Peeky Ask"
     /// Region captures and dictation share one tab; both land on the clipboard together.
-    case captureDictate = "Capture + Dictate"
+    case captureDictate = "Peeky Capture"
     /// Voice/typed commands Peeky *acts on* (e.g. "create a calendar event
     /// at 2pm"), same plan-and-do flow as the phone's TALK button.
     case talk = "Peeky Actions"
