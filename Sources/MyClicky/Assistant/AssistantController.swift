@@ -445,7 +445,7 @@ final class AssistantController {
         }
         remote.onSavePhoto = { [weak self] imageData in
             guard let self else { return }
-            self.toast.show("Saving photo to Desktop…", icon: "photo", tint: .yellow)
+            self.toast.show("Saving photo to VIRADETH_RESUME…", icon: "photo", tint: .yellow)
             PhotoSaveActions.save(imageData) { [weak self] message, ok in
                 self?.toast.show(message,
                                  icon: ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill",

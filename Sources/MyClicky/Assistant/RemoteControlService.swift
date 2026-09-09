@@ -48,7 +48,7 @@ import Network
 ///   WHATSAPP SEND_IN <chat>   – open the chat first, then as SEND
 ///   WHATSAPP PHOTO_IN <chat>\t<base64 JPEG> – open the chat, paste the photo into
 ///                    its compose box as an attachment (not sent; SEND sends it)
-///   SAVE_PHOTO <base64 JPEG> – write the photo straight to the Mac's Desktop,
+///   SAVE_PHOTO <base64 JPEG> – write the photo to Desktop/VIRADETH_RESUME on the Mac,
 ///                    no app relay needed
 ///   DO <utterance> – universal voice command: Claude plans and executes it
 ///                    step by step in whatever app is frontmost (or that it
