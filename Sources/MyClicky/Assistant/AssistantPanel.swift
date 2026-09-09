@@ -55,17 +55,20 @@ enum AssistantPhase: Equatable {
     }
 }
 
-/// The three card shapes. `half` is a narrow column — half the tall card's
+/// The four card shapes. `half` is a narrow column — half the tall card's
 /// width at its full height — for parking Peeky down one side of the
-/// screen next to what's being worked on. Tabs go icon-only to fit.
+/// screen next to what's being worked on. Tabs go icon-only to fit. `full`
+/// is the normal width run the whole height of the screen, for reading
+/// code and a long answer at once.
 enum PanelSize: Int, CaseIterable, Comparable {
-    case half, normal, tall
+    case half, normal, tall, full
     static func < (a: PanelSize, b: PanelSize) -> Bool { a.rawValue < b.rawValue }
     var symbol: String {
         switch self {
         case .half: return "rectangle.lefthalf.inset.filled"
         case .normal: return "rectangle.inset.filled"
         case .tall: return "rectangle.portrait.inset.filled"
+        case .full: return "rectangle.expand.vertical"
         }
     }
     var label: String {
@@ -73,6 +76,7 @@ enum PanelSize: Int, CaseIterable, Comparable {
         case .half: return "Half width — a tall column down one side"
         case .normal: return "Normal"
         case .tall: return "Tall — room for a long answer"
+        case .full: return "Full height — top to bottom of the screen"
         }
     }
 }
@@ -498,7 +502,7 @@ final class AssistantPanelController {
         let visible = screen.visibleFrame
         let size: NSSize
         if !panel.isVisible || wasSmall {
-            size = savedFrame?.size ?? Self.frameSize(for: state.size)
+            size = savedFrame?.size ?? Self.frameSize(for: state.size, on: screen)
         } else {
             size = panel.frame.size
         }
@@ -542,14 +546,17 @@ final class AssistantPanelController {
     private static let tallSize = NSSize(width: 960 + glowMargin * 2, height: 520 + glowMargin * 2)
     /// Half the tall card's width, at its full height.
     private static let halfSize = NSSize(width: 480 + glowMargin * 2, height: 520 + glowMargin * 2)
-    private static func frameSize(for size: PanelSize) -> NSSize {
+    private static func frameSize(for size: PanelSize, on screen: NSScreen?) -> NSSize {
         switch size {
         case .half: return halfSize
         case .normal: return expandedSize
         case .tall: return tallSize
+        case .full:
+            // As tall as the screen allows, never shorter than Tall.
+            let visible = (screen ?? NSScreen.main)?.visibleFrame.height ?? tallSize.height
+            return NSSize(width: expandedSize.width, height: max(tallSize.height, visible - 16))
         }
     }
-    private static func height(for size: PanelSize) -> CGFloat { frameSize(for: size).height }
     private static let collapsedSize = NSSize(width: 56, height: 56)
     private static let stripSize = NSSize(width: 420 + glowMargin * 2, height: 52 + glowMargin * 2)
     private static let minPanelSize = NSSize(width: 480 + glowMargin * 2, height: 160 + glowMargin * 2)
@@ -644,7 +651,7 @@ final class AssistantPanelController {
         state.size = size
         let screen = panel.screen ?? NSScreen.main
         let visible = screen?.visibleFrame ?? .zero
-        let target = Self.frameSize(for: size)
+        let target = Self.frameSize(for: size, on: screen)
         let height = target.height
         // Width only changes when entering or leaving the half column; the
         // other two keep whatever width the user dragged out. The right edge
@@ -672,8 +679,11 @@ final class AssistantPanelController {
             let f = panel.frame
             if f.width < (Self.halfSize.width + Self.expandedSize.width) / 2 {
                 state.size = .half
+            } else if f.height > (Self.expandedSize.height + Self.tallSize.height) / 2 {
+                let full = Self.frameSize(for: .full, on: panel.screen).height
+                state.size = f.height > (Self.tallSize.height + full) / 2 ? .full : .tall
             } else {
-                state.size = f.height > (Self.expandedSize.height + Self.tallSize.height) / 2 ? .tall : .normal
+                state.size = .normal
             }
             return
         }
