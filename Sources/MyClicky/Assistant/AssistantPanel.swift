@@ -1937,15 +1937,16 @@ struct AssistantPanelView: View {
                     } label: {
                         HStack(spacing: 5) {
                             Image(systemName: "chevron.right")
-                                .font(.system(size: 9, weight: .bold))
+                                .font(.system(size: 12, weight: .bold))
                                 .rotationEffect(.degrees(state.askAttachmentsCollapsed ? 0 : 90))
                             Image(systemName: "photo.on.rectangle.angled")
-                                .font(.system(size: 10, weight: .semibold))
+                                .font(.system(size: 14, weight: .semibold))
                             Text("\(state.askAttachments.count) of \(AssistantState.maxAskAttachments) \(state.askAttachments.count == 1 ? "image" : "images") attached — Peeky sees these with every question")
                                 .lineLimit(1)
+                                .minimumScaleFactor(0.75)
                         }
-                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.6))
+                        .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.72))
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -1955,8 +1956,12 @@ struct AssistantPanelView: View {
                         withAnimation(.easeInOut(duration: 0.18)) { state.askAttachments.removeAll() }
                     } label: {
                         Text("clear all")
-                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.45))
+                            .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.6))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(Capsule().fill(Color.white.opacity(0.07)))
+                            .overlay(Capsule().strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
                     }
                     .buttonStyle(.plain)
                     .help("Remove every attached image")
