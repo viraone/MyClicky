@@ -279,7 +279,7 @@ final class AssistantState: ObservableObject {
             if codeFocusedFile != nil { codeShowingFiles = false }
             // A freshly opened file is there to be read; the caret only
             // folds the one you're on.
-            if codeFocusedFile != nil, codeFocusedFile != oldValue { codeViewerCollapsed = false }
+            if codeFocusedFile != nil, codeFocusedFile != oldValue { codeViewerCollapsed = false; closeCodeFind() }
             codeDraft = codeFocusedFile.flatMap { codeCurrentText(of: $0) } ?? ""
         }
     }
