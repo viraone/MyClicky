@@ -500,7 +500,7 @@ final class AssistantController {
         guard let images = NSPasteboard.general.readObjects(forClasses: [NSImage.self], options: nil) as? [NSImage],
               !images.isEmpty else { return }
         let stamp = Self.pasteClock.string(from: Date())
-        let named = images.enumerated().map { ($0.element, images.count == 1 ? "pasted \(stamp).png" : "pasted \(stamp)-\($0.offset + 1).png") }
+        let named = images.enumerated().map { ($0.element, images.count == 1 ? "\(stamp).png" : "\(stamp)-\($0.offset + 1).png") }
         addCodeImages(named, via: "paste")
     }
 
