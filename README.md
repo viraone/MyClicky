@@ -128,7 +128,9 @@ buttons; when Claude gives a "current code" block followed by a
 "replacement" block, Apply swaps the first for the second in the file
 you're viewing (or rewrites the file when the block is a whole-file
 rewrite), and copies it to the clipboard when it can't find a place.
-**+ → Images for the question…** (or drop image files) attaches
+**+ → Images for the question…** (or drop image files, or just **⌘V** a
+picture off the clipboard — take a Peeky Capture, switch to the Code tab,
+paste) attaches
 screenshots or mockups by name — they go with every question until removed.
 The card's **Cost** pill is a running estimate of what code questions have
 spent, from the token counts each answer reports at Sonnet list prices;

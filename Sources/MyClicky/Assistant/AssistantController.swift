@@ -487,17 +487,39 @@ final class AssistantController {
     }
 
     private func addCodeImages(urls: [URL], via: String) {
+        let images = urls.compactMap { url -> (NSImage, String)? in
+            guard let image = NSImage(contentsOf: url) else { return nil }
+            return (image, url.lastPathComponent)
+        }
+        addCodeImages(images, via: via)
+    }
+
+    /// ⌘V on the Code tab with a picture on the clipboard — the usual case
+    /// is a Peeky Capture taken a moment ago.
+    private func pasteCodeImage() {
+        guard let images = NSPasteboard.general.readObjects(forClasses: [NSImage.self], options: nil) as? [NSImage],
+              !images.isEmpty else { return }
+        let stamp = Self.pasteClock.string(from: Date())
+        let named = images.enumerated().map { ($0.element, images.count == 1 ? "pasted \(stamp).png" : "pasted \(stamp)-\($0.offset + 1).png") }
+        addCodeImages(named, via: "paste")
+    }
+
+    private static let pasteClock: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH.mm.ss"
+        return f
+    }()
+
+    private func addCodeImages(_ images: [(NSImage, String)], via: String) {
         let room = AssistantState.maxCodeImages - panel.state.codeImages.count
         guard room > 0 else {
             hud.report("That's \(AssistantState.maxCodeImages) images — remove one to add another.", ok: false)
             return
         }
         var added = 0
-        for url in urls.prefix(room) {
-            if let image = NSImage(contentsOf: url), image.isValid, image.size.width > 0 {
-                panel.state.codeImages.append(AssistantState.AskAttachment(image: image, name: url.lastPathComponent))
-                added += 1
-            }
+        for (image, name) in images.prefix(room) where image.isValid && image.size.width > 0 {
+            panel.state.codeImages.append(AssistantState.AskAttachment(image: image, name: name))
+            added += 1
         }
         if added > 0 {
             panel.state.logCode(.status, "Attached \(added) image\(added == 1 ? "" : "s") — Peeky sees them with each question.")
@@ -646,6 +668,7 @@ final class AssistantController {
         panel.state.onDropIntoAsk = { [weak self] urls in self?.addAskAttachments(urls: urls, via: "drop") }
         panel.state.onDropIntoCode = { [weak self] urls in self?.dropIntoCode(urls: urls) }
         panel.state.onAttachCodeImages = { [weak self] in self?.attachImagesToCode() }
+        panel.state.onPasteCodeImage = { [weak self] in self?.pasteCodeImage() }
         panel.state.onSaveCodeFile = { [weak self] path, text in self?.saveCodeFile(path: path, text: text) }
         panel.state.onApplyCodeBlock = { [weak self] code, find in self?.applyCodeBlock(code, replacing: find) }
         panel.state.onAttachCodeProject = { [weak self] in self?.pickCodeProject() }

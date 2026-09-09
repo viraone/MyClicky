@@ -483,6 +483,7 @@ final class AssistantState: ObservableObject {
     var onDropIntoCode: (([URL]) -> Void)?
     var onAttachCodeProject: (() -> Void)?
     var onAttachCodeImages: (() -> Void)?
+    var onPasteCodeImage: (() -> Void)?
     /// Write `text` to the project file at `path` (relative to the root).
     var onSaveCodeFile: ((String, String) -> Void)?
     /// Put a code block from an answer into the focused file. `find` is the
@@ -825,6 +826,16 @@ final class AssistantPanelController {
             self.state.onStop?()
             return true
         }
+        panel.onPaste = { [weak self] in
+            guard let self, self.state.tab == .code else { return false }
+            let board = NSPasteboard.general
+            // Text on the clipboard means a normal paste into a field; only
+            // a bare image (a Capture, a screenshot) becomes an attachment.
+            guard board.string(forType: .string) == nil,
+                  board.canReadObject(forClasses: [NSImage.self], options: nil) else { return false }
+            self.state.onPasteCodeImage?()
+            return true
+        }
         // Track which display the panel lives on, including hand drags, so
         // the phone's screen switch can follow reality.
         NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification, object: panel, queue: .main) { [weak self] _ in
@@ -900,6 +911,18 @@ private final class KeyablePanel: NSPanel {
     override var canBecomeKey: Bool { true }
     /// Return true to consume Esc (e.g. to stop an in-flight answer) instead of closing.
     var onCancel: (() -> Bool)?
+    /// ⌘V anywhere in the panel. Return true to consume it (an image was
+    /// taken off the clipboard); false lets the focused field paste text.
+    var onPaste: (() -> Bool)?
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if flags == [.command], event.charactersIgnoringModifiers?.lowercased() == "v",
+           onPaste?() == true {
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
 
     override func cancelOperation(_ sender: Any?) {
         if onCancel?() == true { return }
