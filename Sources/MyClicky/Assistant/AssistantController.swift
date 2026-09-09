@@ -372,6 +372,54 @@ final class AssistantController {
         ActivityLog.recordAction("code-project-remove", [:])
     }
 
+    /// Dropped on the Code tab: image files become question attachments,
+    /// anything else is the project.
+    private func dropIntoCode(urls: [URL]) {
+        let images = urls.filter { url in
+            !((try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false)
+                && (UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) ?? false)
+        }
+        if !images.isEmpty { addCodeImages(urls: images, via: "drop") }
+        let rest = urls.filter { !images.contains($0) }
+        if !rest.isEmpty { loadCodeProject(urls: rest, via: "drop") }
+    }
+
+    private func attachImagesToCode() {
+        let open = NSOpenPanel()
+        open.title = "Images for your code question"
+        open.message = "Screenshots, mockups, error dialogs — up to \(AssistantState.maxCodeImages), sent with every question until removed."
+        open.prompt = "Attach"
+        open.canChooseFiles = true
+        open.canChooseDirectories = false
+        open.allowsMultipleSelection = true
+        open.allowedContentTypes = [.image]
+        open.level = .floating
+        NSApp.activate(ignoringOtherApps: true)
+        open.begin { [weak self] response in
+            guard response == .OK, let self else { return }
+            self.addCodeImages(urls: open.urls, via: "picker")
+        }
+    }
+
+    private func addCodeImages(urls: [URL], via: String) {
+        let room = AssistantState.maxCodeImages - panel.state.codeImages.count
+        guard room > 0 else {
+            hud.report("That's \(AssistantState.maxCodeImages) images — remove one to add another.", ok: false)
+            return
+        }
+        var added = 0
+        for url in urls.prefix(room) {
+            if let image = NSImage(contentsOf: url), image.isValid, image.size.width > 0 {
+                panel.state.codeImages.append(AssistantState.AskAttachment(image: image, name: url.lastPathComponent))
+                added += 1
+            }
+        }
+        if added > 0 {
+            panel.state.logCode(.status, "Attached \(added) image\(added == 1 ? "" : "s") — Peeky sees them with each question.")
+        }
+        ActivityLog.recordAction("code-attach-image", ["via": via, "added": "\(added)"])
+    }
+
     private func handleCodeQuestion(_ question: String) {
         let question = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty, !busy else { return }
@@ -386,6 +434,9 @@ final class AssistantController {
         ActivityLog.recordAction("code-ask", ["text": question, "files": "\(project.files.count)"])
         let history = panel.state.codeHistory
         let focusedFile = panel.state.codeFocusedFile
+        let images = panel.state.codeImages.compactMap { item in
+            Self.jpegData(item.image, maxDimension: 1400).map { (name: item.name, jpeg: $0) }
+        }
         panel.state.logCode(.question, question)
         busy = true
         synthesizer.stopSpeaking(at: .immediate)
@@ -405,7 +456,7 @@ final class AssistantController {
             do {
                 let claude = AnthropicService(apiKey: apiKey)
                 let answer = try await claude.askAboutCode(question: question, project: project,
-                                                           focusedFile: focusedFile,
+                                                           focusedFile: focusedFile, images: images,
                                                            history: history) { [weak self] status in
                     guard let self, id == self.requestID else { return }
                     self.panel.state.logCode(.status, status)
@@ -416,6 +467,7 @@ final class AssistantController {
                 panel.state.codeUsage = answer.usage
                 panel.state.logCode(.answer, answer.text)
                 if let usage = answer.usage {
+                    panel.state.codeSpentUSD += usage.costUSD
                     ActivityLog.recordAction("code-answer", ["cache_read": "\(usage.cacheRead)",
                                                              "cache_write": "\(usage.cacheWrite)",
                                                              "input": "\(usage.input)", "output": "\(usage.output)"])
@@ -504,7 +556,8 @@ final class AssistantController {
             ActivityLog.recordAction("ask-history-clear", [:])
         }
         panel.state.onDropIntoAsk = { [weak self] urls in self?.addAskAttachments(urls: urls, via: "drop") }
-        panel.state.onDropIntoCode = { [weak self] urls in self?.loadCodeProject(urls: urls, via: "drop") }
+        panel.state.onDropIntoCode = { [weak self] urls in self?.dropIntoCode(urls: urls) }
+        panel.state.onAttachCodeImages = { [weak self] in self?.attachImagesToCode() }
         panel.state.onAttachCodeProject = { [weak self] in self?.pickCodeProject() }
         panel.state.onReloadCodeProject = { [weak self] in self?.reloadCodeProject() }
         panel.state.onRemoveCodeProject = { [weak self] in self?.removeCodeProject() }

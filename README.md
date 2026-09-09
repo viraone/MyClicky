@@ -115,6 +115,14 @@ question re-primes the cache). Projects over ~170K tokens are cut off with a
 warning; drop a subfolder instead. `.env`, keys and certificates are never
 bundled.
 
+Click the project card to browse its files and click one to preview it
+(the caret on the preview folds it away); questions are then about that
+file. **+ → Images for the question…** (or drop image files) attaches
+screenshots or mockups by name — they go with every question until removed.
+The card's **Cost** pill is a running estimate of what code questions have
+spent, from the token counts each answer reports at Sonnet list prices;
+the Claude console has the actual bill.
+
 ## Peeky Remote (iOS app)
 
 `ClickyRemote/` is a companion iPhone numpad app (open `ClickyRemote.xcodeproj`

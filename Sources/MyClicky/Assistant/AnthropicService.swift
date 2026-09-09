@@ -240,6 +240,13 @@ struct AnthropicService {
         /// read fresh — the cheap path.
         var hitCache: Bool { cacheRead > 0 }
 
+        /// Sonnet list prices per million tokens: input $3, cache write
+        /// $3.75, cache read $0.30, output $15. An estimate — the console's
+        /// number is the bill.
+        var costUSD: Double {
+            (Double(input) * 3 + Double(cacheWrite) * 3.75 + Double(cacheRead) * 0.30 + Double(output) * 15) / 1_000_000
+        }
+
         static func parse(_ data: Data) -> Usage? {
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let usage = json["usage"] as? [String: Any] else { return nil }
@@ -289,6 +296,7 @@ struct AnthropicService {
     /// cache (~5-minute window, refreshed on every use) for a tenth of the
     /// input price. Only the conversation below it is billed in full.
     func askAboutCode(question: String, project: CodeProject, focusedFile: String? = nil,
+                      images: [(name: String, jpeg: Data)] = [],
                       history: [(question: String, answer: String)],
                       onStatus: (@Sendable @MainActor (String) -> Void)? = nil) async throws -> CodeAnswer {
         var messages: [[String: Any]] = []
@@ -296,17 +304,23 @@ struct AnthropicService {
             messages.append(["role": "user", "content": turn.question])
             messages.append(["role": "assistant", "content": turn.answer])
         }
-        // The open file is a hint on the question, never part of the cached
-        // project block — so focusing a file costs a line, not a cache miss.
+        // The open file and any pictures are hints on the question, never
+        // part of the cached project block — so they cost a little, not a
+        // cache miss.
+        var content: [[String: Any]] = []
         if let focusedFile {
-            messages.append(["role": "user", "content": [
-                ["type": "text", "text": "(The user has \(focusedFile) open in front of them right now. "
-                    + "Their question is about that file unless they say otherwise.)"],
-                ["type": "text", "text": question],
-            ]])
-        } else {
-            messages.append(["role": "user", "content": question])
+            content.append(["type": "text", "text": "(The user has \(focusedFile) open in front of them right now. "
+                + "Their question is about that file unless they say otherwise.)"])
         }
+        for image in images {
+            content.append(["type": "text", "text": "Image attached by the user: \(image.name)"])
+            content.append(["type": "image", "source": [
+                "type": "base64", "media_type": "image/jpeg",
+                "data": image.jpeg.base64EncodedString(),
+            ]])
+        }
+        content.append(["type": "text", "text": question])
+        messages.append(["role": "user", "content": content.count == 1 ? question : content])
 
         let body: [String: Any] = [
             "model": model,

@@ -95,4 +95,13 @@ final class CodeProjectBundlerTests: XCTestCase {
         XCTAssertEqual(usage.cacheRead, 38000)
         XCTAssertEqual(usage.input, 120)
     }
+
+    func testUsageCostUsesSonnetRates() {
+        // 1M of each: $3 + $0.30 + $3.75 + $15.
+        let usage = AnthropicService.Usage(input: 1_000_000, cacheRead: 1_000_000,
+                                           cacheWrite: 1_000_000, output: 1_000_000)
+        XCTAssertEqual(usage.costUSD, 22.05, accuracy: 0.0001)
+        let cached = AnthropicService.Usage(input: 0, cacheRead: 50_000, cacheWrite: 0, output: 1_000)
+        XCTAssertEqual(cached.costUSD, 0.015 + 0.015, accuracy: 0.0001)
+    }
 }

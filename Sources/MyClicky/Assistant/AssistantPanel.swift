@@ -265,6 +265,18 @@ final class AssistantState: ObservableObject {
     @Published var codeFocusedFile: String? {
         didSet { if codeFocusedFile != nil { codeShowingFiles = false } }
     }
+    /// The file preview is folded down to its header row.
+    @Published var codeViewerCollapsed = false
+    /// Pictures (screenshots, mockups, error dialogs) that ride along with
+    /// every code question until removed. Listed by name only.
+    @Published var codeImages: [AskAttachment] = []
+    static let maxCodeImages = 5
+    /// Estimated dollars spent on code questions since install, from the
+    /// token counts each answer reports. Persisted so it survives relaunch.
+    @Published var codeSpentUSD: Double = UserDefaults.standard.double(forKey: codeSpentKey) {
+        didSet { UserDefaults.standard.set(codeSpentUSD, forKey: Self.codeSpentKey) }
+    }
+    static let codeSpentKey = "peeky.code.spentUSD"
 
     func logCode(_ kind: CodeLogEntry.Kind, _ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -421,6 +433,7 @@ final class AssistantState: ObservableObject {
     /// re-reading it from disk after edits, letting it go, and asking.
     var onDropIntoCode: (([URL]) -> Void)?
     var onAttachCodeProject: (() -> Void)?
+    var onAttachCodeImages: (() -> Void)?
     var onReloadCodeProject: (() -> Void)?
     var onRemoveCodeProject: (() -> Void)?
     var onAskCode: ((String) -> Void)?
@@ -1033,6 +1046,7 @@ struct AssistantPanelView: View {
                     captureDictateTab
                 case .code:
                     topInputRow
+                    if !state.codeImages.isEmpty { codeImagesRow }
                     codeProjectCard
                     if state.codeShowingFiles, let project = state.codeProject {
                         codeFileList(project)
@@ -1834,6 +1848,17 @@ struct AssistantPanelView: View {
                 .foregroundStyle(.white.opacity(0.5))
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
+                .overlay(alignment: .trailing) {
+                    if state.codeSpentUSD > 0 {
+                        Text("Cost: \(codeCostString(state.codeSpentUSD))")
+                            .font(.system(size: 12, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.7))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(Color.white.opacity(0.08)))
+                            .help("Estimated from the tokens each answer reported, at Sonnet list prices (cache reads at a tenth). Running total since install.")
+                    }
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
@@ -1948,27 +1973,97 @@ struct AssistantPanelView: View {
         // once it passes the ~16K px layer limit on big files.
         let lines = file.text.components(separatedBy: "\n")
         let gutter = CGFloat(max(2, String(lines.count).count)) * 8 + 6
-        return ScrollView(.vertical) {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(lines.indices, id: \.self) { index in
-                    HStack(alignment: .top, spacing: 8) {
-                        Text("\(index + 1)")
-                            .foregroundStyle(.white.opacity(0.3))
-                            .frame(width: gutter, alignment: .trailing)
-                        Text(lines[index].isEmpty ? " " : lines[index])
-                            .foregroundStyle(.white.opacity(0.9))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .font(.system(size: 12.5, design: .monospaced))
-                    .padding(.vertical, 1)
+        return VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) { state.codeViewerCollapsed.toggle() }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .rotationEffect(.degrees(state.codeViewerCollapsed ? 0 : 90))
+                    Text((file.path as NSString).lastPathComponent)
+                        .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.8))
+                    Text("\(lines.count) lines")
+                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.4))
+                    Spacer(minLength: 0)
                 }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .contentShape(Rectangle())
             }
-            .padding(10)
+            .buttonStyle(.plain)
+            .help(state.codeViewerCollapsed ? "Show the file" : "Collapse the file preview")
+            if !state.codeViewerCollapsed {
+                ScrollView(.vertical) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(lines.indices, id: \.self) { index in
+                            HStack(alignment: .top, spacing: 8) {
+                                Text("\(index + 1)")
+                                    .foregroundStyle(.white.opacity(0.3))
+                                    .frame(width: gutter, alignment: .trailing)
+                                Text(lines[index].isEmpty ? " " : lines[index])
+                                    .foregroundStyle(.white.opacity(0.9))
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .font(.system(size: 12.5, design: .monospaced))
+                            .padding(.vertical, 1)
+                        }
+                    }
+                    .padding([.horizontal, .bottom], 10)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(maxWidth: .infinity)
         .background(codeCardBackground)
         .id(file.path)
+    }
+
+    /// Pictures attached to the code question, by name only — the code is
+    /// the main thing on this tab, so no thumbnails.
+    private var codeImagesRow: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "photo")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(.white.opacity(0.5))
+            ForEach(state.codeImages) { item in
+                HStack(spacing: 4) {
+                    Text(item.name)
+                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: 220)
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            state.codeImages.removeAll { $0.id == item.id }
+                        }
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.6))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Remove this image")
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(Color.white.opacity(0.08)))
+            }
+            Spacer(minLength: 0)
+            Text("sent with every question")
+                .font(.system(size: 11.5, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.35))
+        }
+        .padding(.horizontal, 4)
+    }
+
+    private func codeCostString(_ usd: Double) -> String {
+        usd < 0.01 ? String(format: "$%.3f", usd) : String(format: "$%.2f", usd)
     }
 
     private func codeCardButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
@@ -2399,6 +2494,13 @@ struct AssistantPanelView: View {
             folder.target = pick
             actions.append(pick)
             menu.addItem(folder)
+            let images = NSMenuItem(title: "Images for the question…", action: #selector(MenuAction.fire), keyEquivalent: "")
+            images.image = NSImage(systemSymbolName: "photo.on.rectangle", accessibilityDescription: nil)
+            images.isEnabled = state.codeImages.count < AssistantState.maxCodeImages
+            let imagesAction = MenuAction { state.onAttachCodeImages?() }
+            images.target = imagesAction
+            actions.append(imagesAction)
+            menu.addItem(images)
             if state.codeProject != nil {
                 let reload = NSMenuItem(title: "Re-read from disk", action: #selector(MenuAction.fire), keyEquivalent: "")
                 reload.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: nil)
