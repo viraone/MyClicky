@@ -128,6 +128,17 @@ buttons; when Claude gives a "current code" block followed by a
 "replacement" block, Apply swaps the first for the second in the file
 you're viewing (or rewrites the file when the block is a whole-file
 rewrite), and copies it to the clipboard when it can't find a place.
+
+**▶ Run** appears on the project card when the folder holds an
+`.xcodeproj` or `.xcworkspace`. It runs `xcodebuild` for the iOS Simulator
+(a booted iPhone if there is one, else the newest plain iPhone), then
+`simctl` boot / install / launch — Xcode's ⌘R without Xcode, all local and
+free. The full output streams into the Terminal tab; under the card you see
+just "Building… 23 s" → "✓ Build succeeded · launched on iPhone 17", or the
+compiler's errors as rows. Click a row: the file opens at that line and
+the question box is pre-filled with "Build error at File.swift:42: … Fix
+it." — you press ↩ (that's the only Claude call), **Apply**, ▶ **Run**
+again.
 ### Terminal
 
 The **Terminal** tab is a real shell (your login shell, via SwiftTerm)

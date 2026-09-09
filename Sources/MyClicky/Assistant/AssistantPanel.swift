@@ -307,6 +307,21 @@ final class AssistantState: ObservableObject {
     /// When the focused file was last written to disk, for the header.
     @Published var codeLastSaved: Date?
 
+    // MARK: Run in Simulator
+    /// The Xcode project/workspace inside the loaded folder, if any — shows ▶ Run.
+    var codeXcodeContainer: URL? { codeProject.flatMap { XcodeRunner.container(in: $0.root) } }
+    @Published var codeRunPhase: XcodeRunner.Phase = .idle
+    @Published var codeBuildErrors: [XcodeRunner.BuildError] = []
+    /// Set by an error row; the editor scrolls there once the file is open.
+    @Published var codeJumpToLine: Int?
+    /// Text the bottom question box should adopt (an error row filled it in).
+    @Published var codePrefillQuestion: String?
+    var onRunCode: (() -> Void)?
+    var onCancelRun: (() -> Void)?
+    var codeRunning: Bool {
+        switch codeRunPhase { case .building, .installing: return true; default: return false }
+    }
+
     // MARK: Code find bar
     @Published var codeFindVisible = false
     @Published var codeFindQuery = "" { didSet { if codeFindQuery != oldValue { codeFindIndex = 0 } } }
@@ -1223,6 +1238,7 @@ struct AssistantPanelView: View {
                 case .code:
                     if !state.codeImages.isEmpty { codeImagesRow }
                     codeProjectCard
+                    if state.codeRunPhase != .idle || !state.codeBuildErrors.isEmpty { codeRunStrip }
                     if state.codeShowingFiles, let project = state.codeProject {
                         codeFileList(project)
                     } else if let path = state.codeFocusedFile, let file = state.codeProject?.file(at: path) {
@@ -1992,6 +2008,7 @@ struct AssistantPanelView: View {
                           : state.codeShowingFiles ? "Hide the file list" : "Show every file in the project")
                     Spacer(minLength: 0)
                     if let path = state.codeFocusedFile {
+                        if state.codeXcodeContainer != nil { codeRunButton }
                         codeCardButton("arrow.up.forward.app", help: "Open this file in your editor") {
                             NSWorkspace.shared.open(project.root.appendingPathComponent(path))
                         }
@@ -1999,6 +2016,7 @@ struct AssistantPanelView: View {
                             withAnimation(.easeInOut(duration: 0.18)) { state.codeFocusedFile = nil }
                         }
                     } else {
+                        if state.codeXcodeContainer != nil { codeRunButton }
                         codeCardButton("arrow.clockwise", help: "Re-read the project from disk (after editing files)") {
                             state.onReloadCodeProject?()
                         }
@@ -2076,6 +2094,119 @@ struct AssistantPanelView: View {
                     .foregroundStyle(Color.white.opacity(0.18))
             )
         }
+    }
+
+    /// ▶ on the project card: build and launch in the Simulator. Turns
+    /// into ■ while a build is running.
+    private var codeRunButton: some View {
+        Button {
+            if state.codeRunning { state.onCancelRun?() } else { state.onRunCode?() }
+        } label: {
+            HStack(spacing: 5) {
+                if state.codeRunning {
+                    ProgressView().controlSize(.mini)
+                    Image(systemName: "stop.fill").font(.system(size: 9, weight: .bold))
+                } else {
+                    Image(systemName: "play.fill").font(.system(size: 10, weight: .bold))
+                    Text("Run")
+                }
+            }
+            .font(.system(size: 12, weight: .bold, design: .monospaced))
+            .foregroundStyle(state.codeRunning ? .white.opacity(0.8) : AssistantPhase.done.color)
+            .padding(.horizontal, 9)
+            .frame(height: 24)
+            .background(Capsule().fill((state.codeRunning ? Color.white : AssistantPhase.done.color).opacity(0.12)))
+            .overlay(Capsule().strokeBorder((state.codeRunning ? Color.white : AssistantPhase.done.color).opacity(0.3), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .help(state.codeRunning ? "Stop the build" : "Build and run in the iOS Simulator (xcodebuild + simctl, on this Mac — free)")
+    }
+
+    /// One line of build status, and the compiler's problems as clickable rows.
+    private var codeRunStrip: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                switch state.codeRunPhase {
+                case .idle:
+                    EmptyView()
+                case .building(let started):
+                    ProgressView().controlSize(.small)
+                    TimelineView(.periodic(from: started, by: 1)) { ctx in
+                        Text("Building… \(Int(ctx.date.timeIntervalSince(started))) s")
+                    }
+                    .foregroundStyle(.white.opacity(0.7))
+                case .installing:
+                    ProgressView().controlSize(.small)
+                    Text("Built — installing on the Simulator…").foregroundStyle(.white.opacity(0.7))
+                case .succeeded(let device, let seconds):
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(AssistantPhase.done.color)
+                    Text("Build succeeded · launched on \(device) · \(seconds) s").foregroundStyle(AssistantPhase.done.color)
+                case .failed(let errors, let seconds):
+                    Image(systemName: "xmark.octagon.fill").foregroundStyle(.red)
+                    Text("Build failed · \(errors) error\(errors == 1 ? "" : "s") · \(seconds) s — click one to ask Peeky").foregroundStyle(.red.opacity(0.9))
+                case .cancelled:
+                    Image(systemName: "stop.circle").foregroundStyle(.white.opacity(0.5))
+                    Text("Build stopped").foregroundStyle(.white.opacity(0.5))
+                }
+                Spacer(minLength: 0)
+                if !state.codeRunning {
+                    Button {
+                        state.codeRunPhase = .idle
+                        state.codeBuildErrors = []
+                    } label: {
+                        Image(systemName: "xmark").font(.system(size: 10, weight: .bold)).foregroundStyle(.white.opacity(0.5))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Hide")
+                }
+            }
+            .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
+            if !state.codeBuildErrors.isEmpty {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(state.codeBuildErrors.prefix(30)) { err in codeErrorRow(err) }
+                    }
+                }
+                .frame(maxHeight: 132)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(codeCardBackground)
+    }
+
+    private func codeErrorRow(_ err: XcodeRunner.BuildError) -> some View {
+        Button {
+            guard !err.isWarning || true else { return }
+            if !err.file.isEmpty, state.codeProject?.file(at: err.file) != nil {
+                state.codeFocusedFile = err.file
+                state.codeJumpToLine = err.line
+            }
+            let place = err.file.isEmpty ? "" : " at \((err.file as NSString).lastPathComponent):\(err.line)"
+            state.codePrefillQuestion = "Build \(err.isWarning ? "warning" : "error")\(place): \(err.message). Fix it."
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: err.isWarning ? "exclamationmark.triangle.fill" : "xmark.circle.fill")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(err.isWarning ? .orange : .red)
+                if !err.file.isEmpty {
+                    Text("\((err.file as NSString).lastPathComponent):\(err.line)")
+                        .fontWeight(.bold)
+                        .foregroundStyle(.white.opacity(0.85))
+                }
+                Text(err.message)
+                    .foregroundStyle(.white.opacity(0.7))
+                    .lineLimit(2)
+                Spacer(minLength: 0)
+            }
+            .font(.system(size: 12, design: .monospaced))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(err.file.isEmpty ? "Ask Peeky about this" : "Open \(err.file) at line \(err.line) and ask Peeky to fix it")
     }
 
     private var codeCardBackground: some View {
@@ -2195,7 +2326,9 @@ struct AssistantPanelView: View {
                                current: state.codeFindMatches.isEmpty ? nil : state.codeFindMatches[min(state.codeFindIndex, state.codeFindMatches.count - 1)],
                                onFind: { state.codeFindVisible = true; state.codeFindFocusRequest += 1 },
                                onEscape: { state.closeCodeFind() },
-                               language: SyntaxHighlighter.language(for: file.path))
+                               language: SyntaxHighlighter.language(for: file.path),
+                               jumpToLine: state.codeJumpToLine,
+                               onDidJump: { state.codeJumpToLine = nil })
                     .padding(.horizontal, 6)
                     .padding(.bottom, 6)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -2773,6 +2906,12 @@ struct AssistantPanelView: View {
             TextField("", text: $typedQuestion, axis: .vertical)
                 .textFieldStyle(.plain)
                 .lineLimit(1...8)
+                .onChange(of: state.codePrefillQuestion) { text in
+                    guard let text else { return }
+                    typedQuestion = text
+                    fieldFocused = true
+                    state.codePrefillQuestion = nil
+                }
                 .font(.system(size: 14, weight: .medium, design: .monospaced))
                 .foregroundStyle(.white)
                 .focused($fieldFocused)

@@ -162,3 +162,29 @@ final class CodeProjectBundlerTests: XCTestCase {
         XCTAssertEqual(SyntaxHighlighter.language(for: "README"), .other)
     }
 }
+
+@MainActor
+final class XcodeRunnerParseTests: XCTestCase {
+    func testParsesDiagnosticsRelativeToRoot() {
+        let root = URL(fileURLWithPath: "/Users/me/App")
+        let log = """
+        CompileSwift normal arm64
+        /Users/me/App/App/ContentView.swift:42:9: error: cannot find 'foo' in scope
+                foo()
+        /Users/me/App/App/ContentView.swift:42:9: error: cannot find 'foo' in scope
+        /Users/me/App/App/Model.swift:7:5: warning: variable 'x' was never used
+        error: linker command failed with exit code 1
+        ** BUILD FAILED **
+        """
+        let errs = XcodeRunner.parseErrors(log, root: root)
+        XCTAssertEqual(errs.count, 3)
+        XCTAssertEqual(errs[0].file, "App/ContentView.swift")
+        XCTAssertEqual(errs[0].line, 42)
+        XCTAssertEqual(errs[0].message, "cannot find 'foo' in scope")
+        XCTAssertFalse(errs[0].isWarning)
+        XCTAssertEqual(errs[1].file, "")
+        XCTAssertEqual(errs[1].message, "linker command failed with exit code 1")
+        XCTAssertTrue(errs[2].isWarning)
+        XCTAssertEqual(errs[2].file, "App/Model.swift")
+    }
+}

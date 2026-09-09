@@ -12,6 +12,9 @@ struct CodeTextEditor: NSViewRepresentable {
     var onFind: (() -> Void)?
     var onEscape: (() -> Void)?
     var language: SyntaxHighlighter.Language = .other
+    /// Scroll to and select this 1-based line once, then call `onDidJump`.
+    var jumpToLine: Int?
+    var onDidJump: (() -> Void)?
     var font: NSFont = .monospacedSystemFont(ofSize: 12.5, weight: .regular)
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -86,6 +89,19 @@ struct CodeTextEditor: NSViewRepresentable {
         }
         context.coordinator.language = language
         applyHighlights(to: textView, coordinator: context.coordinator)
+        if let line = jumpToLine, line > 0 {
+            let ns = textView.string as NSString
+            var index = 0, current = 1
+            while current < line, index < ns.length {
+                let r = ns.lineRange(for: NSRange(location: index, length: 0))
+                index = NSMaxRange(r); current += 1
+            }
+            let range = ns.lineRange(for: NSRange(location: min(index, max(ns.length - 1, 0)), length: 0))
+            textView.setSelectedRange(range)
+            textView.scrollRangeToVisible(range)
+            textView.window?.makeFirstResponder(textView)
+            DispatchQueue.main.async { onDidJump?() }
+        }
     }
 
     fileprivate func applyHighlights(to textView: NSTextView, coordinator: Coordinator) {

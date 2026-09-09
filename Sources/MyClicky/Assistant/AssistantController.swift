@@ -380,6 +380,43 @@ final class AssistantController {
         ActivityLog.recordAction("code-project-remove", [:])
     }
 
+    // MARK: Peeky Code — run in Simulator
+
+    private let xcodeRunner = XcodeRunner()
+
+    /// ▶ Run: xcodebuild + simctl, output mirrored to the Terminal tab,
+    /// problems parsed into clickable rows. No Claude call anywhere.
+    private func runCodeInSimulator() {
+        guard let project = panel.state.codeProject,
+              let container = XcodeRunner.container(in: project.root),
+              !panel.state.codeRunning else { return }
+        panel.state.codeBuildErrors = []
+        // Make sure edits in the preview are on disk before the compiler reads them.
+        if panel.state.codeDraftDirty, let path = panel.state.codeFocusedFile {
+            saveCodeFile(path: path, text: panel.state.codeDraft)
+        }
+        ActivityLog.recordAction("code-run", ["project": project.name])
+        let term = panel.state.terminal
+        term.start(in: project.root)
+        term.view.feed(text: "\r\n\u{1b}[2m── Peeky ▶ Run: \(container.lastPathComponent) ──\u{1b}[0m\r\n")
+        Task { @MainActor in
+            await xcodeRunner.run(root: project.root, container: container,
+                                  onPhase: { [weak self] phase in
+                                      guard let self, self.panel.state.codeRunPhase != .cancelled else { return }
+                                      self.panel.state.codeRunPhase = phase
+                                      switch phase {
+                                      case .succeeded(let device, let seconds):
+                                          self.panel.state.logCode(.status, "Build succeeded — running on \(device) (\(seconds) s).")
+                                      case .failed(let errors, _):
+                                          self.panel.state.logCode(.error, "Build failed with \(errors) error\(errors == 1 ? "" : "s") — click one above to ask Peeky.")
+                                      default: break
+                                      }
+                                  },
+                                  onErrors: { [weak self] errors in self?.panel.state.codeBuildErrors = errors },
+                                  onOutput: { line in term.view.feed(text: line + "\r\n") })
+        }
+    }
+
     // MARK: Peeky Code — editing
 
     /// Writes an edit to disk. The project snapshot Claude has cached is
@@ -669,6 +706,11 @@ final class AssistantController {
         panel.state.onDropIntoCode = { [weak self] urls in self?.dropIntoCode(urls: urls) }
         panel.state.onAttachCodeImages = { [weak self] in self?.attachImagesToCode() }
         panel.state.onPasteCodeImage = { [weak self] in self?.pasteCodeImage() }
+        panel.state.onRunCode = { [weak self] in self?.runCodeInSimulator() }
+        panel.state.onCancelRun = { [weak self] in
+            self?.xcodeRunner.cancel()
+            self?.panel.state.codeRunPhase = .cancelled
+        }
         panel.state.onRestartTerminal = { [weak self] in
             guard let self else { return }
             // Same folder and still running → no-op, so onAppear is safe.
