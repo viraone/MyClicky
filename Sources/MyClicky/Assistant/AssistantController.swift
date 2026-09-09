@@ -350,6 +350,7 @@ final class AssistantController {
                 line += " Too big to send whole: \(project.skippedFiles.count) files left out — drop a subfolder for those."
             }
             panel.state.logCode(.status, line)
+            refreshLiveCost()
             ActivityLog.recordAction("code-project", ["via": via, "files": "\(project.files.count)",
                                                       "tokens": "\(project.estimatedTokens)",
                                                       "truncated": project.truncated ? "1" : "0"])
@@ -370,6 +371,24 @@ final class AssistantController {
         panel.state.codeFocusedFile = nil
         panel.state.codeShowingFiles = false
         ActivityLog.recordAction("code-project-remove", [:])
+    }
+
+    private var lastCostFetch: Date = .distantPast
+
+    /// Pulls the real month-to-date spend if an Admin key is in Keychain.
+    /// Free to call, but throttled: the report only moves once a day.
+    private func refreshLiveCost(force: Bool = false) {
+        guard let adminKey = KeychainService.anthropicAdminKey(), !adminKey.isEmpty else { return }
+        guard force || Date().timeIntervalSince(lastCostFetch) > 60 else { return }
+        lastCostFetch = Date()
+        Task { [weak self] in
+            do {
+                let usd = try await AnthropicService.fetchMonthToDateCostUSD(adminKey: adminKey)
+                self?.panel.state.codeLiveCostUSD = usd
+            } catch {
+                log.notice("live cost fetch failed: \(error.localizedDescription)")
+            }
+        }
     }
 
     /// Dropped on the Code tab: image files become question attachments,
@@ -468,6 +487,7 @@ final class AssistantController {
                 panel.state.logCode(.answer, answer.text)
                 if let usage = answer.usage {
                     panel.state.codeSpentUSD += usage.costUSD
+                    refreshLiveCost()
                     ActivityLog.recordAction("code-answer", ["cache_read": "\(usage.cacheRead)",
                                                              "cache_write": "\(usage.cacheWrite)",
                                                              "input": "\(usage.input)", "output": "\(usage.output)"])

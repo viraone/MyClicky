@@ -277,6 +277,9 @@ final class AssistantState: ObservableObject {
         didSet { UserDefaults.standard.set(codeSpentUSD, forKey: Self.codeSpentKey) }
     }
     static let codeSpentKey = "peeky.code.spentUSD"
+    /// Real month-to-date spend from the Admin API, nil without an admin key
+    /// or before the first fetch. When present it replaces the estimate.
+    @Published var codeLiveCostUSD: Double?
 
     func logCode(_ kind: CodeLogEntry.Kind, _ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1849,14 +1852,22 @@ struct AssistantPanelView: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
                 .overlay(alignment: .trailing) {
-                    if state.codeSpentUSD > 0 {
+                    if let live = state.codeLiveCostUSD {
+                        Text("Cost: \(codeCostString(live)) this month")
+                            .font(.system(size: 12, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.7))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(Color.white.opacity(0.08)))
+                            .help("Real spend on Peeky's API key this month, from Anthropic's cost report (updates daily).")
+                    } else if state.codeSpentUSD > 0 {
                         Text("Cost: \(codeCostString(state.codeSpentUSD))")
                             .font(.system(size: 12, weight: .bold, design: .monospaced))
                             .foregroundStyle(.white.opacity(0.7))
                             .padding(.horizontal, 8)
                             .padding(.vertical, 2)
                             .background(Capsule().fill(Color.white.opacity(0.08)))
-                            .help("Estimated from the tokens each answer reported, at Sonnet list prices (cache reads at a tenth). Running total since install.")
+                            .help("Estimated from the tokens each answer reported, at Sonnet list prices (cache reads at a tenth). Running total since install. Add an Admin key to Keychain (account anthropic-admin) for the real figure.")
                     }
                 }
             }

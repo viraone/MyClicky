@@ -262,6 +262,41 @@ struct AnthropicService {
         let usage: Usage?
     }
 
+    /// Month-to-date spend in USD for the organization's default workspace —
+    /// where an org-scoped key like Peeky's bills — from the Usage & Cost
+    /// Admin API. Needs an Admin key; costs nothing to call. The report is
+    /// bucketed by day and lags a little, so today's questions show up late.
+    static func fetchMonthToDateCostUSD(adminKey: String) async throws -> Double {
+        var start = Calendar(identifier: .gregorian)
+        start.timeZone = TimeZone(identifier: "UTC")!
+        let monthStart = start.date(from: start.dateComponents([.year, .month], from: Date()))!
+        let iso = ISO8601DateFormatter()
+        var components = URLComponents(string: "https://api.anthropic.com/v1/organizations/cost_report")!
+        components.queryItems = [
+            URLQueryItem(name: "starting_at", value: iso.string(from: monthStart)),
+            URLQueryItem(name: "group_by[]", value: "workspace_id"),
+            URLQueryItem(name: "limit", value: "31"),
+        ]
+        var request = URLRequest(url: components.url!)
+        request.setValue(adminKey, forHTTPHeaderField: "x-api-key")
+        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        request.timeoutInterval = 20
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let buckets = json["data"] as? [[String: Any]] else {
+            throw ServiceError.api("cost report: HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0) "
+                                   + String(decoding: data.prefix(200), as: UTF8.self))
+        }
+        var cents = 0.0
+        for bucket in buckets {
+            for row in bucket["results"] as? [[String: Any]] ?? [] where row["workspace_id"] is NSNull || row["workspace_id"] == nil {
+                cents += Double(row["amount"] as? String ?? "") ?? 0
+            }
+        }
+        return cents / 100
+    }
+
     private static let codeSystemPrompt = """
     You are Peeky Code, a senior software engineer helping the user with a \
     project they have shared with you. The complete source of that project \
