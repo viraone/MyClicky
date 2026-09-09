@@ -450,6 +450,9 @@ final class AssistantController {
     /// answer lands, the panel is brought to the full Ask card even if
     /// something shrank it meanwhile.
     private var phoneAskInFlight = false
+    /// The Mac panel is on Peeky Code with a project loaded — the phone's ASK
+    /// is a question about that code, not about the screen.
+    private var codeTabPinned: Bool { panel.state.tab == .code && panel.state.codeProject != nil }
     /// Words already run as segments this session, in transcript order.
     private var talkDispatched: [String] = []
     /// Everything the last Talk session ran, kept after it ends: the phone
@@ -530,7 +533,7 @@ final class AssistantController {
             guard let self else { return }
             // A finished TALK leaves `talkStreaming` set (holding its green
             // "Done."); that must not pin the phone's next ASK to the Talk tab.
-            if !self.busy, !self.talkStreaming || self.streamQuestionsOnly { self.panel.state.tab = .ask }
+            if !self.busy, !self.talkStreaming || self.streamQuestionsOnly, !self.codeTabPinned { self.panel.state.tab = .ask }
             self.showPanel()
         }
         remote.onListen = { [weak self] in
@@ -543,6 +546,12 @@ final class AssistantController {
             if self.panel.state.tab == .talk {
                 if self.busy || self.talkStreaming { self.abandonWork() }
                 self.panel.state.tab = .ask
+            }
+            // On Peeky Code with a project up, the question is about the code:
+            // full card, no streaming (the answer arrives whole in `onAsk`).
+            if self.codeTabPinned {
+                self.showPanel(listening: true, full: true)
+                return
             }
             let asking = self.panel.state.tab == .ask
             if asking { self.phoneAskInFlight = true }
@@ -753,10 +762,16 @@ final class AssistantController {
         remote.onAsk = { [weak self] question in
             guard let self else { return }
             // ASK from the phone always reads on the Ask tab, full size — the
-            // only exception is the Mac deliberately parked on Capture + Dictate.
+            // exceptions are the Mac deliberately parked on Capture + Dictate,
+            // or on Peeky Code with a project loaded (the question is about it).
             // A Talk still running would make handleQuestion drop the question
             // on its busy guard; the user's ASK wins.
             if self.busy, !self.streamQuestionsOnly { self.abandonWork() }
+            if self.codeTabPinned {
+                self.showPanel(full: true)
+                self.handleCodeQuestion(question)
+                return
+            }
             if self.panel.state.tab != .captureDictate { self.panel.state.tab = .ask }
             self.phoneAskInFlight = true
             self.showPanel(full: true)
