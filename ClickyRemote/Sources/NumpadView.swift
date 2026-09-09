@@ -1809,6 +1809,22 @@ struct NumpadView: View {
     /// user which key to stop first, so the tap isn't silently swallowed.
     private func blockedByActiveRecording(_ wanted: RecordTarget) -> Bool {
         guard recorder.isListening, recordTarget != wanted else { return false }
+        // TALK is open-ended (say a command, pause, keep going), so tapping
+        // ASK or DICTATE mid-TALK is how a session naturally ends: finish the
+        // TALK — whatever was said since the last pause still runs — and
+        // start the new recording, instead of demanding a separate stop tap.
+        if recordTarget == .talk, wanted == .ask || wanted == .dictate {
+            Task {
+                let text = await recorder.stop()
+                if text.isEmpty { client.stopListening() } else { client.talk(text) }
+                recordTarget = wanted
+                dictateMode = wanted == .dictate
+                client.show()
+                client.tab(wanted == .dictate ? "DICTATE" : "ASK")
+                toggleListening()
+            }
+            return true
+        }
         let running: String
         switch recordTarget {
         case .talk: running = "TALK"
