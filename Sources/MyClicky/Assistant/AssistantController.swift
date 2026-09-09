@@ -375,18 +375,26 @@ final class AssistantController {
 
     private var lastCostFetch: Date = .distantPast
 
-    /// Pulls the real month-to-date spend if an Admin key is in Keychain.
-    /// Free to call, but throttled: the report only moves once a day.
+    /// Pulls the real spend if an Admin key is in Keychain. Free to call,
+    /// but throttled; `force` skips the throttle after a question so the
+    /// pill moves with use. The usage report lags a few minutes, so a
+    /// forced refresh also schedules a follow-up.
     private func refreshLiveCost(force: Bool = false) {
         guard let adminKey = KeychainService.anthropicAdminKey(), !adminKey.isEmpty else { return }
         guard force || Date().timeIntervalSince(lastCostFetch) > 60 else { return }
         lastCostFetch = Date()
         Task { [weak self] in
             do {
-                let usd = try await AnthropicService.fetchMonthToDateCostUSD(adminKey: adminKey)
-                self?.panel.state.codeLiveCostUSD = usd
+                let cost = try await AnthropicService.fetchLiveCost(adminKey: adminKey)
+                self?.panel.state.codeLiveCost = cost
             } catch {
                 log.notice("live cost fetch failed: \(error.localizedDescription)")
+            }
+        }
+        if force {
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(150))
+                self?.refreshLiveCost()
             }
         }
     }
@@ -487,7 +495,7 @@ final class AssistantController {
                 panel.state.logCode(.answer, answer.text)
                 if let usage = answer.usage {
                     panel.state.codeSpentUSD += usage.costUSD
-                    refreshLiveCost()
+                    refreshLiveCost(force: true)
                     ActivityLog.recordAction("code-answer", ["cache_read": "\(usage.cacheRead)",
                                                              "cache_write": "\(usage.cacheWrite)",
                                                              "input": "\(usage.input)", "output": "\(usage.output)"])

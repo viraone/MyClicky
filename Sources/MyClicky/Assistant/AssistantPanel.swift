@@ -279,7 +279,7 @@ final class AssistantState: ObservableObject {
     static let codeSpentKey = "peeky.code.spentUSD"
     /// Real month-to-date spend from the Admin API, nil without an admin key
     /// or before the first fetch. When present it replaces the estimate.
-    @Published var codeLiveCostUSD: Double?
+    @Published var codeLiveCost: AnthropicService.LiveCost?
 
     func logCode(_ kind: CodeLogEntry.Kind, _ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1847,9 +1847,11 @@ struct AssistantPanelView: View {
                         Text(codeSkippedLine(project))
                     }
                     Spacer(minLength: 12)
-                    if let live = state.codeLiveCostUSD {
-                        codeCostPill("Cost: \(codeCostString(live)) this month",
-                                     help: "Real spend on Peeky's API key this month, from Anthropic's cost report (updates daily).")
+                    if let live = state.codeLiveCost {
+                        codeCostPill(live.sinceUSD >= 0.005
+                                     ? "Cost: \(codeCostString(live.settledUSD)) + \(codeCostString(live.sinceUSD)) today"
+                                     : "Cost: \(codeCostString(live.settledUSD)) this month",
+                                     help: "Spend on Peeky's API key this month: what Anthropic has billed for closed days, plus today's tokens at list prices (the bill catches up at midnight UTC).")
                     } else if state.codeSpentUSD > 0 {
                         codeCostPill("Cost: \(codeCostString(state.codeSpentUSD))",
                                      help: "Estimated from the tokens each answer reported, at Sonnet list prices (cache reads at a tenth). Running total since install. Add an Admin key to Keychain (account anthropic-admin) for the real figure.")

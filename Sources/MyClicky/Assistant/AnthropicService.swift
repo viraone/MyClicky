@@ -262,21 +262,79 @@ struct AnthropicService {
         let usage: Usage?
     }
 
-    /// Month-to-date spend in USD for the organization's default workspace —
-    /// where an org-scoped key like Peeky's bills — from the Usage & Cost
-    /// Admin API. Needs an Admin key; costs nothing to call. The report is
-    /// bucketed by day and lags a little, so today's questions show up late.
-    static func fetchMonthToDateCostUSD(adminKey: String) async throws -> Double {
-        var start = Calendar(identifier: .gregorian)
-        start.timeZone = TimeZone(identifier: "UTC")!
-        let monthStart = start.date(from: start.dateComponents([.year, .month], from: Date()))!
+    /// What the Admin API knows about spend: dollars settled by the daily
+    /// cost report, plus a priced estimate of the tokens used since that
+    /// report's last closed day (near-real-time, from the usage report).
+    struct LiveCost: Sendable, Equatable {
+        let settledUSD: Double
+        let sinceUSD: Double
+        var totalUSD: Double { settledUSD + sinceUSD }
+    }
+
+    /// Month-to-date spend for the organization's default workspace — where
+    /// an org-scoped key like Peeky's bills. Needs an Admin key; free to
+    /// call. The cost report only closes a day at a time, so the hours since
+    /// its last bucket are filled in from the usage report at list prices.
+    static func fetchLiveCost(adminKey: String) async throws -> LiveCost {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let monthStart = utc.date(from: utc.dateComponents([.year, .month], from: Date()))!
         let iso = ISO8601DateFormatter()
-        var components = URLComponents(string: "https://api.anthropic.com/v1/organizations/cost_report")!
-        components.queryItems = [
-            URLQueryItem(name: "starting_at", value: iso.string(from: monthStart)),
-            URLQueryItem(name: "group_by[]", value: "workspace_id"),
-            URLQueryItem(name: "limit", value: "31"),
-        ]
+
+        let cost = try await adminGET(adminKey, path: "cost_report", query: [
+            "starting_at": iso.string(from: monthStart), "group_by[]": "workspace_id", "limit": "31",
+        ])
+        var cents = 0.0
+        var settledThrough = monthStart
+        for bucket in cost {
+            if let end = (bucket["ending_at"] as? String).flatMap(iso.date(from:)), end > settledThrough {
+                settledThrough = end
+            }
+            for row in bucket["results"] as? [[String: Any]] ?? [] where Self.isDefaultWorkspace(row) {
+                cents += Double(row["amount"] as? String ?? "") ?? 0
+            }
+        }
+
+        var sinceUSD = 0.0
+        if settledThrough < Date() {
+            // Only closed buckets are reported: hours up to the current
+            // hour, then minutes inside it, so a question shows within ~a
+            // minute of being answered.
+            let hourStart = utc.date(from: utc.dateComponents([.year, .month, .day, .hour], from: Date()))!
+            var buckets: [[String: Any]] = []
+            if settledThrough < hourStart {
+                buckets += try await adminGET(adminKey, path: "usage_report/messages", query: [
+                    "starting_at": iso.string(from: settledThrough), "ending_at": iso.string(from: hourStart),
+                    "bucket_width": "1h", "group_by[]": "workspace_id", "limit": "48",
+                ])
+            }
+            buckets += try await adminGET(adminKey, path: "usage_report/messages", query: [
+                "starting_at": iso.string(from: max(hourStart, settledThrough)),
+                "bucket_width": "1m", "group_by[]": "workspace_id", "limit": "60",
+            ])
+            for bucket in buckets {
+                for row in bucket["results"] as? [[String: Any]] ?? [] where Self.isDefaultWorkspace(row) {
+                    let creation = row["cache_creation"] as? [String: Any] ?? [:]
+                    let usage = Usage(input: row["uncached_input_tokens"] as? Int ?? 0,
+                                      cacheRead: row["cache_read_input_tokens"] as? Int ?? 0,
+                                      cacheWrite: (creation["ephemeral_5m_input_tokens"] as? Int ?? 0)
+                                          + (creation["ephemeral_1h_input_tokens"] as? Int ?? 0),
+                                      output: row["output_tokens"] as? Int ?? 0)
+                    sinceUSD += usage.costUSD
+                }
+            }
+        }
+        return LiveCost(settledUSD: cents / 100, sinceUSD: sinceUSD)
+    }
+
+    private static func isDefaultWorkspace(_ row: [String: Any]) -> Bool {
+        row["workspace_id"] == nil || row["workspace_id"] is NSNull
+    }
+
+    /// One page of an Admin API report as its `data` buckets.
+    private static func adminGET(_ adminKey: String, path: String, query: [String: String]) async throws -> [[String: Any]] {
+        var components = URLComponents(string: "https://api.anthropic.com/v1/organizations/\(path)")!
+        components.queryItems = query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
         var request = URLRequest(url: components.url!)
         request.setValue(adminKey, forHTTPHeaderField: "x-api-key")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
@@ -285,16 +343,10 @@ struct AnthropicService {
         guard (response as? HTTPURLResponse)?.statusCode == 200,
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let buckets = json["data"] as? [[String: Any]] else {
-            throw ServiceError.api("cost report: HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0) "
+            throw ServiceError.api("\(path): HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0) "
                                    + String(decoding: data.prefix(200), as: UTF8.self))
         }
-        var cents = 0.0
-        for bucket in buckets {
-            for row in bucket["results"] as? [[String: Any]] ?? [] where row["workspace_id"] is NSNull || row["workspace_id"] == nil {
-                cents += Double(row["amount"] as? String ?? "") ?? 0
-            }
-        }
-        return cents / 100
+        return buckets
     }
 
     private static let codeSystemPrompt = """
