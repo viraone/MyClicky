@@ -73,6 +73,7 @@ import Network
 ///   DICTATE <text> – treat text as finished dictation (clipboard, paired with
 ///                    the latest capture, + cleanup)
 ///   STATUS <text>  – progress of the in-flight DO command ("Opening Mail…")
+///   STATUS_QUIET <text> – same, but the phone shows it without speaking
 ///   CONFIRM <id>\t<question>[\tSEND\t<recipient> | \tRUN\t<terminal>] – DO wants to run an
 ///                    irreversible step; answer with CONFIRM_OK <id> or
 ///                    CONFIRM_NO <id>. Newlines inside a field travel as

@@ -47,6 +47,13 @@ final class AssistantController {
     /// back, for ten minutes.
     private var terminalDraftOpenedAt: Date?
     private var terminalTarget: TerminalLineTarget?
+    /// Set when TALK typed into an AI chat site's prompt box (AI Studio,
+    /// ChatGPT…): "send it" runs it, "erase that" / "undo that" take it back.
+    private var chatSiteDraftOpenedAt: Date?
+    private var chatSiteTarget: ChatSiteTarget?
+    /// Set when "open AI Studio" had to load the page fresh, so the first
+    /// dictation waits for it rather than failing on an empty tab.
+    private var chatSiteOpenedFreshAt: Date?
     /// The in-flight inventory/flagging pass, so Cancel and a second ⌥⌘D can
     /// stop it rather than stacking a second scan on top.
     private var driveCleanupTask: Task<Void, Never>?
@@ -184,6 +191,12 @@ final class AssistantController {
     private var phoneAskInFlight = false
     /// Words already run as segments this session, in transcript order.
     private var talkDispatched: [String] = []
+    /// Everything the last Talk session ran, kept after it ends: the phone
+    /// sends its whole transcript once more when TALK is stopped, and if
+    /// streaming already finished by then that must not run again as one
+    /// giant command (observed live: it replayed "open AI Studio … send it"
+    /// through the planner and sat on the Talk tab while an ASK waited).
+    private var talkRanWords: [String] = []
     private var talkQueue: [String] = []
     /// Live preview of the words being said into an open Messages thread —
     /// see `streamGhostDraft`. Consumed by `handleDo` when the segment runs.
@@ -242,6 +255,13 @@ final class AssistantController {
             guard let self else { return }
             // Phone ASK: open the full card while the user is still speaking,
             // so the answer never lands in a corner dot or the one-line strip.
+            // The phone has its own TALK key, so a LISTEN is always a question:
+            // a Talk that is still finishing (or holding its "Done.") hands the
+            // panel over rather than pinning the Ask to the Talk tab.
+            if self.panel.state.tab == .talk {
+                if self.busy || self.talkStreaming { self.abandonWork() }
+                self.panel.state.tab = .ask
+            }
             let asking = self.panel.state.tab == .ask
             if asking { self.phoneAskInFlight = true }
             self.showPanel(listening: true, full: asking)
@@ -448,6 +468,9 @@ final class AssistantController {
             guard let self else { return }
             // ASK from the phone always reads on the Ask tab, full size — the
             // only exception is the Mac deliberately parked on Capture + Dictate.
+            // A Talk still running would make handleQuestion drop the question
+            // on its busy guard; the user's ASK wins.
+            if self.busy, !self.streamQuestionsOnly { self.abandonWork() }
             if self.panel.state.tab != .captureDictate { self.panel.state.tab = .ask }
             self.phoneAskInFlight = true
             self.showPanel(full: true)
@@ -473,6 +496,20 @@ final class AssistantController {
                 self.panel.state.transcript = utterance
                 self.finishTalkStreaming(final: utterance)
                 return
+            }
+            // The phone's final transcript after streaming already ended:
+            // run only what hasn't run, which is usually nothing.
+            var utterance = utterance
+            let words = Self.words(utterance)
+            if let rest = Self.remainder(after: self.talkRanWords, in: words) {
+                self.talkRanWords = words
+                if rest.isEmpty {
+                    ActivityLog.recordAction("talk-final-already-ran", ["text": utterance])
+                    return
+                }
+                utterance = rest.joined(separator: " ")
+            } else {
+                self.talkRanWords = []
             }
             let targetApp = NSWorkspace.shared.frontmostApplication
             self.showPanel()
@@ -741,6 +778,7 @@ final class AssistantController {
         talkStreaming = true
         talkSession = true
         talkDispatched = []
+        talkRanWords = []
         talkQueue = []
         panel.state.copiedPreview = nil
         panel.state.answer = ""
@@ -868,21 +906,24 @@ final class AssistantController {
     /// what was dispatched; otherwise everything is new.
     private func pendingTalkWords(in words: [String], quiet: Bool = false) -> [String] {
         guard !talkDispatched.isEmpty else { return words }
-        let prefix = talkDispatched.map(Self.normalizedWord)
-        let current = words.prefix(prefix.count).map(Self.normalizedWord)
-        if current.count == prefix.count, current == prefix {
-            return Array(words[prefix.count...])
-        }
-        // The recognizer may also revise earlier words ("open" → "Open,"),
-        // so accept a mostly-matching prefix before declaring a restart.
-        let agree = zip(current, prefix).filter { $0 == $1 }.count
-        if current.count == prefix.count, agree * 3 >= prefix.count * 2 {
-            return Array(words[prefix.count...])
-        }
+        if let rest = Self.remainder(after: talkDispatched, in: words) { return rest }
         if !quiet {
-            ActivityLog.recordAction("talk-transcript-restarted", ["dispatched": "\(prefix.count)", "now": "\(words.count)"])
+            ActivityLog.recordAction("talk-transcript-restarted", ["dispatched": "\(talkDispatched.count)", "now": "\(words.count)"])
         }
         return words
+    }
+
+    /// `words` minus the leading `ran` words, or nil when `words` doesn't
+    /// start with them (a fresh transcript). The recognizer may revise
+    /// earlier words ("open" → "Open,"), so a mostly-matching prefix counts.
+    static func remainder(after ran: [String], in words: [String]) -> [String]? {
+        guard !ran.isEmpty else { return nil }
+        let prefix = ran.map(normalizedWord)
+        let current = words.prefix(prefix.count).map(normalizedWord)
+        guard current.count == prefix.count else { return nil }
+        if current == prefix { return Array(words[prefix.count...]) }
+        let agree = zip(current, prefix).filter { $0 == $1 }.count
+        return agree * 3 >= prefix.count * 2 ? Array(words[prefix.count...]) : nil
     }
 
     private static func normalizedWord(_ word: String) -> String {
@@ -896,6 +937,7 @@ final class AssistantController {
         let words = Self.words(final)
         let rest = pendingTalkWords(in: words).joined(separator: " ")
         let ranSomething = !talkDispatched.isEmpty || !talkQueue.isEmpty || busy
+        talkRanWords = words
         talkDispatched = []
         if !rest.isEmpty {
             enqueueTalk(rest)
@@ -1220,6 +1262,20 @@ final class AssistantController {
             sendOpenDraft()
             return
         }
+        // A prompt Peeky typed into an AI chat site is the most recent draft:
+        // "send it" / "run it" / "hit enter" runs it; "erase that" clears it.
+        if chatSiteDraftIsCurrent {
+            if Self.isRunIt(utterance) {
+                ghost?.clear()
+                submitChatSitePrompt()
+                return
+            }
+            if Self.isEraseIt(utterance) {
+                ghost?.clear()
+                eraseChatSitePrompt()
+                return
+            }
+        }
         // A line Peeky typed at a terminal prompt is the most recent draft:
         // "run it" / "hit enter" presses Return (behind a confirm); "erase
         // that" backspaces it out.
@@ -1268,17 +1324,27 @@ final class AssistantController {
             }
             return
         }
-        if Self.isNeverMind(utterance), gmailDraftOpenedAt != nil || messagesDraftOpenedAt != nil || terminalDraftOpenedAt != nil {
+        if Self.isNeverMind(utterance), gmailDraftOpenedAt != nil || messagesDraftOpenedAt != nil || terminalDraftOpenedAt != nil || chatSiteDraftOpenedAt != nil {
             ghost?.clear()
             gmailDraftOpenedAt = nil
             messagesDraftOpenedAt = nil
             messagesDraftText = nil
             terminalDraftOpenedAt = nil
+            chatSiteDraftOpenedAt = nil
             let message = "OK — the draft stays as it is; I'm back to taking commands."
             panel.state.status = .answering
             panel.state.answer = message
             panel.state.logTalk(.status, message)
             remote.broadcast("STATUS \(message)")
+            return
+        }
+        // "Open AI Studio" / "go to ChatGPT": select the tab (or open the
+        // site) and make it the dictation target — no planner, no guessing
+        // at an app called "AI Studio" (seen live: the planner tried exactly
+        // that and failed).
+        if let site = ChatSiteActions.openRequest(utterance) {
+            ghost?.clear()
+            openChatSite(site)
             return
         }
         // "Bring up a text message with Jason Katz" went to the planner and
@@ -1307,6 +1373,21 @@ final class AssistantController {
         // conversation" must not get typed to Dino Dad.
         let gateBypassed = Self.isAppCommand(utterance) || Self.isTerminalCommand(utterance)
         if gateBypassed { ghost?.clear() }
+        // An AI chat site is the target — Peeky just opened it, or its tab is
+        // in front (AI Studio, ChatGPT, Gemini…): the sentence is the prompt,
+        // typed into its box word for word. Once Peeky opened it, it stays
+        // the target even while the person looks at another window or their
+        // phone (seen live: the frontmost app was Peeky's own transcript).
+        if !gateBypassed {
+            let opened = chatSiteDraftIsCurrent ? chatSiteTarget?.site : nil
+            let inFront = BrowserTabReader.supportedBundleIDs.contains(targetApp?.bundleIdentifier ?? "")
+                ? ChatSiteActions.frontSite() : nil
+            if let site = opened ?? inFront {
+                ghost?.clear()
+                dictateIntoChatSite(utterance, site: site, apiKey: apiKey)
+                return
+            }
+        }
         let gmailActive = !gateBypassed && (gmailDraftOpenedAt.map { Date().timeIntervalSince($0) < 10 * 60 } ?? false)
         // A thread Peeky opened, or one the user is simply looking at: with
         // Messages in front and a conversation showing, the next sentence is
@@ -1557,28 +1638,8 @@ final class AssistantController {
     /// Stops whatever Peeky is doing right now: cancels the in-flight
     /// request, silences speech, and returns the panel to Ready.
     private func stop() {
-        requestID += 1
-        currentTask?.cancel()
-        currentTask = nil
-        busy = false
-        synthesizer.stopSpeaking(at: .immediate)
-        panel.state.isSpeaking = false
-        ring.hide()
-        googleAuth.onStatus = nil
-        for continuation in pendingConfirms.values { continuation.resume(returning: false) }
-        pendingConfirms.removeAll()
-        for continuation in pendingChoices.values { continuation.resume(returning: nil) }
-        pendingChoices.removeAll()
         let wasStreaming = talkStreaming
-        streamPauseTask?.cancel()
-        streamTranscript = ""
-        talkStreaming = false
-        takeGhostDraft()?.clear()
-        talkSession = false
-        phoneAskInFlight = false
-        panel.state.chaining = false
-        talkQueue = []
-        talkDispatched = []
+        abandonWork()
         if wasStreaming, panel.state.status != .listening {
             remote.broadcast("STOP")
             speech.stop()
@@ -1598,6 +1659,34 @@ final class AssistantController {
         } else if panel.state.status == .answering {
             panel.state.status = .idle
         }
+    }
+
+    /// The cancelling half of `stop()`: drops the in-flight request and any
+    /// Talk session without touching the listening state or telling the
+    /// phone to stop — for when the phone itself is taking over (a new ASK).
+    private func abandonWork() {
+        requestID += 1
+        currentTask?.cancel()
+        currentTask = nil
+        busy = false
+        synthesizer.stopSpeaking(at: .immediate)
+        panel.state.isSpeaking = false
+        ring.hide()
+        googleAuth.onStatus = nil
+        for continuation in pendingConfirms.values { continuation.resume(returning: false) }
+        pendingConfirms.removeAll()
+        for continuation in pendingChoices.values { continuation.resume(returning: nil) }
+        pendingChoices.removeAll()
+        if talkStreaming { talkRanWords = talkDispatched }
+        streamPauseTask?.cancel()
+        streamTranscript = ""
+        talkStreaming = false
+        takeGhostDraft()?.clear()
+        talkSession = false
+        phoneAskInFlight = false
+        panel.state.chaining = false
+        talkQueue = []
+        talkDispatched = []
     }
 
     /// Maps a normalized (0–1, top-left origin) image box back to AppKit
@@ -2293,7 +2382,9 @@ final class AssistantController {
         let recent = { (date: Date) in Date().timeIntervalSince(date) < 10 * 60 }
         Task { @MainActor [weak self] in
             guard let self else { return }
-            if terminal > messages, terminal > gmail, recent(terminal) {
+            if self.chatSiteDraftIsCurrent {
+                self.submitChatSitePrompt()
+            } else if terminal > messages, terminal > gmail, recent(terminal) {
                 await self.runOpenTerminalLine()
             } else if messages > gmail, recent(messages) {
                 await self.sendOpenMessagesDraft()
@@ -3046,6 +3137,209 @@ final class AssistantController {
         panel.state.logTalk(ok ? .status : .error, message)
         remote.broadcast("STATUS \(message)")
         if !panel.state.textOnlyMode { speak(message) }
+    }
+
+    // MARK: - AI chat sites as a write target
+
+    /// The chat-site prompt is the draft "send it" / "erase that" act on when
+    /// it's the freshest thing Peeky wrote and its tab is still in front.
+    private var chatSiteDraftIsCurrent: Bool {
+        guard let opened = chatSiteDraftOpenedAt, Date().timeIntervalSince(opened) < 10 * 60,
+              let target = chatSiteTarget, target.isValid else { return false }
+        return opened > (messagesDraftOpenedAt ?? .distantPast) && opened > (gmailDraftOpenedAt ?? .distantPast)
+            && opened > (terminalDraftOpenedAt ?? .distantPast)
+    }
+
+    /// "Actually…", "change that to…", "make it shorter", "I meant…": said
+    /// while Peeky's own text sits in the box, this is about the prompt, not
+    /// more of it. Anything else appends verbatim — a long question spoken
+    /// with pauses arrives as several segments and must simply keep going.
+    static func isPromptRevision(_ utterance: String) -> Bool {
+        var words = utterance.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted.subtracting(CharacterSet(charactersIn: "'")))
+            .filter { !$0.isEmpty }
+        let leadIns: Set<String> = ["ok", "okay", "hey", "peeky", "clicky", "um", "uh", "oh", "no", "wait", "hmm", "so", "and", "please", "can", "could", "you"]
+        while words.count > 1, let first = words.first, leadIns.contains(first) { words.removeFirst() }
+        words = stripStutters(words)
+        let joined = words.joined(separator: " ")
+        let starts = ["actually", "change that", "change it", "change the", "instead of", "instead say", "scratch that", "scrap that",
+                      "replace", "make it", "make that", "make the", "rewrite", "reword", "rephrase", "shorter", "longer",
+                      "correction", "i meant", "i mean", "swap", "fix that", "fix the", "take out", "take that out", "remove the",
+                      "delete the", "drop the", "get rid of the", "add that", "also ask", "also mention", "also say", "also add",
+                      "it's not", "that's not", "that should", "it should", "should say", "should be"]
+        return starts.contains { joined.hasPrefix($0) }
+    }
+
+    /// Speech arrives lowercase and unpunctuated; the start of a prompt gets
+    /// a capital, and a sentence appended after a pause gets a full stop on
+    /// the one before it if it has none.
+    static func tidyPromptSegment(_ text: String, appendingTo existing: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return existing }
+        let capped = trimmed.prefix(1).uppercased() + trimmed.dropFirst()
+        let base = existing.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !base.isEmpty else { return capped }
+        let terminal = CharacterSet(charactersIn: ".!?:;,—-")
+        let joiner = base.unicodeScalars.last.map { terminal.contains($0) } ?? true ? " " : ". "
+        return base + joiner + capped
+    }
+
+    private func openChatSite(_ site: ChatSiteActions.Site) {
+        synthesizer.stopSpeaking(at: .immediate)
+        ring.hide()
+        let existed = ChatSiteActions.open(site)
+        let target = (chatSiteTarget?.site == site ? chatSiteTarget : nil) ?? ChatSiteTarget(site: site)
+        target.typed = ""
+        chatSiteTarget = target
+        chatSiteDraftOpenedAt = Date()
+        chatSiteOpenedFreshAt = existed ? nil : Date()
+        ActivityLog.recordAction("chatsite-open", ["site": site.name, "existed": existed ? "yes" : "no"])
+        let message = "\(site.name) is up — tell me what to ask, then say “send it”."
+        finishChatSite(message, ok: true, speak: false)
+        toast.show(message, icon: "bubble.left.and.text.bubble.right.fill", tint: .cyan)
+    }
+
+    /// The box, waiting briefly for a page Peeky just opened to finish loading.
+    private func readChatSiteBox(_ site: ChatSiteActions.Site) -> String? {
+        var attempts = 1
+        if let fresh = chatSiteOpenedFreshAt, Date().timeIntervalSince(fresh) < 20 { attempts = 8 }
+        for attempt in 0..<attempts {
+            if let text = ChatSiteActions.read(site) {
+                chatSiteOpenedFreshAt = nil
+                return text
+            }
+            if attempt < attempts - 1 { usleep(500_000) }
+        }
+        return nil
+    }
+
+    private func dictateIntoChatSite(_ utterance: String, site: ChatSiteActions.Site, apiKey: String) {
+        synthesizer.stopSpeaking(at: .immediate)
+        guard let existing = readChatSiteBox(site) else {
+            finishChatSite("I can't reach the prompt box in \(site.name) — check the browser allows JavaScript from Apple Events.", ok: false, speak: true)
+            return
+        }
+        let target = (chatSiteTarget?.site == site ? chatSiteTarget : nil) ?? ChatSiteTarget(site: site)
+        let stillMine = !target.typed.isEmpty
+            && existing.trimmingCharacters(in: .whitespacesAndNewlines) == target.typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        if stillMine, Self.isPromptRevision(utterance) {
+            reviseChatSitePrompt(utterance, current: existing, target: target, apiKey: apiKey)
+            return
+        }
+        let newValue = Self.tidyPromptSegment(utterance, appendingTo: existing)
+        guard ChatSiteActions.write(newValue, into: site) else {
+            finishChatSite("Couldn't type into \(site.name) — is the prompt box on screen?", ok: false, speak: true)
+            return
+        }
+        target.typed = newValue
+        chatSiteTarget = target
+        chatSiteDraftOpenedAt = Date()
+        WriteUndoStack.shared.record(target: target, previousValue: existing, newValue: newValue, label: site.name)
+        if let frame = ChatSiteActions.inputFrame(site) { ring.show(over: frame, duration: 1.5) }
+        let shown = newValue.count > 80 ? "…" + String(newValue.suffix(80)) : newValue
+        let message = existing.isEmpty
+            ? "Typed into \(site.name): “\(shown)” — keep talking to add more, say “send it”, or “erase that”."
+            : "Added to your \(site.name) prompt: “\(shown)” — say “send it” when ready."
+        ActivityLog.recordAction("chatsite-dictate", ["site": site.name, "append": existing.isEmpty ? "no" : "yes",
+                                                      "chars": String(newValue.count)])
+        // Not spoken: the mic is open and Peeky's own voice would be dictated
+        // straight back into the box.
+        finishChatSite(message, ok: true, speak: false)
+        toast.show("\(site.name): \(shown)", icon: "text.cursor", tint: .cyan)
+    }
+
+    private func reviseChatSitePrompt(_ instruction: String, current: String, target: ChatSiteTarget, apiKey: String) {
+        let site = target.site
+        busy = true
+        ring.hide()
+        panel.state.status = .thinking
+        panel.state.answer = "Changing it…"
+        panel.state.errorText = nil
+        remote.broadcast("STATUS_QUIET \(panel.state.answer)")
+        ActivityLog.recordAction("chatsite-revise", ["site": site.name])
+
+        requestID += 1
+        let id = requestID
+        currentTask = Task {
+            defer { if id == requestID { busy = false; currentTask = nil } }
+            let claude = AnthropicService(apiKey: apiKey)
+            do {
+                let revised = try await ChatSiteDrafter.revise(draft: current, instruction: instruction, claude: claude)
+                guard id == requestID else { return }
+                guard ChatSiteActions.write(revised, into: site) else {
+                    finishChatSite("Rewrote it, but couldn't type into \(site.name) — is the tab still in front?", ok: false, speak: true)
+                    return
+                }
+                target.typed = revised
+                chatSiteTarget = target
+                chatSiteDraftOpenedAt = Date()
+                WriteUndoStack.shared.record(target: target, previousValue: current, newValue: revised, label: site.name)
+                if let frame = ChatSiteActions.inputFrame(site) { ring.show(over: frame, duration: 1.5) }
+                let shown = revised.count > 80 ? "…" + String(revised.suffix(80)) : revised
+                finishChatSite("Changed: “\(shown)” — say “send it”, or “undo that”.", ok: true, speak: false)
+                toast.show("\(site.name): \(shown)", icon: "pencil.line", tint: .cyan)
+            } catch {
+                guard id == requestID else { return }
+                finishChatSite("Couldn't change that: \(error.localizedDescription)", ok: false, speak: true)
+            }
+        }
+    }
+
+    private func submitChatSitePrompt() {
+        guard let target = chatSiteTarget, target.isValid else {
+            finishChatSite("The chat tab isn't in front any more.", ok: false, speak: true)
+            return
+        }
+        let site = target.site
+        let current = ChatSiteActions.read(site) ?? target.typed
+        guard !current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            finishChatSite("The prompt box in \(site.name) is empty — tell me what to ask first.", ok: false, speak: true)
+            return
+        }
+        synthesizer.stopSpeaking(at: .immediate)
+        guard let how = ChatSiteActions.submit(site) else {
+            finishChatSite("Couldn't press Send in \(site.name) — hit Enter there.", ok: false, speak: true)
+            return
+        }
+        WriteUndoStack.shared.forget(key: target.undoKey)
+        target.typed = ""
+        chatSiteDraftOpenedAt = Date() // still talking to this site
+        ActivityLog.recordAction("chatsite-submit", ["site": site.name, "via": how, "chars": String(current.count)])
+        let message = "Sent to \(site.name)."
+        finishChatSite(message, ok: true, speak: false)
+        toast.show(message, icon: "paperplane.fill", tint: .green)
+    }
+
+    private func eraseChatSitePrompt() {
+        guard let target = chatSiteTarget, target.isValid else {
+            finishChatSite("The chat tab isn't in front any more.", ok: false, speak: true)
+            return
+        }
+        let site = target.site
+        let existing = ChatSiteActions.read(site) ?? target.typed
+        guard ChatSiteActions.write("", into: site) else {
+            finishChatSite("Couldn't clear the prompt box in \(site.name).", ok: false, speak: true)
+            return
+        }
+        target.typed = ""
+        chatSiteDraftOpenedAt = Date()
+        if !existing.isEmpty {
+            WriteUndoStack.shared.record(target: target, previousValue: existing, newValue: "", label: site.name)
+        }
+        ActivityLog.recordAction("chatsite-erase", ["site": site.name])
+        finishChatSite(existing.isEmpty ? "Already empty — tell me what to ask." : "Cleared the \(site.name) prompt — tell me what to ask instead.",
+                       ok: true, speak: false)
+    }
+
+    /// `speak` covers both the Mac's voice and the phone's: while dictating,
+    /// the mic is open, so a status is shown on the phone but not read out.
+    private func finishChatSite(_ message: String, ok: Bool, speak: Bool) {
+        hud.report(message, ok: ok)
+        panel.state.status = .answering
+        panel.state.answer = message
+        panel.state.logTalk(ok ? .status : .error, message)
+        remote.broadcast("\(speak ? "STATUS" : "STATUS_QUIET") \(message)")
+        if speak, !panel.state.textOnlyMode { self.speak(message) }
     }
 
     /// The planner gates its own irreversible steps with a free-text note
