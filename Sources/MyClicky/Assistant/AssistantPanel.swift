@@ -86,12 +86,17 @@ enum AssistantTab: String, CaseIterable {
     /// Voice/typed commands Peeky *acts on* (e.g. "create a calendar event
     /// at 2pm"), same plan-and-do flow as the phone's TALK button.
     case talk = "Talk / Request"
+    /// A dropped project folder Claude can answer questions about. The
+    /// project text is prompt-cached, so follow-ups cost a fraction of the
+    /// first question.
+    case code = "Peeky Code"
 
     var icon: String {
         switch self {
         case .ask: "bubble.left.and.text.bubble.right"
         case .captureDictate: "camera.on.rectangle"
         case .talk: "bolt.fill"
+        case .code: "chevron.left.forwardslash.chevron.right"
         }
     }
 
@@ -101,8 +106,18 @@ enum AssistantTab: String, CaseIterable {
         case .ask: "Ask"
         case .captureDictate: "Capture"
         case .talk: "Talk"
+        case .code: "Code"
         }
     }
+}
+
+/// One line of the Peeky Code tab's conversation.
+struct CodeLogEntry: Identifiable, Equatable {
+    enum Kind { case question, answer, status, error }
+    let id = UUID()
+    let time = Date()
+    let kind: Kind
+    let text: String
 }
 
 /// One line of the Talk tab's terminal-style log.
@@ -234,6 +249,45 @@ final class AssistantState: ObservableObject {
         copiedPreview = nil
     }
 
+    // MARK: Peeky Code
+
+    /// The project dropped on the Code tab, nil until one is.
+    @Published var codeProject: CodeProject?
+    /// True while a dropped folder is being read off disk.
+    @Published var codeLoading = false
+    /// Questions and answers about the project, oldest first.
+    @Published var codeLog: [CodeLogEntry] = []
+    /// What the last question cost — shown so the cache saving is visible.
+    @Published var codeUsage: AnthropicService.Usage?
+
+    func logCode(_ kind: CodeLogEntry.Kind, _ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        codeLog.append(CodeLogEntry(kind: kind, text: trimmed))
+    }
+
+    /// The Q&A pairs sent back with the next question so it can build on
+    /// them. Status and error lines aren't part of the conversation.
+    var codeHistory: [(question: String, answer: String)] {
+        var pairs: [(String, String)] = []
+        var pendingQuestion: String?
+        for entry in codeLog {
+            switch entry.kind {
+            case .question: pendingQuestion = entry.text
+            case .answer:
+                if let q = pendingQuestion { pairs.append((q, entry.text)); pendingQuestion = nil }
+            case .status, .error: continue
+            }
+        }
+        return pairs
+    }
+
+    func clearCodeLog() {
+        codeLog = []
+        codeUsage = nil
+        errorText = nil
+    }
+
     /// Back to listening after a segment ran mid-recording, already in the
     /// paused (amber) state rather than flashing "recording".
     func resumeListeningPaused() {
@@ -357,6 +411,13 @@ final class AssistantState: ObservableObject {
     /// Files dropped on, or pasted into, the Ask tab.
     var onDropIntoAsk: (([URL]) -> Void)?
     var onPasteIntoAsk: (() -> Void)?
+    /// Peeky Code: a folder or files dropped or picked for the project,
+    /// re-reading it from disk after edits, letting it go, and asking.
+    var onDropIntoCode: (([URL]) -> Void)?
+    var onAttachCodeProject: (() -> Void)?
+    var onReloadCodeProject: (() -> Void)?
+    var onRemoveCodeProject: (() -> Void)?
+    var onAskCode: ((String) -> Void)?
     /// Reads the current answer aloud on demand, regardless of `textOnlyMode`.
     var onReadAloud: (() -> Void)?
     /// Mic button: starts recording (a question on the Ask tab, a dictation
@@ -964,10 +1025,14 @@ struct AssistantPanelView: View {
                     talkLogView
                 case .captureDictate:
                     captureDictateTab
+                case .code:
+                    topInputRow
+                    codeProjectCard
+                    codeLogView
                 }
             }
             .onDrop(of: [.fileURL, .image], isTargeted: nil) { providers in
-                guard state.tab == .ask else { return false }
+                guard state.tab == .ask || state.tab == .code else { return false }
                 return handleAskDrop(providers)
             }
             .onPasteCommand(of: [.image, .fileURL, .png, .tiff]) { _ in
@@ -1648,6 +1713,245 @@ struct AssistantPanelView: View {
 
     @State private var expandedCopies: Set<UUID> = []
 
+    // MARK: Peeky Code
+
+    /// The dropped project, or a drop zone inviting one. With a project:
+    /// its name, size in files and tokens, and — after the first question —
+    /// whether the last one was served from the prompt cache.
+    @ViewBuilder
+    private var codeProjectCard: some View {
+        if state.codeLoading {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Reading the project…")
+                    .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(codeCardBackground)
+        } else if let project = state.codeProject {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 8) {
+                    Image(systemName: "folder.fill")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Color(red: 0.35, green: 0.78, blue: 0.98))
+                    Text(project.name)
+                        .font(.system(size: 14.5, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text(project.summaryLine)
+                        .font(.system(size: 13, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.55))
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    codeCardButton("arrow.clockwise", help: "Re-read the project from disk (after editing files)") {
+                        state.onReloadCodeProject?()
+                    }
+                    codeCardButton("xmark", help: "Remove the project") {
+                        state.onRemoveCodeProject?()
+                    }
+                }
+                .help(project.root.path)
+                HStack(spacing: 6) {
+                    if let usage = state.codeUsage {
+                        Image(systemName: usage.hitCache ? "bolt.fill" : "bolt.slash")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(usage.hitCache ? AssistantPhase.done.color : .white.opacity(0.4))
+                        Text(codeUsageLine(usage))
+                    } else if project.truncated {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.orange)
+                        Text("Too big to send whole — \(project.skippedFiles.count) files left out")
+                    } else {
+                        Text(codeSkippedLine(project))
+                    }
+                }
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.5))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(codeCardBackground)
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Image(systemName: "folder.badge.plus")
+                        .font(.system(size: 16, weight: .semibold))
+                    Text("Drop a project folder here")
+                        .font(.system(size: 15, weight: .bold, design: .monospaced))
+                }
+                .foregroundStyle(.white.opacity(0.85))
+                Text("Swift, Python, HTML/CSS, JavaScript, Java… Peeky reads the whole thing and answers questions about it. The project is prompt-cached, so follow-up questions cost about a tenth of the first.")
+                    .font(.system(size: 12.5, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .fixedSize(horizontal: false, vertical: true)
+                Button {
+                    state.onAttachCodeProject?()
+                } label: {
+                    Text("choose folder…")
+                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.8))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(Color.white.opacity(0.08)))
+                        .overlay(Capsule().strokeBorder(Color.white.opacity(0.16), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [6, 5]))
+                    .foregroundStyle(Color.white.opacity(0.18))
+            )
+        }
+    }
+
+    private var codeCardBackground: some View {
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(Color.white.opacity(0.04))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.06), lineWidth: 1)
+            )
+    }
+
+    private func codeCardButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(.white.opacity(0.65))
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(Color.white.opacity(0.08)))
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+
+    private func codeUsageLine(_ usage: AnthropicService.Usage) -> String {
+        if usage.hitCache {
+            return "last question: \(CodeProject.compact(usage.cacheRead)) tokens from cache (≈10% price) · \(CodeProject.compact(usage.input)) fresh"
+        }
+        if usage.cacheWrite > 0 {
+            return "last question: \(CodeProject.compact(usage.cacheWrite)) tokens cached for the next ~5 min · follow-ups are cheap"
+        }
+        return "last question: \(CodeProject.compact(usage.input)) tokens (project too small to cache)"
+    }
+
+    private func codeSkippedLine(_ project: CodeProject) -> String {
+        var parts: [String] = []
+        if !project.skippedFolders.isEmpty {
+            parts.append("skipped " + project.skippedFolders.prefix(4).joined(separator: ", ")
+                         + (project.skippedFolders.count > 4 ? "…" : ""))
+        }
+        if !project.skippedFiles.isEmpty {
+            parts.append("\(project.skippedFiles.count) non-text or oversized file\(project.skippedFiles.count == 1 ? "" : "s") left out")
+        }
+        return parts.isEmpty ? "every file included — ask away" : parts.joined(separator: " · ")
+    }
+
+    private var codeLogView: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if state.codeLog.isEmpty {
+                Text(state.codeProject == nil
+                     ? "Questions about the project and Peeky's answers show up here. ⌘K clears."
+                     : "Try: “what does this app do?” · “find the bug in the tab bar” · “add a dark mode toggle”")
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .padding(.top, 2)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(state.codeLog) { entry in
+                                codeLogLine(entry).id(entry.id)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 2)
+                    }
+                    .onChange(of: state.codeLog.count) { _ in
+                        if let last = state.codeLog.last { proxy.scrollTo(last.id, anchor: .top) }
+                    }
+                    .onAppear {
+                        if let last = state.codeLog.last { proxy.scrollTo(last.id, anchor: .top) }
+                    }
+                }
+                .overlay(alignment: .topTrailing) {
+                    Button {
+                        state.clearCodeLog()
+                    } label: {
+                        Text("clear ⌘K")
+                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.45))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(Capsule().fill(Color.white.opacity(0.07)))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Clear the conversation (⌘K) — the project stays")
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(
+            Button("") { state.clearCodeLog() }
+                .keyboardShortcut("k", modifiers: .command)
+                .opacity(0)
+                .frame(width: 0, height: 0)
+        )
+    }
+
+    private func codeLogLine(_ entry: CodeLogEntry) -> some View {
+        let stamp = Self.logClock.string(from: entry.time)
+        return HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(stamp)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.35))
+            switch entry.kind {
+            case .question:
+                Text("❯")
+                    .font(.system(size: 14, weight: .heavy, design: .monospaced))
+                    .foregroundStyle(AssistantPhase.working.color)
+                Text(entry.text)
+                    .font(.system(size: 14.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white)
+            case .answer:
+                Text(entry.text)
+                    .font(.system(size: 14, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .lineSpacing(3)
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Color.white.opacity(0.04))
+                    )
+            case .status:
+                Text(entry.text)
+                    .font(.system(size: 13.5, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.6))
+                    .padding(.leading, 18)
+            case .error:
+                Text(entry.text)
+                    .font(.system(size: 14, design: .monospaced))
+                    .foregroundStyle(.orange)
+                    .padding(.leading, 18)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     /// A copied passage inline in the log, like `cat` output under the command
     /// that produced it: a one-line summary, the first few lines dimmed, and
     /// a toggle for the rest.
@@ -1747,6 +2051,7 @@ struct AssistantPanelView: View {
     private var inputPlaceholder: String {
         switch state.tab {
         case .talk: ""
+        case .code: state.codeProject == nil ? "Drop a project folder here, then ask…" : "Ask about \(state.codeProject?.name ?? "your code")…"
         default: "Ask Peeky anything…"
         }
     }
@@ -1766,6 +2071,7 @@ struct AssistantPanelView: View {
         case .ask: "Ask by voice"
         case .talk: "Say what you want Peeky to do"
         case .captureDictate: "Start dictation"
+        case .code: "Ask about your code by voice"
         }
         return Button {
             state.onToggleRecording?()
@@ -1815,7 +2121,7 @@ struct AssistantPanelView: View {
 
     private var bottomBar: some View {
         HStack(spacing: 10) {
-            if state.tab == .captureDictate || state.tab == .ask {
+            if state.tab == .captureDictate || state.tab == .ask || state.tab == .code {
                 addMenu
             }
             // Shell-prompt readout: `peeky on talk ❯` — the segments coloured
@@ -1907,7 +2213,8 @@ struct AssistantPanelView: View {
         }
         .buttonStyle(.plain)
         .help(state.tab == .ask ? "Attach images for your question (or drop / paste them here)"
-                                : "Add a file or folder from this Mac to the preview")
+              : state.tab == .code ? "Pick a project folder or files (or drop them here)"
+                                   : "Add a file or folder from this Mac to the preview")
     }
 
     private func showAddMenu() {
@@ -1934,6 +2241,22 @@ struct AssistantPanelView: View {
             paste.target = pasteAction
             actions.append(pasteAction)
             menu.addItem(paste)
+        } else if state.tab == .code {
+            let folder = NSMenuItem(title: state.codeProject == nil ? "Project folder or files…" : "Replace project…",
+                                    action: #selector(MenuAction.fire), keyEquivalent: "")
+            folder.image = NSImage(systemSymbolName: "folder.badge.plus", accessibilityDescription: nil)
+            let pick = MenuAction { state.onAttachCodeProject?() }
+            folder.target = pick
+            actions.append(pick)
+            menu.addItem(folder)
+            if state.codeProject != nil {
+                let reload = NSMenuItem(title: "Re-read from disk", action: #selector(MenuAction.fire), keyEquivalent: "")
+                reload.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: nil)
+                let reloadAction = MenuAction { state.onReloadCodeProject?() }
+                reload.target = reloadAction
+                actions.append(reloadAction)
+                menu.addItem(reload)
+            }
         } else {
             let files = NSMenuItem(title: "Files and folders", action: #selector(MenuAction.fire), keyEquivalent: "")
             files.image = NSImage(systemSymbolName: "paperclip", accessibilityDescription: nil)
@@ -2156,7 +2479,8 @@ struct AssistantPanelView: View {
             }
         }
         group.notify(queue: .main) { [state] in
-            if !urls.isEmpty { state.onDropIntoAsk?(urls) }
+            guard !urls.isEmpty else { return }
+            if state.tab == .code { state.onDropIntoCode?(urls) } else { state.onDropIntoAsk?(urls) }
         }
         return true
     }
@@ -2588,6 +2912,7 @@ struct AssistantPanelView: View {
         typedQuestion = ""
         switch state.tab {
         case .talk: state.onDo?(text)
+        case .code: state.onAskCode?(text)
         default: state.onSubmit?(text)
         }
     }
@@ -2598,6 +2923,7 @@ struct AssistantPanelView: View {
         case .captureDictate: "capture"
         case .ask: "ask"
         case .talk: "talk"
+        case .code: "code"
         }
     }
 }

@@ -92,7 +92,28 @@ On first use, allow **Screen Recording** in System Settings for MyClicky.
 ## Dictate (hold Option–Command–V)
 
 Speak → text is cleaned up by Claude and copied to the clipboard. Shown in the
-panel's **Dictate** tab. The panel has three tabs: Ask, Dictate, Capture.
+panel's **Dictate** tab. The panel has four tabs: Ask, Capture + Dictate, Talk,
+Peeky Code.
+
+## Peeky Code (questions about a project)
+
+Drop a project folder — Swift, Python, HTML/CSS, JavaScript, Java, anything
+text — onto the **Peeky Code** tab (or use **+ → Project folder or files…**).
+Peeky reads every source file, skipping `.git`, build output, `node_modules`,
+`*.xcassets`, `*.xcodeproj`, lock files, binaries and anything over 200 KB,
+and shows the size (`23 files · ≈38K tokens`). Then ask: "what does this app
+do?", "find the bug in the tab bar", "add a dark-mode toggle". Answers name
+real files and show the exact code to change. Follow-ups build on the
+conversation (⌘K clears it; the project stays).
+
+The whole project rides along with every question as one `cache_control:
+ephemeral` block, so Anthropic serves it from its prompt cache for ~5 minutes
+(refreshed on each use) at a tenth of the input price. The project card
+shows the effect after each question — `38K tokens from cache (≈10% price)`.
+Editing files? **+ → Re-read from disk** picks up the changes (one full-price
+question re-primes the cache). Projects over ~170K tokens are cut off with a
+warning; drop a subfolder instead. `.env`, keys and certificates are never
+bundled.
 
 ## Peeky Remote (iOS app)
 

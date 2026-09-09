@@ -225,6 +225,103 @@ struct AnthropicService {
         return cleaned
     }
 
+    // MARK: Peeky Code
+
+    /// What one code question cost, as reported by the API. The cache
+    /// numbers are the point: `cacheRead` tokens were billed at a tenth of
+    /// the normal rate, `cacheWrite` at 1.25×, `input` at full price.
+    struct Usage: Sendable, Equatable {
+        let input: Int
+        let cacheRead: Int
+        let cacheWrite: Int
+        let output: Int
+
+        /// True when the project came out of the cache rather than being
+        /// read fresh — the cheap path.
+        var hitCache: Bool { cacheRead > 0 }
+
+        static func parse(_ data: Data) -> Usage? {
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let usage = json["usage"] as? [String: Any] else { return nil }
+            return Usage(input: usage["input_tokens"] as? Int ?? 0,
+                         cacheRead: usage["cache_read_input_tokens"] as? Int ?? 0,
+                         cacheWrite: usage["cache_creation_input_tokens"] as? Int ?? 0,
+                         output: usage["output_tokens"] as? Int ?? 0)
+        }
+    }
+
+    struct CodeAnswer: Sendable {
+        let text: String
+        let usage: Usage?
+    }
+
+    private static let codeSystemPrompt = """
+    You are Peeky Code, a senior software engineer helping the user with a \
+    project they have shared with you. The complete source of that project \
+    follows this message: a file tree, then every file under a \
+    "===== FILE: path =====" header. Treat it as the single source of truth \
+    — read the actual code before answering, quote real file names and line \
+    contents, and never guess at code you can see.
+
+    Answer the way a good colleague would in a code review or pairing \
+    session: direct, specific, and honest about trade-offs. When asked to fix \
+    or change something, show the exact code to change, with enough \
+    surrounding context to find it, and say which file it goes in. Prefer \
+    small, targeted edits over rewrites. If the question is ambiguous or the \
+    answer depends on something not in the project, say so and ask.
+
+    Format for a monospaced terminal-style panel: plain text, short \
+    paragraphs, code in fenced blocks with the language named. No tables, \
+    no HTML, no emoji.
+    """
+
+    /// Ceiling for a code answer. Fixes come with code, and thinking shares
+    /// the budget, so this is generous.
+    private static let codeMaxTokens = 16_000
+    /// How many earlier exchanges ride along so follow-ups ("ok, fix it")
+    /// make sense. Older turns are dropped to keep the request bounded.
+    static let codeHistoryLimit = 12
+
+    /// A question about `project`, with the conversation so far. The project
+    /// text is sent as a system block flagged `cache_control: ephemeral`.
+    /// Everything up to that block — model, instructions, the project — is
+    /// identical from one question to the next, so Anthropic serves it from
+    /// cache (~5-minute window, refreshed on every use) for a tenth of the
+    /// input price. Only the conversation below it is billed in full.
+    func askAboutCode(question: String, project: CodeProject,
+                      history: [(question: String, answer: String)],
+                      onStatus: (@Sendable @MainActor (String) -> Void)? = nil) async throws -> CodeAnswer {
+        var messages: [[String: Any]] = []
+        for turn in history.suffix(Self.codeHistoryLimit) {
+            messages.append(["role": "user", "content": turn.question])
+            messages.append(["role": "assistant", "content": turn.answer])
+        }
+        messages.append(["role": "user", "content": question])
+
+        let body: [String: Any] = [
+            "model": model,
+            "max_tokens": Self.codeMaxTokens,
+            "output_config": ["effort": "medium"],
+            "system": [
+                ["type": "text", "text": Self.codeSystemPrompt],
+                ["type": "text", "text": project.bundleText,
+                 "cache_control": ["type": "ephemeral"]],
+            ],
+            "messages": messages,
+        ]
+        let data = try await send(body: body, timeout: 180, onStatus: onStatus)
+        if let reason = Self.refusalReason(from: data) { throw ServiceError.refused(reason) }
+        let envelope = Self.envelope(from: data)
+        guard let text = envelope.text else {
+            throw ServiceError.noAnswerText(stopReason: envelope.stopReason ?? "unknown")
+        }
+        let usage = Usage.parse(data)
+        if let usage {
+            log.notice("code ask: input=\(usage.input) cache_read=\(usage.cacheRead) cache_write=\(usage.cacheWrite) output=\(usage.output)")
+        }
+        return CodeAnswer(text: text.trimmingCharacters(in: .whitespacesAndNewlines), usage: usage)
+    }
+
     /// Generic strict-JSON request: a caller-supplied system prompt plus user
     /// text (and an optional image), with the same rate-limit retry behavior
     /// as `ask`. Returns the raw JSON object parsed from Claude's reply, for
