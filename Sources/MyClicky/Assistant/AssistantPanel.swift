@@ -1944,22 +1944,31 @@ struct AssistantPanelView: View {
     /// One file, the way the capture preview shows one image: line
     /// numbers down the left, scrollable both ways, selectable.
     private func codeFileViewer(_ file: CodeProject.File) -> some View {
+        // One row per line, rendered lazily: a single giant Text goes blank
+        // once it passes the ~16K px layer limit on big files.
         let lines = file.text.components(separatedBy: "\n")
-        let width = String(lines.count).count
-        let numbered = lines.enumerated().map { index, line in
-            String(repeating: " ", count: width - String(index + 1).count) + "\(index + 1)  " + line
-        }.joined(separator: "\n")
-        return ScrollView([.vertical, .horizontal]) {
-            Text(numbered)
-                .font(.system(size: 12.5, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.9))
-                .lineSpacing(2)
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(10)
+        let gutter = CGFloat(max(2, String(lines.count).count)) * 8 + 6
+        return ScrollView(.vertical) {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                ForEach(lines.indices, id: \.self) { index in
+                    HStack(alignment: .top, spacing: 8) {
+                        Text("\(index + 1)")
+                            .foregroundStyle(.white.opacity(0.3))
+                            .frame(width: gutter, alignment: .trailing)
+                        Text(lines[index].isEmpty ? " " : lines[index])
+                            .foregroundStyle(.white.opacity(0.9))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .font(.system(size: 12.5, design: .monospaced))
+                    .padding(.vertical, 1)
+                }
+            }
+            .padding(10)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(codeCardBackground)
+        .id(file.path)
     }
 
     private func codeCardButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
