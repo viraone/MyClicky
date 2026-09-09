@@ -135,6 +135,34 @@ final class AssistantController {
         }
     }
 
+    // MARK: Ask history
+
+    private func rememberAsk(question: String, answer: String) {
+        let entry = AskHistoryEntry(question: question, answer: answer, date: Date(),
+                                    attachmentNames: panel.state.askAttachments.map(\.name))
+        panel.state.askHistory.insert(entry, at: 0)
+        if panel.state.askHistory.count > AskHistoryStore.limit {
+            panel.state.askHistory.removeLast(panel.state.askHistory.count - AskHistoryStore.limit)
+        }
+        AskHistoryStore.save(panel.state.askHistory)
+    }
+
+    /// A History row was clicked: put that question and answer back on the
+    /// Ask tab, as text, without speaking it again.
+    private func restoreFromHistory(_ entry: AskHistoryEntry) {
+        guard !busy else { return }
+        ActivityLog.recordAction("ask-history-open", ["text": entry.question])
+        synthesizer.stopSpeaking(at: .immediate)
+        ring.hide()
+        panel.state.showingAskHistory = false
+        panel.state.tab = .ask
+        panel.state.transcript = entry.question
+        panel.state.answer = entry.answer
+        panel.state.errorText = nil
+        panel.state.restoredFromHistory = true
+        panel.state.status = .answering
+    }
+
     // MARK: Ask attachments (pictures the question is about)
 
     /// The Ask tab's + menu: a multi-select image picker.
@@ -326,6 +354,19 @@ final class AssistantController {
         panel.state.onDismissCapture = { [weak self] in self?.dismissCapture() }
         panel.state.onAttachFile = { [weak self] in self?.attachFileFromMac() }
         panel.state.onAttachToAsk = { [weak self] in self?.attachImagesToAsk() }
+        panel.state.askHistory = AskHistoryStore.load()
+        panel.state.onRestoreHistory = { [weak self] entry in self?.restoreFromHistory(entry) }
+        panel.state.onDeleteHistory = { [weak self] entry in
+            guard let self else { return }
+            self.panel.state.askHistory.removeAll { $0.id == entry.id }
+            AskHistoryStore.save(self.panel.state.askHistory)
+        }
+        panel.state.onClearHistory = { [weak self] in
+            guard let self else { return }
+            self.panel.state.askHistory = []
+            AskHistoryStore.save([])
+            ActivityLog.recordAction("ask-history-clear", [:])
+        }
         panel.state.onDropIntoAsk = { [weak self] urls in self?.addAskAttachments(urls: urls, via: "drop") }
         panel.state.onPasteIntoAsk = { [weak self] in self?.pasteIntoAsk() }
         captureFileWatcher.onChange = { [weak self] image in self?.handleCaptureEdited(image) }
@@ -1223,6 +1264,8 @@ final class AssistantController {
         panel.state.status = .thinking
         panel.state.answer = ""
         panel.state.errorText = nil
+        panel.state.showingAskHistory = false
+        panel.state.restoredFromHistory = false
         // With the study site open, the answer is also rendered in the page
         // (under the box being edited) so it can be read there.
         let siteBox = SiteEditActions.editContext()
@@ -1294,6 +1337,7 @@ final class AssistantController {
                 guard id == requestID else { return }
                 panel.state.status = .answering
                 panel.state.answer = answer.text
+                rememberAsk(question: question, answer: answer.text)
                 if siteOpen { SiteEditActions.showReply(answer.text, question: question) }
                 if let box = answer.highlight {
                     let rect = Self.screenRect(fromNormalized: box, on: screen)
