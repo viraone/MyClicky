@@ -304,6 +304,11 @@ final class AssistantState: ObservableObject {
         guard let path = codeFocusedFile, let current = codeCurrentText(of: path) else { return false }
         return codeDraft != current
     }
+    /// An answer's code block that's just quoting the open file as it is.
+    func codeBlockIsAlreadyInFile(_ code: String) -> Bool {
+        guard codeFocusedFile != nil else { return false }
+        return CodeBlockApplier.alreadyContains(code, in: codeDraft)
+    }
     /// Edited files whose text differs from the snapshot Claude has cached.
     var codeChangedFiles: [(path: String, text: String)] {
         codeEdits.compactMap { path, text in
@@ -2320,16 +2325,25 @@ struct AssistantPanelView: View {
                             .buttonStyle(.plain)
                             .help("Copy this code")
                             if let path = state.codeFocusedFile {
-                                Button {
-                                    state.onApplyCodeBlock?(code, previous)
-                                } label: {
-                                    Label("Apply to \((path as NSString).lastPathComponent)", systemImage: "arrow.down.doc")
+                                if state.codeBlockIsAlreadyInFile(code) {
+                                    // A quote of what's there now — the
+                                    // "find" half of a change, or just a
+                                    // pointer to where something lives.
+                                    Label("already in \((path as NSString).lastPathComponent)", systemImage: "checkmark")
+                                        .foregroundStyle(.white.opacity(0.4))
+                                        .help("This is what the file says now — nothing to apply")
+                                } else {
+                                    Button {
+                                        state.onApplyCodeBlock?(code, previous)
+                                    } label: {
+                                        Label("Apply to \((path as NSString).lastPathComponent)", systemImage: "arrow.down.doc")
+                                    }
+                                    .buttonStyle(.plain)
+                                    .foregroundStyle(AssistantPhase.done.color)
+                                    .help(previous == nil
+                                          ? "Put this code into the open file"
+                                          : "Replace the code shown before it with this, in the open file")
                                 }
-                                .buttonStyle(.plain)
-                                .foregroundStyle(AssistantPhase.done.color)
-                                .help(previous == nil
-                                      ? "Put this code into the open file"
-                                      : "Replace the code shown before it with this, in the open file")
                             }
                         }
                         .font(.system(size: 11.5, weight: .semibold, design: .monospaced))

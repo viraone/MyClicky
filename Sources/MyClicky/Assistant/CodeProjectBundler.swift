@@ -356,4 +356,12 @@ enum CodeBlockApplier {
             return l
         }.joined(separator: "\n")
     }
+
+    /// True when `code` already appears in `text` (ignoring trailing
+    /// whitespace) — i.e. it's a quote of the file, not a change to it.
+    static func alreadyContains(_ code: String, in text: String) -> Bool {
+        let block = normalized(trimmedNewlines(code))
+        guard !block.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        return normalized(text).contains(block)
+    }
 }

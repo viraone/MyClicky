@@ -139,4 +139,12 @@ final class CodeProjectBundlerTests: XCTestCase {
         XCTAssertEqual(lost, .notFound)
         XCTAssertEqual(same, file)
     }
+
+    func testApplierKnowsQuotesOfTheFile() {
+        let file = "a\n  b  \nc\n"
+        XCTAssertTrue(CodeBlockApplier.alreadyContains("  b\nc", in: file))
+        XCTAssertTrue(CodeBlockApplier.alreadyContains("\na\n", in: file))
+        XCTAssertFalse(CodeBlockApplier.alreadyContains("B", in: file))
+        XCTAssertFalse(CodeBlockApplier.alreadyContains("  \n", in: file))
+    }
 }
