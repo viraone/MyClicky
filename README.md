@@ -119,7 +119,8 @@ Click the project card to browse its files and click one to preview it
 (the caret on the preview folds it away); questions are then about that
 file. The preview is editable: type and it saves to disk about a second
 later, so an editor open on the same folder (VS Code, Xcode) picks the change
-up on its own. Edits don't touch the cached project block — the changed
+up on its own. **⌘F** opens a find bar (⌘G / ⇧⌘G next and previous match,
+⌥⌘F find-and-replace, Esc closes it), like VS Code's. Edits don't touch the cached project block — the changed
 file goes along with the next question as a short addendum (pennies) rather
 than re-priming the cache; ↻ re-reads everything when you want a fresh
 snapshot. Code blocks in answers have **Copy** and **Apply to <file>**

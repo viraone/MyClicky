@@ -2061,7 +2061,7 @@ struct AssistantPanelView: View {
                         .font(.system(size: 11.5, weight: .medium, design: .monospaced))
                         .foregroundStyle(AssistantPhase.done.color.opacity(0.9))
                 } else {
-                    Text("edit here — saves to disk")
+                    Text("edit here — saves to disk · ⌘F find")
                         .font(.system(size: 11.5, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.3))
                 }
@@ -2069,12 +2069,7 @@ struct AssistantPanelView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
             if !state.codeViewerCollapsed {
-                TextEditor(text: $state.codeDraft)
-                    .font(.system(size: 12.5, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.92))
-                    .lineSpacing(2)
-                    .scrollContentBackground(.hidden)
-                    .autocorrectionDisabled()
+                CodeTextEditor(text: $state.codeDraft)
                     .padding(.horizontal, 6)
                     .padding(.bottom, 6)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
