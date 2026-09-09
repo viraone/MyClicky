@@ -1147,7 +1147,6 @@ struct AssistantPanelView: View {
                 case .captureDictate:
                     captureDictateTab
                 case .code:
-                    topInputRow
                     if !state.codeImages.isEmpty { codeImagesRow }
                     codeProjectCard
                     if state.codeShowingFiles, let project = state.codeProject {
@@ -1264,6 +1263,8 @@ struct AssistantPanelView: View {
                                 .font(.system(size: 12, weight: .semibold))
                             Text(tab.rawValue)
                                 .font(.system(size: 14, weight: state.tab == tab ? .semibold : .regular, design: .monospaced))
+                                .lineLimit(1)
+                                .fixedSize()
                         }
                         .help(tab.rawValue)
                         .foregroundStyle(state.tab == tab ? .white : Color.white.opacity(0.5))
@@ -2604,6 +2605,61 @@ struct AssistantPanelView: View {
             if state.tab == .captureDictate || state.tab == .ask || state.tab == .code {
                 addMenu
             }
+            if state.tab == .code || state.tab == .terminal {
+                bottomInputField
+            } else {
+                promptReadout
+            }
+            coachButton
+            if state.tab == .ask {
+                readAloudToggle
+            }
+            micIndicator
+            // While recording (either tab) the mic itself is the stop
+            // control, so the red Stop button (which would discard the
+            // recording) is redundant.
+            if state.status == .listening {
+                EmptyView()
+            } else if state.canStop {
+                stopButton
+            } else {
+                sendButton
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: state.canStop)
+    }
+
+    /// The Code tab's question box, down by the send button where a chat
+    /// box is expected. It grows with what's in it — paste forty lines of
+    /// code and you see them (⌥↩ adds a line; ↩ sends).
+    private var bottomInputField: some View {
+        ZStack(alignment: .topLeading) {
+            if typedQuestion.isEmpty {
+                Text(inputPlaceholder)
+                    .font(.system(size: 14, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.45))
+                    .lineLimit(1)
+                    .allowsHitTesting(false)
+                    .padding(.leading, 2)
+            }
+            TextField("", text: $typedQuestion, axis: .vertical)
+                .textFieldStyle(.plain)
+                .lineLimit(1...8)
+                .font(.system(size: 14, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white)
+                .focused($fieldFocused)
+                .onSubmit(submit)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.06)))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .strokeBorder(Color.white.opacity(fieldFocused ? 0.22 : 0.10), lineWidth: 1))
+    }
+
+    private var promptReadout: some View {
+        Group {
             // Shell-prompt readout: `peeky on talk ❯` — the segments coloured
             // as a prompt colours them, the chevron in the phase colour.
             // Each word is pinned to one line so a narrow panel never breaks
@@ -2655,23 +2711,7 @@ struct AssistantPanelView: View {
                     .fixedSize()
             }
             }
-            coachButton
-            if state.tab == .ask {
-                readAloudToggle
-            }
-            micIndicator
-            // While recording (either tab) the mic itself is the stop
-            // control, so the red Stop button (which would discard the
-            // recording) is redundant.
-            if state.status == .listening {
-                EmptyView()
-            } else if state.canStop {
-                stopButton
-            } else {
-                sendButton
-            }
         }
-        .animation(.easeInOut(duration: 0.2), value: state.canStop)
     }
 
     /// Codex-style "+" at the foot of Capture + Dictate: a small menu whose
