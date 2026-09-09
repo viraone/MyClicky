@@ -1051,33 +1051,74 @@ struct AssistantPanelView: View {
     // terminal tabs: plain text, the active one lifted on a soft rectangle.
     private var tabBar: some View {
         HStack(spacing: 4) {
+            if state.size == .half {
+                // The half column can't fit three labels, and bare icons
+                // were a guessing game — so one dropdown names the current
+                // tab and lists the other two.
+                tabDropdown
+            } else {
+                ForEach(AssistantTab.allCases, id: \.self) { tab in
+                    Button {
+                        state.tab = tab
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: tab.icon)
+                                .font(.system(size: 12, weight: .semibold))
+                            Text(tab.rawValue)
+                                .font(.system(size: 14, weight: state.tab == tab ? .semibold : .regular, design: .monospaced))
+                        }
+                        .help(tab.rawValue)
+                        .foregroundStyle(state.tab == tab ? .white : Color.white.opacity(0.5))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(state.tab == tab ? Color.white.opacity(0.13) : .clear)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            Spacer()
+        }
+    }
+
+    private var tabDropdown: some View {
+        Menu {
             ForEach(AssistantTab.allCases, id: \.self) { tab in
                 Button {
                     state.tab = tab
                 } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: tab.icon)
-                            .font(.system(size: 12, weight: .semibold))
-                        // The half column can't fit three full labels;
-                        // show only the selected tab's name there.
-                        if state.size != .half || state.tab == tab {
-                            Text(state.size == .half ? tab.shortName : tab.rawValue)
-                                .font(.system(size: 14, weight: state.tab == tab ? .semibold : .regular, design: .monospaced))
-                        }
+                    if state.tab == tab {
+                        Label(tab.shortName, systemImage: "checkmark")
+                    } else {
+                        Label(tab.shortName, systemImage: tab.icon)
                     }
-                    .help(tab.rawValue)
-                    .foregroundStyle(state.tab == tab ? .white : Color.white.opacity(0.5))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 7)
-                    .background(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(state.tab == tab ? Color.white.opacity(0.13) : .clear)
-                    )
                 }
-                .buttonStyle(.plain)
             }
-            Spacer()
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: state.tab.icon)
+                    .font(.system(size: 12, weight: .semibold))
+                Text(state.tab.shortName)
+                    .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Color.white.opacity(0.13))
+            )
         }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(state.tab.rawValue)
     }
 
     /// The one line that tells the user where they are in the voice flow —
