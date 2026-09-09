@@ -259,6 +259,12 @@ final class AssistantState: ObservableObject {
     @Published var codeLog: [CodeLogEntry] = []
     /// What the last question cost — shown so the cache saving is visible.
     @Published var codeUsage: AnthropicService.Usage?
+    /// The project card is expanded into its file list.
+    @Published var codeShowingFiles = false
+    /// Path of the file open in the preview, nil for the whole project.
+    @Published var codeFocusedFile: String? {
+        didSet { if codeFocusedFile != nil { codeShowingFiles = false } }
+    }
 
     func logCode(_ kind: CodeLogEntry.Kind, _ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1028,7 +1034,16 @@ struct AssistantPanelView: View {
                 case .code:
                     topInputRow
                     codeProjectCard
-                    codeLogView
+                    if state.codeShowingFiles, let project = state.codeProject {
+                        codeFileList(project)
+                    } else if let path = state.codeFocusedFile, let file = state.codeProject?.file(at: path) {
+                        codeFileViewer(file)
+                    }
+                    // With a file or the list up and nothing asked yet, the
+                    // empty log's hint would steal half the height.
+                    if !state.codeLog.isEmpty || (!state.codeShowingFiles && state.codeFocusedFile == nil) {
+                        codeLogView
+                    }
                 }
             }
             .onDrop(of: [.fileURL, .image], isTargeted: nil) { providers in
@@ -1734,24 +1749,67 @@ struct AssistantPanelView: View {
         } else if let project = state.codeProject {
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 8) {
-                    Image(systemName: "folder.fill")
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Color(red: 0.35, green: 0.78, blue: 0.98))
-                    Text(project.name)
-                        .font(.system(size: 14.5, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Text(project.summaryLine)
-                        .font(.system(size: 13, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.55))
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
-                    codeCardButton("arrow.clockwise", help: "Re-read the project from disk (after editing files)") {
-                        state.onReloadCodeProject?()
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            if state.codeFocusedFile != nil {
+                                state.codeFocusedFile = nil
+                                state.codeShowingFiles = true
+                            } else {
+                                state.codeShowingFiles.toggle()
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(.white.opacity(0.5))
+                                .rotationEffect(.degrees(state.codeShowingFiles ? 90 : 0))
+                            Image(systemName: "folder.fill")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(Color(red: 0.35, green: 0.78, blue: 0.98))
+                            Text(project.name)
+                                .font(.system(size: 14.5, weight: .bold, design: .monospaced))
+                                .foregroundStyle(.white)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            if let path = state.codeFocusedFile {
+                                // Breadcrumb: StageTimePNW › App › CustomTabBar.swift
+                                ForEach(Array(path.split(separator: "/").enumerated()), id: \.offset) { index, part in
+                                    Text("›")
+                                        .foregroundStyle(.white.opacity(0.35))
+                                    Text(String(part))
+                                        .fontWeight(index == path.split(separator: "/").count - 1 ? .bold : .medium)
+                                        .foregroundStyle(.white.opacity(index == path.split(separator: "/").count - 1 ? 1 : 0.7))
+                                        .lineLimit(1)
+                                }
+                                .font(.system(size: 13.5, design: .monospaced))
+                            } else {
+                                Text(project.summaryLine)
+                                    .font(.system(size: 13, weight: .medium, design: .monospaced))
+                                    .foregroundStyle(.white.opacity(0.55))
+                                    .lineLimit(1)
+                            }
+                        }
+                        .contentShape(Rectangle())
                     }
-                    codeCardButton("xmark", help: "Remove the project") {
-                        state.onRemoveCodeProject?()
+                    .buttonStyle(.plain)
+                    .help(state.codeFocusedFile != nil ? "Back to the file list"
+                          : state.codeShowingFiles ? "Hide the file list" : "Show every file in the project")
+                    Spacer(minLength: 0)
+                    if let path = state.codeFocusedFile {
+                        codeCardButton("arrow.up.forward.app", help: "Open this file in your editor") {
+                            NSWorkspace.shared.open(project.root.appendingPathComponent(path))
+                        }
+                        codeCardButton("xmark", help: "Close the file — back to the whole project") {
+                            withAnimation(.easeInOut(duration: 0.18)) { state.codeFocusedFile = nil }
+                        }
+                    } else {
+                        codeCardButton("arrow.clockwise", help: "Re-read the project from disk (after editing files)") {
+                            state.onReloadCodeProject?()
+                        }
+                        codeCardButton("xmark", help: "Remove the project") {
+                            state.onRemoveCodeProject?()
+                        }
                     }
                 }
                 .help(project.root.path)
@@ -1822,6 +1880,84 @@ struct AssistantPanelView: View {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .strokeBorder(Color.white.opacity(0.06), lineWidth: 1)
             )
+    }
+
+    /// Every file in the project, grouped under its folder — Finder's list
+    /// view. Click one to open it in the preview.
+    private func codeFileList(_ project: CodeProject) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 1) {
+                ForEach(project.filesByFolder, id: \.folder) { group in
+                    if !group.folder.isEmpty {
+                        HStack(spacing: 6) {
+                            Image(systemName: "folder")
+                                .font(.system(size: 11, weight: .semibold))
+                            Text(group.folder + "/")
+                        }
+                        .font(.system(size: 12.5, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.55))
+                        .padding(.top, 8)
+                        .padding(.bottom, 2)
+                    }
+                    ForEach(group.files, id: \.path) { file in
+                        codeFileRow(file, indented: !group.folder.isEmpty)
+                    }
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(codeCardBackground)
+    }
+
+    private func codeFileRow(_ file: CodeProject.File, indented: Bool) -> some View {
+        let lines = file.text.reduce(into: 0) { if $1 == "\n" { $0 += 1 } }
+        return Button {
+            withAnimation(.easeInOut(duration: 0.18)) { state.codeFocusedFile = file.path }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "doc.text")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.45))
+                Text((file.path as NSString).lastPathComponent)
+                    .font(.system(size: 13.5, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Text("\(lines) lines")
+                    .font(.system(size: 11.5, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.35))
+            }
+            .padding(.leading, indented ? 18 : 0)
+            .padding(.vertical, 4)
+            .padding(.horizontal, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Open \(file.path)")
+    }
+
+    /// One file, the way the capture preview shows one image: line
+    /// numbers down the left, scrollable both ways, selectable.
+    private func codeFileViewer(_ file: CodeProject.File) -> some View {
+        let lines = file.text.components(separatedBy: "\n")
+        let width = String(lines.count).count
+        let numbered = lines.enumerated().map { index, line in
+            String(repeating: " ", count: width - String(index + 1).count) + "\(index + 1)  " + line
+        }.joined(separator: "\n")
+        return ScrollView([.vertical, .horizontal]) {
+            Text(numbered)
+                .font(.system(size: 12.5, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.9))
+                .lineSpacing(2)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(codeCardBackground)
     }
 
     private func codeCardButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
@@ -2053,7 +2189,8 @@ struct AssistantPanelView: View {
     private var inputPlaceholder: String {
         switch state.tab {
         case .talk: ""
-        case .code: state.codeProject == nil ? "Drop a project folder here, then ask…" : "Ask about \(state.codeProject?.name ?? "your code")…"
+        case .code: state.codeProject == nil ? "Drop a project folder here, then ask…"
+            : "Ask about \(state.codeFocusedFile.map { ($0 as NSString).lastPathComponent } ?? state.codeProject?.name ?? "your code")…"
         default: "Ask Peeky anything…"
         }
     }

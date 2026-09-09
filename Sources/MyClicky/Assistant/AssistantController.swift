@@ -336,6 +336,10 @@ final class AssistantController {
             if project.root != previousRoot {
                 panel.state.codeLog = []
                 panel.state.codeUsage = nil
+                panel.state.codeFocusedFile = nil
+                panel.state.codeShowingFiles = false
+            } else if let focused = panel.state.codeFocusedFile, project.file(at: focused) == nil {
+                panel.state.codeFocusedFile = nil
             }
             panel.state.codeProject = project
             var line = "Loaded \(project.name) — \(project.summaryLine)."
@@ -363,6 +367,8 @@ final class AssistantController {
         panel.state.codeProject = nil
         panel.state.codeUsage = nil
         panel.state.codeLog = []
+        panel.state.codeFocusedFile = nil
+        panel.state.codeShowingFiles = false
         ActivityLog.recordAction("code-project-remove", [:])
     }
 
@@ -379,6 +385,7 @@ final class AssistantController {
         }
         ActivityLog.recordAction("code-ask", ["text": question, "files": "\(project.files.count)"])
         let history = panel.state.codeHistory
+        let focusedFile = panel.state.codeFocusedFile
         panel.state.logCode(.question, question)
         busy = true
         synthesizer.stopSpeaking(at: .immediate)
@@ -397,6 +404,7 @@ final class AssistantController {
             do {
                 let claude = AnthropicService(apiKey: apiKey)
                 let answer = try await claude.askAboutCode(question: question, project: project,
+                                                           focusedFile: focusedFile,
                                                            history: history) { [weak self] status in
                     guard let self, id == self.requestID else { return }
                     self.panel.state.logCode(.status, status)

@@ -288,7 +288,7 @@ struct AnthropicService {
     /// identical from one question to the next, so Anthropic serves it from
     /// cache (~5-minute window, refreshed on every use) for a tenth of the
     /// input price. Only the conversation below it is billed in full.
-    func askAboutCode(question: String, project: CodeProject,
+    func askAboutCode(question: String, project: CodeProject, focusedFile: String? = nil,
                       history: [(question: String, answer: String)],
                       onStatus: (@Sendable @MainActor (String) -> Void)? = nil) async throws -> CodeAnswer {
         var messages: [[String: Any]] = []
@@ -296,7 +296,17 @@ struct AnthropicService {
             messages.append(["role": "user", "content": turn.question])
             messages.append(["role": "assistant", "content": turn.answer])
         }
-        messages.append(["role": "user", "content": question])
+        // The open file is a hint on the question, never part of the cached
+        // project block — so focusing a file costs a line, not a cache miss.
+        if let focusedFile {
+            messages.append(["role": "user", "content": [
+                ["type": "text", "text": "(The user has \(focusedFile) open in front of them right now. "
+                    + "Their question is about that file unless they say otherwise.)"],
+                ["type": "text", "text": question],
+            ]])
+        } else {
+            messages.append(["role": "user", "content": question])
+        }
 
         let body: [String: Any] = [
             "model": model,

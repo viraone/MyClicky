@@ -69,6 +69,16 @@ final class CodeProjectBundlerTests: XCTestCase {
         XCTAssertEqual(project.files.map(\.path), ["App/AppTab.swift", "Core/Model.py"])
     }
 
+    func testFilesGroupByFolderRootFirst() throws {
+        let project = try XCTUnwrap(CodeProjectBundler.bundle(urls: [root]))
+        let groups = project.filesByFolder
+        XCTAssertEqual(groups.map(\.folder), ["", "App", "Core", "Docs"])
+        XCTAssertEqual(groups[0].files.map(\.path), ["Info.plist"])
+        XCTAssertEqual(groups[1].files.map(\.path), ["App/AppTab.swift", "App/ContentView.swift"])
+        XCTAssertEqual(project.file(at: "Core/Model.py")?.text, "def f():\n    return 1\n")
+        XCTAssertNil(project.file(at: "nope.swift"))
+    }
+
     func testCompactNumbers() {
         XCTAssertEqual(CodeProject.compact(900), "900")
         XCTAssertEqual(CodeProject.compact(1_500), "1.5K")

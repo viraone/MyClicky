@@ -61,6 +61,23 @@ struct CodeProject: Sendable, Equatable {
         "\(files.count) file\(files.count == 1 ? "" : "s") · ≈\(Self.compact(estimatedTokens)) tokens"
     }
 
+    /// The files as a flat list grouped by their folder, root files first,
+    /// then folders alphabetically — Finder's list view without the
+    /// disclosure triangles.
+    var filesByFolder: [(folder: String, files: [File])] {
+        var groups: [String: [File]] = [:]
+        for file in files {
+            let folder = file.path.contains("/") ? String(file.path[..<file.path.lastIndex(of: "/")!]) : ""
+            groups[folder, default: []].append(file)
+        }
+        return groups.keys.sorted { a, b in
+            if a.isEmpty != b.isEmpty { return a.isEmpty }
+            return a.localizedStandardCompare(b) == .orderedAscending
+        }.map { ($0, groups[$0]!) }
+    }
+
+    func file(at path: String) -> File? { files.first { $0.path == path } }
+
     static func compact(_ n: Int) -> String {
         if n >= 1_000_000 { return String(format: "%.1fM", Double(n) / 1_000_000) }
         if n >= 10_000 { return "\(n / 1000)K" }
