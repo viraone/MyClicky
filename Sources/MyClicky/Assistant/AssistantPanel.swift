@@ -94,6 +94,9 @@ enum AssistantTab: String, CaseIterable {
     /// project text is prompt-cached, so follow-ups cost a fraction of the
     /// first question.
     case code = "Peeky Code"
+    /// A real shell, started in the Peeky Code project's folder. Local
+    /// only — never talks to Claude.
+    case terminal = "Terminal"
 
     var icon: String {
         switch self {
@@ -101,8 +104,12 @@ enum AssistantTab: String, CaseIterable {
         case .captureDictate: "camera.on.rectangle"
         case .talk: "bolt.fill"
         case .code: "chevron.left.forwardslash.chevron.right"
+        case .terminal: "terminal"
         }
     }
+
+    /// Tabs with a mic: everything but the terminal.
+    var takesVoice: Bool { self != .terminal }
 
     /// One-word name for the half-width column's tab bar.
     var shortName: String {
@@ -111,6 +118,7 @@ enum AssistantTab: String, CaseIterable {
         case .captureDictate: "Capture"
         case .talk: "Talk"
         case .code: "Code"
+        case .terminal: "Term"
         }
     }
 }
@@ -295,6 +303,12 @@ final class AssistantState: ObservableObject {
     private var codeSaveTask: Task<Void, Never>?
     /// When the focused file was last written to disk, for the header.
     @Published var codeLastSaved: Date?
+
+    // MARK: Terminal
+    /// The shell behind the Terminal tab. Lives as long as the panel does,
+    /// so switching tabs doesn't lose your session.
+    let terminal = TerminalSession()
+    var onRestartTerminal: (() -> Void)?
 
     /// The file as it currently is on disk (after any Peeky saves).
     func codeCurrentText(of path: String) -> String? {
@@ -1146,6 +1160,8 @@ struct AssistantPanelView: View {
                     if !state.codeLog.isEmpty || (!state.codeShowingFiles && state.codeFocusedFile == nil) {
                         codeLogView
                     }
+                case .terminal:
+                    terminalTab
                 }
             }
             .onDrop(of: [.fileURL, .image], isTargeted: nil) { providers in
@@ -2195,6 +2211,47 @@ struct AssistantPanelView: View {
         return parts.isEmpty ? "every file included — ask away" : parts.joined(separator: " · ")
     }
 
+    // MARK: Terminal tab
+
+    private var terminalTab: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "terminal")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.5))
+                Text(state.terminal.startedIn.map { $0.path.replacingOccurrences(of: NSHomeDirectory(), with: "~") } ?? "shell")
+                    .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.8))
+                    .lineLimit(1)
+                    .truncationMode(.head)
+                Spacer(minLength: 0)
+                Text(state.terminal.running ? "local shell · free — nothing here goes to Claude" : "shell exited")
+                    .font(.system(size: 11.5, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.3))
+                Button {
+                    state.onRestartTerminal?()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.6))
+                }
+                .buttonStyle(.plain)
+                .help(state.codeProject == nil ? "Restart the shell" : "Restart the shell in \(state.codeProject!.name)")
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            TerminalPane(session: state.terminal)
+                .padding(.horizontal, 6)
+                .padding(.bottom, 6)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(codeCardBackground)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 8)
+        .onAppear { state.onRestartTerminal?() }
+    }
+
     private var codeLogView: some View {
         VStack(alignment: .leading, spacing: 4) {
             if state.codeLog.isEmpty {
@@ -2471,6 +2528,7 @@ struct AssistantPanelView: View {
     private var inputPlaceholder: String {
         switch state.tab {
         case .talk: ""
+        case .terminal: "Type a command…"
         case .code: state.codeProject == nil ? "Drop a project folder here, then ask…"
             : "Ask about \(state.codeFocusedFile.map { ($0 as NSString).lastPathComponent } ?? state.codeProject?.name ?? "your code")…"
         default: "Ask Peeky anything…"
@@ -2493,6 +2551,7 @@ struct AssistantPanelView: View {
         case .talk: "Say what you want Peeky to do"
         case .captureDictate: "Start dictation"
         case .code: "Ask about your code by voice"
+        case .terminal: "Switch to a tab with a mic"
         }
         return Button {
             state.onToggleRecording?()
@@ -3341,6 +3400,7 @@ struct AssistantPanelView: View {
         switch state.tab {
         case .talk: state.onDo?(text)
         case .code: state.onAskCode?(text)
+        case .terminal: state.terminal.view.send(txt: text + "\n")
         default: state.onSubmit?(text)
         }
     }
@@ -3352,6 +3412,7 @@ struct AssistantPanelView: View {
         case .ask: "ask"
         case .talk: "talk"
         case .code: "code"
+        case .terminal: "terminal"
         }
     }
 }

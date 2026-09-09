@@ -669,6 +669,13 @@ final class AssistantController {
         panel.state.onDropIntoCode = { [weak self] urls in self?.dropIntoCode(urls: urls) }
         panel.state.onAttachCodeImages = { [weak self] in self?.attachImagesToCode() }
         panel.state.onPasteCodeImage = { [weak self] in self?.pasteCodeImage() }
+        panel.state.onRestartTerminal = { [weak self] in
+            guard let self else { return }
+            // Same folder and still running → no-op, so onAppear is safe.
+            self.panel.state.terminal.start(in: self.panel.state.codeProject?.root)
+            self.panel.state.objectWillChange.send()
+            self.panel.state.terminal.view.window?.makeFirstResponder(self.panel.state.terminal.view)
+        }
         panel.state.onSaveCodeFile = { [weak self] path, text in self?.saveCodeFile(path: path, text: text) }
         panel.state.onApplyCodeBlock = { [weak self] code, find in self?.applyCodeBlock(code, replacing: find) }
         panel.state.onAttachCodeProject = { [weak self] in self?.pickCodeProject() }
@@ -1486,11 +1493,15 @@ final class AssistantController {
     /// finishes the recording (no hold required) — a question on the Ask tab,
     /// a dictation on Capture + Dictate, a command to carry out on Talk.
     private func toggleRecording() {
+        guard panel.state.tab != .terminal else {
+            hud.report("The Terminal tab has no mic — switch to Peeky Ask or Peeky Code to talk.", ok: false)
+            return
+        }
         let kind: RecordKind = switch panel.state.tab {
         case .ask: .ask
         case .captureDictate: .dictate
         case .talk: .talk
-        case .code: .code
+        case .code, .terminal: .code
         }
         if panel.state.status == .listening || talkStreaming {
             if recordKind == kind {

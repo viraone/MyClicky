@@ -1,0 +1,76 @@
+import AppKit
+import SwiftTerm
+import SwiftUI
+
+/// The Terminal tab: a real shell (the user's login shell) running inside
+/// Peeky, started in the Peeky Code project's folder so `git status`,
+/// `git push`, `npm start` and friends just work. Nothing here talks to
+/// Claude — it costs nothing to use.
+@MainActor
+final class TerminalSession: ObservableObject {
+    let view: LocalProcessTerminalView
+    /// Folder the shell was started in, so a project change can restart it.
+    private(set) var startedIn: URL?
+    private(set) var running = false
+
+    init() {
+        view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 600, height: 300))
+        view.nativeBackgroundColor = NSColor(calibratedWhite: 0.06, alpha: 1)
+        view.nativeForegroundColor = NSColor.white.withAlphaComponent(0.92)
+        view.font = .monospacedSystemFont(ofSize: 12.5, weight: .regular)
+        view.caretColor = .white
+        view.optionAsMetaKey = true
+        view.allowMouseReporting = true
+    }
+
+    /// Starts the shell if it isn't running. A different folder restarts it
+    /// there, since a running shell can't be told to `cd` from outside.
+    func start(in directory: URL?) {
+        let target = directory ?? FileManager.default.homeDirectoryForCurrentUser
+        if running, startedIn == target { return }
+        if running { stop() }
+        let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        var env = Terminal.getEnvironmentVariables(termName: "xterm-256color")
+        env.append("LANG=en_US.UTF-8")
+        env.append("PEEKY=1")
+        FileManager.default.changeCurrentDirectoryPath(target.path)
+        view.startProcess(executable: shell, args: ["-l"], environment: env, execName: (shell as NSString).lastPathComponent)
+        startedIn = target
+        running = true
+    }
+
+    func stop() {
+        view.process.terminate()
+        running = false
+    }
+
+    func processTerminated() { running = false }
+}
+
+struct TerminalPane: NSViewRepresentable {
+    @ObservedObject var session: TerminalSession
+
+    func makeNSView(context: Context) -> LocalProcessTerminalView {
+        session.view.processDelegate = context.coordinator
+        return session.view
+    }
+
+    func updateNSView(_ view: LocalProcessTerminalView, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(session) }
+
+    final class Coordinator: NSObject, LocalProcessTerminalViewDelegate {
+        let session: TerminalSession
+        init(_ session: TerminalSession) { self.session = session }
+
+        func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
+        func setTerminalTitle(source: LocalProcessTerminalView, title: String) {}
+        func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
+        func processTerminated(source: TerminalView, exitCode: Int32?) {
+            Task { @MainActor in
+                session.processTerminated()
+                source.feed(text: "\r\n\u{1b}[2m[shell exited\(exitCode.map { " (\($0))" } ?? "") — click ↻ to start a new one]\u{1b}[0m\r\n")
+            }
+        }
+    }
+}

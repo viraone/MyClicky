@@ -128,6 +128,15 @@ buttons; when Claude gives a "current code" block followed by a
 "replacement" block, Apply swaps the first for the second in the file
 you're viewing (or rewrites the file when the block is a whole-file
 rewrite), and copies it to the clipboard when it can't find a place.
+### Terminal
+
+The **Terminal** tab is a real shell (your login shell, via SwiftTerm)
+running inside Peeky, started in the folder you dropped on Peeky Code — so
+after Peeky applies a change, `git diff`, `git commit`, `git push` or
+`npm start` are one tab away, without leaving the panel. ↻ restarts it in
+the current project. It's entirely local: nothing typed there goes to
+Claude, and it costs nothing to use.
+
 **+ → Images for the question…** (or drop image files, or just **⌘V** a
 picture off the clipboard — take a Peeky Capture, switch to the Code tab,
 paste) attaches
