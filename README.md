@@ -117,7 +117,17 @@ bundled.
 
 Click the project card to browse its files and click one to preview it
 (the caret on the preview folds it away); questions are then about that
-file. **+ → Images for the question…** (or drop image files) attaches
+file. The preview is editable: type and it saves to disk about a second
+later, so an editor open on the same folder (VS Code, Xcode) picks the change
+up on its own. Edits don't touch the cached project block — the changed
+file goes along with the next question as a short addendum (pennies) rather
+than re-priming the cache; ↻ re-reads everything when you want a fresh
+snapshot. Code blocks in answers have **Copy** and **Apply to <file>**
+buttons; when Claude gives a "current code" block followed by a
+"replacement" block, Apply swaps the first for the second in the file
+you're viewing (or rewrites the file when the block is a whole-file
+rewrite), and copies it to the clipboard when it can't find a place.
+**+ → Images for the question…** (or drop image files) attaches
 screenshots or mockups by name — they go with every question until removed.
 The card's **Cost** pill is a running estimate of what code questions have
 spent, from the token counts each answer reports at Sonnet list prices;

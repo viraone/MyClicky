@@ -265,3 +265,95 @@ enum CodeProjectBundler {
         return URL(fileURLWithPath: NSString.path(withComponents: common))
     }
 }
+
+/// An answer split into prose and fenced code blocks, so the blocks can be
+/// shown as cards with Copy/Apply.
+enum CodeAnswerSegment: Equatable {
+    case prose(String)
+    case code(language: String, code: String)
+
+    static func parse(_ text: String) -> [CodeAnswerSegment] {
+        var segments: [CodeAnswerSegment] = []
+        var prose: [String] = []
+        var code: [String]?
+        var language = ""
+        func flushProse() {
+            let joined = prose.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !joined.isEmpty { segments.append(.prose(joined)) }
+            prose = []
+        }
+        for line in text.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("```") {
+                if let open = code {
+                    segments.append(.code(language: language, code: open.joined(separator: "\n")))
+                    code = nil
+                } else {
+                    flushProse()
+                    language = String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+                    code = []
+                }
+            } else if code != nil {
+                code?.append(line)
+            } else {
+                prose.append(line)
+            }
+        }
+        if let open = code { segments.append(.code(language: language, code: open.joined(separator: "\n"))) }
+        flushProse()
+        return segments
+    }
+}
+
+/// Putting a code block from an answer into a file.
+enum CodeBlockApplier {
+    enum Outcome: Equatable {
+        /// `find` was located and swapped for the block.
+        case replaced(lines: Int)
+        /// The block reads as the whole file and took its place.
+        case rewroteFile
+        /// Nowhere obvious to put it.
+        case notFound
+    }
+
+    /// `find` is the block that preceded `code` in the answer — the code
+    /// to replace, verbatim from the file. Matching ignores trailing
+    /// whitespace on each line, which is where copy-through drifts.
+    static func apply(_ code: String, replacing find: String?, in text: String) -> (String, Outcome) {
+        let block = trimmedNewlines(code)
+        if let find, !find.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let needle = trimmedNewlines(find)
+            if let range = text.range(of: needle) {
+                return (text.replacingCharacters(in: range, with: block), .replaced(lines: needle.components(separatedBy: "\n").count))
+            }
+            let looseText = normalized(text), looseNeedle = normalized(needle)
+            if let range = looseText.range(of: looseNeedle) {
+                return (looseText.replacingCharacters(in: range, with: block), .replaced(lines: looseNeedle.components(separatedBy: "\n").count))
+            }
+        }
+        // A whole-file rewrite: opens the way the file does and is about as long.
+        let firstLine = { (s: String) in s.components(separatedBy: "\n").first { !$0.trimmingCharacters(in: .whitespaces).isEmpty } ?? "" }
+        if !text.isEmpty, firstLine(block) == firstLine(text), Double(block.count) > Double(text.count) * 0.5 {
+            return (block + "\n", .rewroteFile)
+        }
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return (block + "\n", .rewroteFile)
+        }
+        return (text, .notFound)
+    }
+
+    private static func trimmedNewlines(_ s: String) -> String {
+        var out = s
+        while out.hasSuffix("\n") { out.removeLast() }
+        while out.hasPrefix("\n") { out.removeFirst() }
+        return out
+    }
+
+    private static func normalized(_ s: String) -> String {
+        s.components(separatedBy: "\n").map { line in
+            var l = line
+            while let last = l.last, last == " " || last == "\t" { l.removeLast() }
+            return l
+        }.joined(separator: "\n")
+    }
+}

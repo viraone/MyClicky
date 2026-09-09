@@ -341,7 +341,12 @@ final class AssistantController {
             } else if let focused = panel.state.codeFocusedFile, project.file(at: focused) == nil {
                 panel.state.codeFocusedFile = nil
             }
+            panel.state.codeEdits = [:]
+            panel.state.codeLastSaved = nil
             panel.state.codeProject = project
+            if let focused = panel.state.codeFocusedFile {
+                panel.state.codeDraft = project.file(at: focused)?.text ?? ""
+            }
             var line = "Loaded \(project.name) — \(project.summaryLine)."
             if !project.skippedFolders.isEmpty {
                 line += " Skipped \(project.skippedFolders.joined(separator: ", "))."
@@ -370,7 +375,56 @@ final class AssistantController {
         panel.state.codeLog = []
         panel.state.codeFocusedFile = nil
         panel.state.codeShowingFiles = false
+        panel.state.codeEdits = [:]
+        panel.state.codeLastSaved = nil
         ActivityLog.recordAction("code-project-remove", [:])
+    }
+
+    // MARK: Peeky Code — editing
+
+    /// Writes an edit to disk. The project snapshot Claude has cached is
+    /// left alone; the new text is remembered in `codeEdits` and sent with
+    /// the next question as a small addendum. Refuses to overwrite a file
+    /// something else changed since Peeky last read it.
+    private func saveCodeFile(path: String, text: String) {
+        guard let project = panel.state.codeProject,
+              let known = panel.state.codeCurrentText(of: path) else { return }
+        let url = project.root.appendingPathComponent(path)
+        if let onDisk = try? String(contentsOf: url, encoding: .utf8), onDisk != known {
+            hud.report("\(url.lastPathComponent) changed on disk since Peeky read it — press ↻ to reload before editing.", ok: false)
+            panel.state.codeDraft = known
+            return
+        }
+        do {
+            try text.write(to: url, atomically: true, encoding: .utf8)
+            panel.state.codeEdits[path] = text
+            panel.state.codeLastSaved = Date()
+            ActivityLog.recordAction("code-save", ["path": path, "chars": "\(text.count)"])
+        } catch {
+            hud.report("Couldn't save \(url.lastPathComponent): \(error.localizedDescription)", ok: false)
+        }
+    }
+
+    private func applyCodeBlock(_ code: String, replacing find: String?) {
+        guard let path = panel.state.codeFocusedFile,
+              let current = panel.state.codeCurrentText(of: path) else { return }
+        let name = (path as NSString).lastPathComponent
+        let (updated, outcome) = CodeBlockApplier.apply(code, replacing: find, in: panel.state.codeDraftDirty ? panel.state.codeDraft : current)
+        switch outcome {
+        case .replaced(let lines):
+            panel.state.codeDraft = updated
+            saveCodeFile(path: path, text: updated)
+            panel.state.logCode(.status, "Replaced \(lines) line\(lines == 1 ? "" : "s") in \(name) — saved.")
+        case .rewroteFile:
+            panel.state.codeDraft = updated
+            saveCodeFile(path: path, text: updated)
+            panel.state.logCode(.status, "Rewrote \(name) with that block — saved.")
+        case .notFound:
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(code, forType: .string)
+            hud.report("Couldn't find where that goes in \(name) — copied it instead; paste it where it belongs.", ok: false)
+        }
+        ActivityLog.recordAction("code-apply", ["path": path, "outcome": "\(outcome)"])
     }
 
     private var lastCostFetch: Date = .distantPast
@@ -465,6 +519,7 @@ final class AssistantController {
         ActivityLog.recordAction("code-ask", ["text": question, "files": "\(project.files.count)"])
         let history = panel.state.codeHistory
         let focusedFile = panel.state.codeFocusedFile
+        let changedFiles = panel.state.codeChangedFiles
         let images = panel.state.codeImages.compactMap { item in
             Self.jpegData(item.image, maxDimension: 1400).map { (name: item.name, jpeg: $0) }
         }
@@ -488,6 +543,7 @@ final class AssistantController {
                 let claude = AnthropicService(apiKey: apiKey)
                 let answer = try await claude.askAboutCode(question: question, project: project,
                                                            focusedFile: focusedFile, images: images,
+                                                           changedFiles: changedFiles,
                                                            history: history) { [weak self] status in
                     guard let self, id == self.requestID else { return }
                     self.panel.state.logCode(.status, status)
@@ -590,6 +646,8 @@ final class AssistantController {
         panel.state.onDropIntoAsk = { [weak self] urls in self?.addAskAttachments(urls: urls, via: "drop") }
         panel.state.onDropIntoCode = { [weak self] urls in self?.dropIntoCode(urls: urls) }
         panel.state.onAttachCodeImages = { [weak self] in self?.attachImagesToCode() }
+        panel.state.onSaveCodeFile = { [weak self] path, text in self?.saveCodeFile(path: path, text: text) }
+        panel.state.onApplyCodeBlock = { [weak self] code, find in self?.applyCodeBlock(code, replacing: find) }
         panel.state.onAttachCodeProject = { [weak self] in self?.pickCodeProject() }
         panel.state.onReloadCodeProject = { [weak self] in self?.reloadCodeProject() }
         panel.state.onRemoveCodeProject = { [weak self] in self?.removeCodeProject() }

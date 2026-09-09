@@ -267,7 +267,49 @@ final class AssistantState: ObservableObject {
     @Published var codeShowingFiles = false
     /// Path of the file open in the preview, nil for the whole project.
     @Published var codeFocusedFile: String? {
-        didSet { if codeFocusedFile != nil { codeShowingFiles = false } }
+        didSet {
+            if codeFocusedFile != nil { codeShowingFiles = false }
+            codeDraft = codeFocusedFile.flatMap { codeCurrentText(of: $0) } ?? ""
+        }
+    }
+    /// Files Peeky has saved since the project was read, by path. The
+    /// project snapshot (and so the cached block Claude sees) stays as
+    /// loaded; these ride along with a question as a small addendum, which
+    /// costs pennies where re-bundling would be a full-price cache write.
+    @Published var codeEdits: [String: String] = [:]
+    /// The focused file's text as it stands in the editor.
+    @Published var codeDraft = "" {
+        didSet {
+            guard let path = codeFocusedFile, codeDraft != codeCurrentText(of: path) else {
+                codeSaveTask?.cancel(); return
+            }
+            // Autosave a beat after typing stops.
+            codeSaveTask?.cancel()
+            codeSaveTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard let self, !Task.isCancelled, self.codeFocusedFile == path else { return }
+                self.onSaveCodeFile?(path, self.codeDraft)
+            }
+        }
+    }
+    private var codeSaveTask: Task<Void, Never>?
+    /// When the focused file was last written to disk, for the header.
+    @Published var codeLastSaved: Date?
+
+    /// The file as it currently is on disk (after any Peeky saves).
+    func codeCurrentText(of path: String) -> String? {
+        codeEdits[path] ?? codeProject?.file(at: path)?.text
+    }
+    var codeDraftDirty: Bool {
+        guard let path = codeFocusedFile, let current = codeCurrentText(of: path) else { return false }
+        return codeDraft != current
+    }
+    /// Edited files whose text differs from the snapshot Claude has cached.
+    var codeChangedFiles: [(path: String, text: String)] {
+        codeEdits.compactMap { path, text in
+            guard let original = codeProject?.file(at: path)?.text, original != text else { return nil }
+            return (path, text)
+        }.sorted { $0.path < $1.path }
     }
     /// The file preview is folded down to its header row.
     @Published var codeViewerCollapsed = false
@@ -441,6 +483,11 @@ final class AssistantState: ObservableObject {
     var onDropIntoCode: (([URL]) -> Void)?
     var onAttachCodeProject: (() -> Void)?
     var onAttachCodeImages: (() -> Void)?
+    /// Write `text` to the project file at `path` (relative to the root).
+    var onSaveCodeFile: ((String, String) -> Void)?
+    /// Put a code block from an answer into the focused file. `find` is the
+    /// block that preceded it in the answer, if any — the code to replace.
+    var onApplyCodeBlock: ((_ code: String, _ find: String?) -> Void)?
     var onReloadCodeProject: (() -> Void)?
     var onRemoveCodeProject: (() -> Void)?
     var onAskCode: ((String) -> Void)?
@@ -1978,56 +2025,59 @@ struct AssistantPanelView: View {
         .help("Open \(file.path)")
     }
 
-    /// One file, the way the capture preview shows one image: line
-    /// numbers down the left, scrollable both ways, selectable.
+    /// One file, the way the capture preview shows one image — and
+    /// editable: type, and a second later it's saved to disk, where VS Code
+    /// or any other editor with the file open picks it up.
     private func codeFileViewer(_ file: CodeProject.File) -> some View {
-        // One row per line, rendered lazily: a single giant Text goes blank
-        // once it passes the ~16K px layer limit on big files.
-        let lines = file.text.components(separatedBy: "\n")
-        let gutter = CGFloat(max(2, String(lines.count).count)) * 8 + 6
+        let lineCount = state.codeDraft.reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
         return VStack(alignment: .leading, spacing: 0) {
-            Button {
-                withAnimation(.easeInOut(duration: 0.18)) { state.codeViewerCollapsed.toggle() }
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.5))
-                        .rotationEffect(.degrees(state.codeViewerCollapsed ? 0 : 90))
-                    Text((file.path as NSString).lastPathComponent)
-                        .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.8))
-                    Text("\(lines.count) lines")
-                        .font(.system(size: 12, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.4))
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help(state.codeViewerCollapsed ? "Show the file" : "Collapse the file preview")
-            if !state.codeViewerCollapsed {
-                ScrollView(.vertical) {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(lines.indices, id: \.self) { index in
-                            HStack(alignment: .top, spacing: 8) {
-                                Text("\(index + 1)")
-                                    .foregroundStyle(.white.opacity(0.3))
-                                    .frame(width: gutter, alignment: .trailing)
-                                Text(lines[index].isEmpty ? " " : lines[index])
-                                    .foregroundStyle(.white.opacity(0.9))
-                                    .textSelection(.enabled)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                            .font(.system(size: 12.5, design: .monospaced))
-                            .padding(.vertical, 1)
-                        }
+            HStack(spacing: 8) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) { state.codeViewerCollapsed.toggle() }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.5))
+                            .rotationEffect(.degrees(state.codeViewerCollapsed ? 0 : 90))
+                        Text((file.path as NSString).lastPathComponent)
+                            .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.8))
+                        Text("\(lineCount) lines")
+                            .font(.system(size: 12, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.4))
                     }
-                    .padding([.horizontal, .bottom], 10)
+                    .contentShape(Rectangle())
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .buttonStyle(.plain)
+                .help(state.codeViewerCollapsed ? "Show the file" : "Collapse the file preview")
+                Spacer(minLength: 0)
+                if state.codeDraftDirty {
+                    Text("saving…")
+                        .font(.system(size: 11.5, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.orange.opacity(0.9))
+                } else if let saved = state.codeLastSaved, state.codeEdits[file.path] != nil {
+                    Text("saved \(Self.logClock.string(from: saved)) · VS Code sees it")
+                        .font(.system(size: 11.5, weight: .medium, design: .monospaced))
+                        .foregroundStyle(AssistantPhase.done.color.opacity(0.9))
+                } else {
+                    Text("edit here — saves to disk")
+                        .font(.system(size: 11.5, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.3))
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            if !state.codeViewerCollapsed {
+                TextEditor(text: $state.codeDraft)
+                    .font(.system(size: 12.5, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .lineSpacing(2)
+                    .scrollContentBackground(.hidden)
+                    .autocorrectionDisabled()
+                    .padding(.horizontal, 6)
+                    .padding(.bottom, 6)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .frame(maxWidth: .infinity)
@@ -2191,10 +2241,7 @@ struct AssistantPanelView: View {
                     .font(.system(size: 14.5, weight: .semibold, design: .monospaced))
                     .foregroundStyle(.white)
             case .answer:
-                Text(entry.text)
-                    .font(.system(size: 14, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.92))
-                    .lineSpacing(3)
+                codeAnswerView(entry.text)
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(
@@ -2216,6 +2263,81 @@ struct AssistantPanelView: View {
         .fixedSize(horizontal: false, vertical: true)
         .textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// An answer with its fenced code blocks pulled out into cards, each
+    /// with Copy and — when a file is open — Apply, which puts the code into
+    /// that file (replacing the block that preceded it in the answer, when
+    /// the answer gave one).
+    private func codeAnswerView(_ text: String) -> some View {
+        let segments = CodeAnswerSegment.parse(text)
+        return VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(segments.enumerated()), id: \.offset) { index, segment in
+                switch segment {
+                case .prose(let prose):
+                    Text(prose)
+                        .font(.system(size: 14, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.92))
+                        .lineSpacing(3)
+                        .textSelection(.enabled)
+                case .code(let language, let code):
+                    let previous: String? = index > 0 ? {
+                        if case .code(_, let earlier) = segments[index - 1] { return earlier }
+                        if index > 1, case .code(_, let earlier) = segments[index - 2],
+                           case .prose(let between) = segments[index - 1], between.count < 80 { return earlier }
+                        return nil
+                    }() : nil
+                    VStack(alignment: .leading, spacing: 0) {
+                        HStack(spacing: 8) {
+                            Text(language.isEmpty ? "code" : language)
+                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.4))
+                            Spacer(minLength: 0)
+                            Button {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(code, forType: .string)
+                            } label: {
+                                Label("Copy", systemImage: "doc.on.doc")
+                            }
+                            .buttonStyle(.plain)
+                            .help("Copy this code")
+                            if let path = state.codeFocusedFile {
+                                Button {
+                                    state.onApplyCodeBlock?(code, previous)
+                                } label: {
+                                    Label("Apply to \((path as NSString).lastPathComponent)", systemImage: "arrow.down.doc")
+                                }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(AssistantPhase.done.color)
+                                .help(previous == nil
+                                      ? "Put this code into the open file"
+                                      : "Replace the code shown before it with this, in the open file")
+                            }
+                        }
+                        .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Color.white.opacity(0.05))
+                        Text(code)
+                            .font(.system(size: 13, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.92))
+                            .lineSpacing(2)
+                            .textSelection(.enabled)
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.black.opacity(0.35))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                    )
+                }
+            }
+        }
     }
 
     /// A copied passage inline in the log, like `cat` output under the command

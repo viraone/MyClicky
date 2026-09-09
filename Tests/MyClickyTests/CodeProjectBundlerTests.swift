@@ -104,4 +104,39 @@ final class CodeProjectBundlerTests: XCTestCase {
         let cached = AnthropicService.Usage(input: 0, cacheRead: 50_000, cacheWrite: 0, output: 1_000)
         XCTAssertEqual(cached.costUSD, 0.015 + 0.015, accuracy: 0.0001)
     }
+
+    func testAnswerSegmentsSplitProseAndFences() {
+        let text = "Change this in `style.css`:\n```css\n.a { x: 1 }\n```\nReplace with:\n```css\n.a { x: 2 }\n```\nDone."
+        let segments = CodeAnswerSegment.parse(text)
+        XCTAssertEqual(segments, [
+            .prose("Change this in `style.css`:"),
+            .code(language: "css", code: ".a { x: 1 }"),
+            .prose("Replace with:"),
+            .code(language: "css", code: ".a { x: 2 }"),
+            .prose("Done."),
+        ])
+        XCTAssertEqual(CodeAnswerSegment.parse("just words"), [.prose("just words")])
+    }
+
+    func testApplierReplacesFindBlock() {
+        let file = "a\nb\nc\nd\n"
+        let (out, outcome) = CodeBlockApplier.apply("B\nC", replacing: "b\nc", in: file)
+        XCTAssertEqual(outcome, .replaced(lines: 2))
+        XCTAssertEqual(out, "a\nB\nC\nd\n")
+        // Trailing whitespace in the file shouldn't break the match.
+        let (out2, outcome2) = CodeBlockApplier.apply("X", replacing: "b\nc", in: "a\nb  \nc\nd\n")
+        XCTAssertEqual(outcome2, .replaced(lines: 2))
+        XCTAssertEqual(out2, "a\nX\nd\n")
+    }
+
+    func testApplierRewritesWholeFileOrGivesUp() {
+        let file = "body { margin: 0 }\nh1 { color: red }\n"
+        let rewrite = "body { margin: 0 }\nh1 { color: blue }\np { x: 1 }\n"
+        let (out, outcome) = CodeBlockApplier.apply(rewrite, replacing: nil, in: file)
+        XCTAssertEqual(outcome, .rewroteFile)
+        XCTAssertEqual(out, rewrite)
+        let (same, lost) = CodeBlockApplier.apply("tiny", replacing: "nope", in: file)
+        XCTAssertEqual(lost, .notFound)
+        XCTAssertEqual(same, file)
+    }
 }

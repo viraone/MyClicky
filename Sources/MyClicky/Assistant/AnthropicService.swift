@@ -364,6 +364,12 @@ struct AnthropicService {
     small, targeted edits over rewrites. If the question is ambiguous or the \
     answer depends on something not in the project, say so and ask.
 
+    Changes are applied by a button next to each code block, so shape them \
+    for that: for an edit to existing code, give two fenced blocks in a row \
+    — first the current code copied verbatim from the file (enough lines to \
+    be unique), then the replacement. For a new file or a full rewrite, give \
+    the whole file in one block. Name the file just before the blocks.
+
     Format for a monospaced terminal-style panel: plain text, short \
     paragraphs, code in fenced blocks with the language named. No tables, \
     no HTML, no emoji.
@@ -384,6 +390,7 @@ struct AnthropicService {
     /// input price. Only the conversation below it is billed in full.
     func askAboutCode(question: String, project: CodeProject, focusedFile: String? = nil,
                       images: [(name: String, jpeg: Data)] = [],
+                      changedFiles: [(path: String, text: String)] = [],
                       history: [(question: String, answer: String)],
                       onStatus: (@Sendable @MainActor (String) -> Void)? = nil) async throws -> CodeAnswer {
         var messages: [[String: Any]] = []
@@ -391,10 +398,18 @@ struct AnthropicService {
             messages.append(["role": "user", "content": turn.question])
             messages.append(["role": "assistant", "content": turn.answer])
         }
-        // The open file and any pictures are hints on the question, never
-        // part of the cached project block — so they cost a little, not a
-        // cache miss.
+        // The open file, edited files and any pictures are hints on the
+        // question, never part of the cached project block — so they cost
+        // a little, not a cache miss.
         var content: [[String: Any]] = []
+        if !changedFiles.isEmpty {
+            var note = "Since the project snapshot above was taken, the user edited these files. "
+                + "Use these versions, not the ones in the snapshot:\n\n"
+            for file in changedFiles {
+                note += "===== FILE: \(file.path) (current) =====\n\(file.text)\n\n"
+            }
+            content.append(["type": "text", "text": note])
+        }
         if let focusedFile {
             content.append(["type": "text", "text": "(The user has \(focusedFile) open in front of them right now. "
                 + "Their question is about that file unless they say otherwise.)"])
