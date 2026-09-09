@@ -1877,6 +1877,8 @@ struct AssistantPanelView: View {
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.vertical, 2)
+                        // Room for the "clear ⌘K" pill in the corner.
+                        .padding(.trailing, 90)
                     }
                     .onChange(of: state.codeLog.count) { _ in
                         if let last = state.codeLog.last { proxy.scrollTo(last.id, anchor: .top) }
