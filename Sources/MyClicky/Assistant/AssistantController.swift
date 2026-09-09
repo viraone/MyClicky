@@ -415,10 +415,13 @@ final class AssistantController {
         remote.onListenTalk = { [weak self] in
             guard let self else { return }
             self.talkTargetApp = NSWorkspace.shared.frontmostApplication
+            // Phone-driven: if the panel was closed, it comes back as the thin
+            // strip at the bottom of the work screen — a status readout, out
+            // of the way. If it's already up, it stays exactly as the user
+            // has it (size, spot, and all); only the tab changes.
+            let wasHidden = !self.panel.isVisible
             self.showPanel(listening: true)
-            // Phone-driven: the Mac panel is just a status readout, so park it
-            // as the thin strip at the bottom of the work screen.
-            if let screen = self.activeScreen { self.panel.showAsStrip(on: screen) }
+            if wasHidden, let screen = self.activeScreen { self.panel.showAsStrip(on: screen) }
             // The phone has its own ASK key, so TALK always means "do it" —
             // whatever tab the Mac panel was left on. (Deferring to the Ask
             // tab here turned "open Messages" into a question three times in
