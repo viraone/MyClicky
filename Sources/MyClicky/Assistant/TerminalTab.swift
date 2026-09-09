@@ -45,6 +45,13 @@ final class TerminalSession: ObservableObject {
     }
 
     func processTerminated() { running = false }
+
+    /// Terminal.app's ⌘K: wipe the screen and scrollback, keep the prompt.
+    /// Redraw the prompt by nudging the shell, so it doesn't look hung.
+    func clearScreen() {
+        view.feed(text: "\u{1b}[2J\u{1b}[3J\u{1b}[H")
+        if running { view.send(txt: "\u{0c}") }  // ⌃L: zsh/bash repaint the prompt
+    }
 }
 
 struct TerminalPane: NSViewRepresentable {

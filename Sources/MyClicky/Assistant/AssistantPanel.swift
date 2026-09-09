@@ -897,6 +897,11 @@ final class AssistantPanelController {
             self.state.codeFindFocusRequest += 1
             return true
         }
+        panel.onClear = { [weak self] in
+            guard let self, self.state.tab == .terminal else { return false }
+            self.state.terminal.clearScreen()
+            return true
+        }
         // Track which display the panel lives on, including hand drags, so
         // the phone's screen switch can follow reality.
         NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification, object: panel, queue: .main) { [weak self] _ in
@@ -977,6 +982,8 @@ private final class KeyablePanel: NSPanel {
     var onPaste: (() -> Bool)?
     /// ⌘F anywhere in the panel. Return true when a find bar took it.
     var onFind: (() -> Bool)?
+    /// ⌘K. Return true when a terminal took it as "clear".
+    var onClear: (() -> Bool)?
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -985,6 +992,9 @@ private final class KeyablePanel: NSPanel {
             return true
         }
         if flags == [.command], key == "f", onFind?() == true {
+            return true
+        }
+        if flags == [.command], key == "k", onClear?() == true {
             return true
         }
         if super.performKeyEquivalent(with: event) { return true }
@@ -2184,7 +2194,8 @@ struct AssistantPanelView: View {
                                highlights: state.codeFindMatches,
                                current: state.codeFindMatches.isEmpty ? nil : state.codeFindMatches[min(state.codeFindIndex, state.codeFindMatches.count - 1)],
                                onFind: { state.codeFindVisible = true; state.codeFindFocusRequest += 1 },
-                               onEscape: { state.closeCodeFind() })
+                               onEscape: { state.closeCodeFind() },
+                               language: SyntaxHighlighter.language(for: file.path))
                     .padding(.horizontal, 6)
                     .padding(.bottom, 6)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

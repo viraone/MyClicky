@@ -11,6 +11,7 @@ struct CodeTextEditor: NSViewRepresentable {
     var current: NSRange?
     var onFind: (() -> Void)?
     var onEscape: (() -> Void)?
+    var language: SyntaxHighlighter.Language = .other
     var font: NSFont = .monospacedSystemFont(ofSize: 12.5, weight: .regular)
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -27,7 +28,7 @@ struct CodeTextEditor: NSViewRepresentable {
         textView.delegate = context.coordinator
         textView.string = text
         textView.font = font
-        textView.textColor = NSColor.white.withAlphaComponent(0.92)
+        textView.textColor = SyntaxHighlighter.plain
         textView.insertionPointColor = .white
         textView.drawsBackground = false
         textView.isRichText = false
@@ -52,8 +53,12 @@ struct CodeTextEditor: NSViewRepresentable {
             return style
         }()
         textView.typingAttributes = [.font: font,
-                                     .foregroundColor: NSColor.white.withAlphaComponent(0.92),
+                                     .foregroundColor: SyntaxHighlighter.plain,
                                      .paragraphStyle: textView.defaultParagraphStyle!]
+        if let storage = textView.textStorage {
+            SyntaxHighlighter.highlight(storage, language: language, font: font)
+        }
+        context.coordinator.language = language
 
         textView.onFind = { [weak coordinator = context.coordinator] in coordinator?.parent.onFind?() }
         textView.onEscape = { [weak coordinator = context.coordinator] in coordinator?.parent.onEscape?() }
@@ -73,11 +78,17 @@ struct CodeTextEditor: NSViewRepresentable {
             textView.string = text
             let end = (text as NSString).length
             textView.setSelectedRange(NSRange(location: min(selected.location, end), length: 0))
+            if let storage = textView.textStorage {
+                SyntaxHighlighter.highlight(storage, language: language, font: font)
+            }
+        } else if language != context.coordinator.language, let storage = textView.textStorage {
+            SyntaxHighlighter.highlight(storage, language: language, font: font)
         }
+        context.coordinator.language = language
         applyHighlights(to: textView, coordinator: context.coordinator)
     }
 
-    private func applyHighlights(to textView: NSTextView, coordinator: Coordinator) {
+    fileprivate func applyHighlights(to textView: NSTextView, coordinator: Coordinator) {
         guard let layout = textView.layoutManager else { return }
         let length = (textView.string as NSString).length
         let key = highlights.map { "\($0.location):\($0.length)" }.joined(separator: ",") + "|\(current.map { "\($0.location)" } ?? "")"
@@ -97,11 +108,26 @@ struct CodeTextEditor: NSViewRepresentable {
         var parent: CodeTextEditor
         weak var textView: NSTextView?
         var highlightKey = ""
+        var language: SyntaxHighlighter.Language = .other
+        private var recolor: DispatchWorkItem?
         init(_ parent: CodeTextEditor) { self.parent = parent }
 
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
             parent.text = textView.string
+            // Re-colour a beat after typing stops; a full pass on every
+            // keystroke would stutter on a 4,000-line file.
+            recolor?.cancel()
+            let work = DispatchWorkItem { [weak self, weak textView] in
+                guard let self, let textView, let storage = textView.textStorage else { return }
+                let selected = textView.selectedRange()
+                SyntaxHighlighter.highlight(storage, language: self.language, font: self.parent.font)
+                textView.setSelectedRange(selected)
+                self.highlightKey = ""
+                self.parent.applyHighlights(to: textView, coordinator: self)
+            }
+            recolor = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
         }
     }
 }

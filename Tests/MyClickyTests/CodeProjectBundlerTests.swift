@@ -147,4 +147,18 @@ final class CodeProjectBundlerTests: XCTestCase {
         XCTAssertFalse(CodeBlockApplier.alreadyContains("B", in: file))
         XCTAssertFalse(CodeBlockApplier.alreadyContains("  \n", in: file))
     }
+
+    func testHighlighterPaintsDarkModernColours() {
+        let storage = NSTextStorage(string: "// hi\nconst x = \"s\"; f(1)")
+        SyntaxHighlighter.highlight(storage, language: .javascript, font: .systemFont(ofSize: 12))
+        func color(at i: Int) -> NSColor { storage.attribute(.foregroundColor, at: i, effectiveRange: nil) as! NSColor }
+        XCTAssertEqual(color(at: 0), SyntaxHighlighter.comment)
+        XCTAssertEqual(color(at: 6), SyntaxHighlighter.keyword)   // const
+        XCTAssertEqual(color(at: 16), SyntaxHighlighter.string)   // "s"
+        XCTAssertEqual(color(at: 21), SyntaxHighlighter.function) // f
+        XCTAssertEqual(color(at: 23), SyntaxHighlighter.number)   // 1
+        XCTAssertEqual(SyntaxHighlighter.language(for: "a/b.css"), .css)
+        XCTAssertEqual(SyntaxHighlighter.language(for: "x.mjs"), .javascript)
+        XCTAssertEqual(SyntaxHighlighter.language(for: "README"), .other)
+    }
 }
