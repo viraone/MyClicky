@@ -304,6 +304,38 @@ final class AssistantState: ObservableObject {
     /// When the focused file was last written to disk, for the header.
     @Published var codeLastSaved: Date?
 
+    // MARK: Code find bar
+    @Published var codeFindVisible = false
+    @Published var codeFindQuery = "" { didSet { if codeFindQuery != oldValue { codeFindIndex = 0 } } }
+    /// Which match is current, 0-based into `codeFindMatches`.
+    @Published var codeFindIndex = 0
+    /// Bumped to ask the find field to take keyboard focus.
+    @Published var codeFindFocusRequest = 0
+
+    /// Every place the query appears in the draft (case-insensitive).
+    var codeFindMatches: [NSRange] {
+        guard codeFindVisible, !codeFindQuery.isEmpty else { return [] }
+        let text = codeDraft as NSString
+        var out: [NSRange] = []
+        var from = 0
+        while from < text.length {
+            let r = text.range(of: codeFindQuery, options: [.caseInsensitive], range: NSRange(location: from, length: text.length - from))
+            if r.location == NSNotFound { break }
+            out.append(r)
+            from = r.location + max(r.length, 1)
+        }
+        return out
+    }
+    func codeFindStep(_ delta: Int) {
+        let count = codeFindMatches.count
+        guard count > 0 else { return }
+        codeFindIndex = ((codeFindIndex + delta) % count + count) % count
+    }
+    func closeCodeFind() {
+        codeFindVisible = false
+        codeFindQuery = ""
+    }
+
     // MARK: Terminal
     /// The shell behind the Terminal tab. Lives as long as the panel does,
     /// so switching tabs doesn't lose your session.
@@ -855,6 +887,13 @@ final class AssistantPanelController {
             self.state.onPasteCodeImage?()
             return true
         }
+        panel.onFind = { [weak self] in
+            guard let self, self.state.tab == .code, self.state.codeFocusedFile != nil else { return false }
+            self.state.codeViewerCollapsed = false
+            self.state.codeFindVisible = true
+            self.state.codeFindFocusRequest += 1
+            return true
+        }
         // Track which display the panel lives on, including hand drags, so
         // the phone's screen switch can follow reality.
         NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification, object: panel, queue: .main) { [weak self] _ in
@@ -933,14 +972,35 @@ private final class KeyablePanel: NSPanel {
     /// ⌘V anywhere in the panel. Return true to consume it (an image was
     /// taken off the clipboard); false lets the focused field paste text.
     var onPaste: (() -> Bool)?
+    /// ⌘F anywhere in the panel. Return true when a find bar took it.
+    var onFind: (() -> Bool)?
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if flags == [.command], event.charactersIgnoringModifiers?.lowercased() == "v",
-           onPaste?() == true {
+        let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        if flags == [.command], key == "v", onPaste?() == true {
             return true
         }
-        return super.performKeyEquivalent(with: event)
+        if flags == [.command], key == "f", onFind?() == true {
+            return true
+        }
+        if super.performKeyEquivalent(with: event) { return true }
+        // Peeky is a non-activating panel with no menu bar of its own, so
+        // the Edit-menu shortcuts never arrive on their own. Send the
+        // standard actions to whatever text field has focus.
+        let action: Selector? = switch (key, flags) {
+        case ("v", [.command]): #selector(NSText.paste(_:))
+        case ("c", [.command]): #selector(NSText.copy(_:))
+        case ("x", [.command]): #selector(NSText.cut(_:))
+        case ("a", [.command]): #selector(NSText.selectAll(_:))
+        case ("z", [.command]): Selector(("undo:"))
+        case ("z", [.command, .shift]): Selector(("redo:"))
+        default: nil
+        }
+        if let action, let responder = firstResponder, responder.responds(to: action) {
+            return NSApp.sendAction(action, to: responder, from: self)
+        }
+        return false
     }
 
     override func cancelOperation(_ sender: Any?) {
@@ -953,6 +1013,7 @@ struct AssistantPanelView: View {
     @ObservedObject var state: AssistantState
     @State private var typedQuestion = ""
     @FocusState private var fieldFocused: Bool
+    @FocusState private var findFocused: Bool
     @State private var breathing = false
     @State private var resizeHoverCorner: PanelResizeCorner?
 
@@ -2109,12 +2170,18 @@ struct AssistantPanelView: View {
                     Text("edit here — saves to disk · ⌘F find")
                         .font(.system(size: 11.5, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.3))
+                        .onTapGesture { state.codeFindVisible = true; state.codeFindFocusRequest += 1 }
                 }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
             if !state.codeViewerCollapsed {
-                CodeTextEditor(text: $state.codeDraft)
+                if state.codeFindVisible { codeFindBar }
+                CodeTextEditor(text: $state.codeDraft,
+                               highlights: state.codeFindMatches,
+                               current: state.codeFindMatches.isEmpty ? nil : state.codeFindMatches[min(state.codeFindIndex, state.codeFindMatches.count - 1)],
+                               onFind: { state.codeFindVisible = true; state.codeFindFocusRequest += 1 },
+                               onEscape: { state.closeCodeFind() })
                     .padding(.horizontal, 6)
                     .padding(.bottom, 6)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -2123,6 +2190,53 @@ struct AssistantPanelView: View {
         .frame(maxWidth: .infinity)
         .background(codeCardBackground)
         .id(file.path)
+    }
+
+    /// Compact find bar for the file preview: a short field, `3 of 12`,
+    /// ↑/↓ (or ↩/⇧↩) step through matches, Esc closes.
+    private var codeFindBar: some View {
+        let matches = state.codeFindMatches
+        return HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(.white.opacity(0.5))
+            TextField("Find", text: $state.codeFindQuery)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12.5, design: .monospaced))
+                .foregroundStyle(.white)
+                .focused($findFocused)
+                .frame(width: 220)
+                .onKeyPress(.downArrow) { state.codeFindStep(1); return .handled }
+                .onKeyPress(.upArrow) { state.codeFindStep(-1); return .handled }
+                .onKeyPress(.return, phases: .down) { press in
+                    state.codeFindStep(press.modifiers.contains(.shift) ? -1 : 1); return .handled
+                }
+                .onKeyPress(.escape) { state.closeCodeFind(); return .handled }
+            Text(state.codeFindQuery.isEmpty ? "" : matches.isEmpty ? "no matches" : "\(state.codeFindIndex + 1) of \(matches.count)")
+                .font(.system(size: 11.5, weight: .medium, design: .monospaced))
+                .foregroundStyle(matches.isEmpty && !state.codeFindQuery.isEmpty ? .orange.opacity(0.9) : .white.opacity(0.5))
+                .frame(minWidth: 70, alignment: .leading)
+            Button { state.codeFindStep(-1) } label: { Image(systemName: "chevron.up") }
+                .disabled(matches.count < 2)
+                .help("Previous match (↑)")
+            Button { state.codeFindStep(1) } label: { Image(systemName: "chevron.down") }
+                .disabled(matches.count < 2)
+                .help("Next match (↓)")
+            Spacer(minLength: 0)
+            Button { state.closeCodeFind() } label: {
+                Text("Done")
+                    .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+            }
+            .help("Close find (Esc)")
+        }
+        .buttonStyle(.plain)
+        .font(.system(size: 11, weight: .bold))
+        .foregroundStyle(.white.opacity(0.7))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .background(Color.white.opacity(0.05))
+        .onAppear { findFocused = true }
+        .onChange(of: state.codeFindFocusRequest) { _ in findFocused = true }
     }
 
     /// Pictures attached to the code question, by name only — the code is

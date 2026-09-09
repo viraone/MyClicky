@@ -1,13 +1,16 @@
 import AppKit
 import SwiftUI
 
-/// The editable file preview on the Peeky Code tab. A plain `TextEditor`
-/// would do for typing, but Peeky has no menu bar, so ⌘F would never reach
-/// it. This wraps `NSTextView` directly, turns on the system find bar
-/// (incremental, highlights every match, ⌘G / ⇧⌘G to step through) and
-/// handles the find keys itself — the same keys as VS Code.
+/// The editable file preview on the Peeky Code tab. Wraps `NSTextView`
+/// directly so Peeky can paint find matches and pick up ⌘F itself — a
+/// plain `TextEditor` gives no way to do either.
 struct CodeTextEditor: NSViewRepresentable {
     @Binding var text: String
+    /// Ranges to mark as matches; `current` is drawn brighter and scrolled to.
+    var highlights: [NSRange] = []
+    var current: NSRange?
+    var onFind: (() -> Void)?
+    var onEscape: (() -> Void)?
     var font: NSFont = .monospacedSystemFont(ofSize: 12.5, weight: .regular)
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -36,8 +39,6 @@ struct CodeTextEditor: NSViewRepresentable {
         textView.isContinuousSpellCheckingEnabled = false
         textView.isGrammarCheckingEnabled = false
         textView.smartInsertDeleteEnabled = false
-        textView.usesFindBar = true
-        textView.isIncrementalSearchingEnabled = true
         textView.textContainerInset = NSSize(width: 4, height: 6)
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
@@ -54,6 +55,9 @@ struct CodeTextEditor: NSViewRepresentable {
                                      .foregroundColor: NSColor.white.withAlphaComponent(0.92),
                                      .paragraphStyle: textView.defaultParagraphStyle!]
 
+        textView.onFind = { [weak coordinator = context.coordinator] in coordinator?.parent.onFind?() }
+        textView.onEscape = { [weak coordinator = context.coordinator] in coordinator?.parent.onEscape?() }
+
         scroll.documentView = textView
         context.coordinator.textView = textView
         return scroll
@@ -61,18 +65,38 @@ struct CodeTextEditor: NSViewRepresentable {
 
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.parent = self
-        guard let textView = context.coordinator.textView, textView.string != text else { return }
-        // Programmatic change (file switched, Apply pressed): replace the
-        // text but keep the caret somewhere sensible.
-        let selected = textView.selectedRange()
-        textView.string = text
-        let end = (text as NSString).length
-        textView.setSelectedRange(NSRange(location: min(selected.location, end), length: 0))
+        guard let textView = context.coordinator.textView else { return }
+        if textView.string != text {
+            // Programmatic change (file switched, Apply pressed): replace the
+            // text but keep the caret somewhere sensible.
+            let selected = textView.selectedRange()
+            textView.string = text
+            let end = (text as NSString).length
+            textView.setSelectedRange(NSRange(location: min(selected.location, end), length: 0))
+        }
+        applyHighlights(to: textView, coordinator: context.coordinator)
+    }
+
+    private func applyHighlights(to textView: NSTextView, coordinator: Coordinator) {
+        guard let layout = textView.layoutManager else { return }
+        let length = (textView.string as NSString).length
+        let key = highlights.map { "\($0.location):\($0.length)" }.joined(separator: ",") + "|\(current.map { "\($0.location)" } ?? "")"
+        guard key != coordinator.highlightKey else { return }
+        coordinator.highlightKey = key
+        layout.removeTemporaryAttribute(.backgroundColor, forCharacterRange: NSRange(location: 0, length: length))
+        for range in highlights where NSMaxRange(range) <= length {
+            layout.addTemporaryAttribute(.backgroundColor, value: NSColor.systemYellow.withAlphaComponent(0.28), forCharacterRange: range)
+        }
+        if let current, NSMaxRange(current) <= length {
+            layout.addTemporaryAttribute(.backgroundColor, value: NSColor.systemOrange.withAlphaComponent(0.75), forCharacterRange: current)
+            textView.scrollRangeToVisible(current)
+        }
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: CodeTextEditor
         weak var textView: NSTextView?
+        var highlightKey = ""
         init(_ parent: CodeTextEditor) { self.parent = parent }
 
         func textDidChange(_ notification: Notification) {
@@ -82,39 +106,21 @@ struct CodeTextEditor: NSViewRepresentable {
     }
 }
 
-/// `NSTextView` that maps the usual find keys to the find bar, since there
-/// is no Edit ▸ Find menu in Peeky to do it.
+/// `NSTextView` that hands ⌘F and Esc to Peeky's own find bar.
 final class FindableTextView: NSTextView {
-    override func keyDown(with event: NSEvent) {
+    var onFind: (() -> Void)?
+    var onEscape: (() -> Void)?
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
-        var action: NSTextFinder.Action?
-        switch (key, flags) {
-        case ("f", [.command]):           action = .showFindInterface
-        case ("f", [.command, .option]):  action = .showReplaceInterface
-        case ("g", [.command]):           action = .nextMatch
-        case ("g", [.command, .shift]):   action = .previousMatch
-        case ("e", [.command]):           action = .setSearchString
-        default: break
+        if flags == [.command], event.charactersIgnoringModifiers?.lowercased() == "f", let onFind {
+            onFind()
+            return true
         }
-        if let action {
-            // NSTextFinder reads the action off the sender's tag.
-            let item = NSMenuItem()
-            item.tag = action.rawValue
-            performFindPanelAction(item)
-            return
-        }
-        super.keyDown(with: event)
+        return super.performKeyEquivalent(with: event)
     }
 
-    /// Esc closes the find bar first; only a second Esc reaches the panel.
     override func cancelOperation(_ sender: Any?) {
-        if let scroll = enclosingScrollView, scroll.isFindBarVisible {
-            let item = NSMenuItem()
-            item.tag = NSTextFinder.Action.hideFindInterface.rawValue
-            performFindPanelAction(item)
-            return
-        }
-        nextResponder?.tryToPerform(#selector(cancelOperation(_:)), with: sender)
+        if let onEscape { onEscape() } else { nextResponder?.tryToPerform(#selector(cancelOperation(_:)), with: sender) }
     }
 }
