@@ -50,14 +50,32 @@ struct AnthropicService {
     private static let askRetryMaxTokens = 16_000
 
     func ask(question: String, jpegImage: Data, context: String? = nil,
+             attachments: [(name: String, jpeg: Data)] = [],
              onStatus: (@Sendable @MainActor (String) -> Void)? = nil) async throws -> AssistantAnswer {
-        var userContent: [[String: Any]] = [
-            ["type": "image", "source": [
-                "type": "base64",
-                "media_type": "image/jpeg",
-                "data": jpegImage.base64EncodedString(),
-            ]],
-        ]
+        var userContent: [[String: Any]] = []
+        // Pictures the user attached come first, each named, then the
+        // screenshot labelled as such — so "the second image" and "my
+        // screen" both mean something. Without attachments the request is
+        // unchanged: just the screenshot.
+        if !attachments.isEmpty {
+            userContent.append(["type": "text", "text":
+                "The user attached \(attachments.count) image\(attachments.count == 1 ? "" : "s") to this question. "
+                + "Their question is most likely about these unless it clearly refers to the screen. "
+                + "Referring to them by number or filename is fine."])
+            for (index, item) in attachments.enumerated() {
+                userContent.append(["type": "text", "text": "Attached image \(index + 1) (\(item.name)):"])
+                userContent.append(["type": "image", "source": [
+                    "type": "base64", "media_type": "image/jpeg",
+                    "data": item.jpeg.base64EncodedString(),
+                ]])
+            }
+            userContent.append(["type": "text", "text": "Current screenshot of the user's display:"])
+        }
+        userContent.append(["type": "image", "source": [
+            "type": "base64",
+            "media_type": "image/jpeg",
+            "data": jpegImage.base64EncodedString(),
+        ]])
         if let context {
             userContent.append(["type": "text", "text": context])
         }

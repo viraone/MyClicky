@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum AssistantStatus {
     case idle, listening, thinking, answering
@@ -274,6 +275,19 @@ final class AssistantState: ObservableObject {
     /// file URL rather than pixels.
     enum AttachmentKind { case capture, image, file }
     @Published var attachmentKind: AttachmentKind = .capture
+    /// Pictures the user dropped, pasted, or picked into the Ask tab so a
+    /// question can be about them ("what's wrong in the second one?"). They
+    /// ride along with every Ask until removed — captures stay on their own
+    /// tab and never land here.
+    struct AskAttachment: Identifiable, Equatable {
+        let id = UUID()
+        let image: NSImage
+        let name: String
+        static func == (a: AskAttachment, b: AskAttachment) -> Bool { a.id == b.id }
+    }
+    static let maxAskAttachments = 10
+    @Published var askAttachments: [AskAttachment] = []
+    @Published var askAttachmentsCollapsed = false
     /// Reloaded from disk when the saved capture is edited in an external
     /// app (e.g. Preview.app's markup arrow) after being saved — nil until
     /// the file actually changes.
@@ -325,6 +339,11 @@ final class AssistantState: ObservableObject {
     /// Opens the macOS file picker so a file or folder from this Mac can be
     /// dropped into the capture preview (the + menu on Capture + Dictate).
     var onAttachFile: (() -> Void)?
+    /// The Ask tab's + menu: pick images for the attachment strip.
+    var onAttachToAsk: (() -> Void)?
+    /// Files dropped on, or pasted into, the Ask tab.
+    var onDropIntoAsk: (([URL]) -> Void)?
+    var onPasteIntoAsk: (() -> Void)?
     /// Reads the current answer aloud on demand, regardless of `textOnlyMode`.
     var onReadAloud: (() -> Void)?
     /// Mic button: starts recording (a question on the Ask tab, a dictation
@@ -915,17 +934,27 @@ struct AssistantPanelView: View {
                 coachCard(message)
                     .animation(.easeInOut(duration: 0.25), value: state.coachMessage)
             }
-            switch state.tab {
-            case .ask:
-                topInputRow
-                transcriptView
-                answerView
-            case .talk:
-                topInputRow
-                if state.status == .listening { transcriptView }
-                talkLogView
-            case .captureDictate:
-                captureDictateTab
+            Group {
+                switch state.tab {
+                case .ask:
+                    topInputRow
+                    askAttachmentsStrip
+                    transcriptView
+                    answerView
+                case .talk:
+                    topInputRow
+                    if state.status == .listening { transcriptView }
+                    talkLogView
+                case .captureDictate:
+                    captureDictateTab
+                }
+            }
+            .onDrop(of: [.fileURL, .image], isTargeted: nil) { providers in
+                guard state.tab == .ask else { return false }
+                return handleAskDrop(providers)
+            }
+            .onPasteCommand(of: [.image, .fileURL, .png, .tiff]) { _ in
+                if state.tab == .ask { state.onPasteIntoAsk?() }
             }
             Spacer(minLength: 0)
             bottomBar
@@ -1727,7 +1756,7 @@ struct AssistantPanelView: View {
 
     private var bottomBar: some View {
         HStack(spacing: 10) {
-            if state.tab == .captureDictate {
+            if state.tab == .captureDictate || state.tab == .ask {
                 addMenu
             }
             // Shell-prompt readout: `peeky on talk ❯` — the segments coloured
@@ -1818,7 +1847,8 @@ struct AssistantPanelView: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .help("Add a file or folder from this Mac to the preview")
+        .help(state.tab == .ask ? "Attach images for your question (or drop / paste them here)"
+                                : "Add a file or folder from this Mac to the preview")
     }
 
     private func showAddMenu() {
@@ -1827,14 +1857,165 @@ struct AssistantPanelView: View {
         let header = NSMenuItem(title: "Add", action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
-        let files = NSMenuItem(title: "Files and folders", action: #selector(MenuAction.fire), keyEquivalent: "")
-        files.image = NSImage(systemSymbolName: "paperclip", accessibilityDescription: nil)
-        let action = MenuAction { state.onAttachFile?() }
-        files.target = action
-        menu.addItem(files)
-        // popUp blocks until dismissed, so the local target stays alive.
+        var actions: [MenuAction] = []
+        if state.tab == .ask {
+            let full = state.askAttachments.count >= AssistantState.maxAskAttachments
+            let images = NSMenuItem(title: full ? "Images (10 of 10 attached)" : "Images…",
+                                    action: #selector(MenuAction.fire), keyEquivalent: "")
+            images.image = NSImage(systemSymbolName: "photo.on.rectangle.angled", accessibilityDescription: nil)
+            images.isEnabled = !full
+            let pick = MenuAction { state.onAttachToAsk?() }
+            images.target = pick
+            actions.append(pick)
+            menu.addItem(images)
+            let paste = NSMenuItem(title: "Paste image from clipboard", action: #selector(MenuAction.fire), keyEquivalent: "")
+            paste.image = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: nil)
+            paste.isEnabled = !full && NSPasteboard.general.canReadObject(forClasses: [NSImage.self, NSURL.self], options: nil)
+            let pasteAction = MenuAction { state.onPasteIntoAsk?() }
+            paste.target = pasteAction
+            actions.append(pasteAction)
+            menu.addItem(paste)
+        } else {
+            let files = NSMenuItem(title: "Files and folders", action: #selector(MenuAction.fire), keyEquivalent: "")
+            files.image = NSImage(systemSymbolName: "paperclip", accessibilityDescription: nil)
+            let action = MenuAction { state.onAttachFile?() }
+            files.target = action
+            actions.append(action)
+            menu.addItem(files)
+        }
+        // popUp blocks until dismissed, so the local targets stay alive.
         menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
-        _ = action
+        _ = actions
+    }
+
+    // MARK: Ask attachments strip
+
+    /// Drops of image files (Finder) or raw image data (a browser picture).
+    private func handleAskDrop(_ providers: [NSItemProvider]) -> Bool {
+        let handled = providers.filter {
+            $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+                || $0.hasItemConformingToTypeIdentifier(UTType.image.identifier)
+        }
+        guard !handled.isEmpty else { return false }
+        let group = DispatchGroup()
+        var urls: [URL] = []
+        let lock = NSLock()
+        for provider in handled {
+            group.enter()
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                    defer { group.leave() }
+                    let url: URL? = (item as? URL) ?? (item as? Data).flatMap { URL(dataRepresentation: $0, relativeTo: nil) }
+                    if let url { lock.lock(); urls.append(url); lock.unlock() }
+                }
+            } else {
+                provider.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { data, _ in
+                    defer { group.leave() }
+                    guard let data else { return }
+                    let tmp = FileManager.default.temporaryDirectory
+                        .appendingPathComponent("peeky-drop-\(UUID().uuidString).png")
+                    if (try? data.write(to: tmp)) != nil { lock.lock(); urls.append(tmp); lock.unlock() }
+                }
+            }
+        }
+        group.notify(queue: .main) { [state] in
+            if !urls.isEmpty { state.onDropIntoAsk?(urls) }
+        }
+        return true
+    }
+
+    /// A thin row of thumbnails under the prompt line — pictures the
+    /// question is about. Each has an × to drop it; the chevron folds the
+    /// row to a one-line count when it's in the way. Hidden while empty.
+    @ViewBuilder
+    private var askAttachmentsStrip: some View {
+        if !state.askAttachments.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.18)) { state.askAttachmentsCollapsed.toggle() }
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 9, weight: .bold))
+                                .rotationEffect(.degrees(state.askAttachmentsCollapsed ? 0 : 90))
+                            Image(systemName: "photo.on.rectangle.angled")
+                                .font(.system(size: 10, weight: .semibold))
+                            Text("\(state.askAttachments.count) of \(AssistantState.maxAskAttachments) \(state.askAttachments.count == 1 ? "image" : "images") attached — Peeky sees these with every question")
+                                .lineLimit(1)
+                        }
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(state.askAttachmentsCollapsed ? "Show the attached images" : "Hide the attached images")
+                    Spacer(minLength: 0)
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.18)) { state.askAttachments.removeAll() }
+                    } label: {
+                        Text("clear all")
+                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.45))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Remove every attached image")
+                }
+                if !state.askAttachmentsCollapsed {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 10) {
+                            ForEach(state.askAttachments) { item in
+                                askThumbnail(item)
+                            }
+                        }
+                        .padding(.top, 6)
+                        .padding(.trailing, 6)
+                    }
+                    .frame(height: 74)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.white.opacity(0.04))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.06), lineWidth: 1)
+                    )
+            )
+        }
+    }
+
+    private func askThumbnail(_ item: AssistantState.AskAttachment) -> some View {
+        ZStack(alignment: .topTrailing) {
+            Image(nsImage: item.image)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: 64, height: 58)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.16), lineWidth: 1)
+                )
+                .help(item.name)
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    state.askAttachments.removeAll { $0.id == item.id }
+                }
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .black))
+                    .foregroundStyle(.white)
+                    .frame(width: 16, height: 16)
+                    .background(Circle().fill(Color.black.opacity(0.85)))
+                    .overlay(Circle().strokeBorder(Color.white.opacity(0.35), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .offset(x: 5, y: -5)
+            .help("Remove \(item.name)")
+        }
     }
 
     /// The break coach's countdown, and its on/off switch. Always visible so

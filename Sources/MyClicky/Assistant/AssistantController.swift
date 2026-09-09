@@ -135,6 +135,107 @@ final class AssistantController {
         }
     }
 
+    // MARK: Ask attachments (pictures the question is about)
+
+    /// The Ask tab's + menu: a multi-select image picker.
+    private func attachImagesToAsk() {
+        let open = NSOpenPanel()
+        open.title = "Attach to your question"
+        open.message = "Pick up to \(AssistantState.maxAskAttachments) images — Peeky sees them with every question until you remove them."
+        open.prompt = "Attach"
+        open.canChooseFiles = true
+        open.canChooseDirectories = false
+        open.allowsMultipleSelection = true
+        open.allowedContentTypes = [.image]
+        open.level = .floating
+        let desktop = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")
+        let resumeFolder = desktop.appendingPathComponent("VIRADETH_RESUME")
+        open.directoryURL = FileManager.default.fileExists(atPath: resumeFolder.path) ? resumeFolder : desktop
+        NSApp.activate(ignoringOtherApps: true)
+        open.begin { [weak self] response in
+            guard response == .OK, let self else { return }
+            self.addAskAttachments(urls: open.urls, via: "picker")
+        }
+    }
+
+    /// ⌘V or the menu's "Paste image": an image, or image files, on the clipboard.
+    private func pasteIntoAsk() {
+        let pasteboard = NSPasteboard.general
+        if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
+           !urls.isEmpty {
+            addAskAttachments(urls: urls, via: "paste")
+            return
+        }
+        if let image = (pasteboard.readObjects(forClasses: [NSImage.self], options: nil) as? [NSImage])?.first {
+            addAskAttachments([(image, "Pasted image")], via: "paste")
+            return
+        }
+        hud.report("Nothing on the clipboard to attach.", ok: false)
+    }
+
+    private func addAskAttachments(urls: [URL], via: String) {
+        var items: [(NSImage, String)] = []
+        var skipped: [String] = []
+        for url in urls {
+            if let image = NSImage(contentsOf: url), image.isValid, image.size.width > 0 {
+                items.append((image, url.lastPathComponent))
+            } else {
+                skipped.append(url.lastPathComponent)
+            }
+        }
+        if !skipped.isEmpty {
+            hud.report("Only images can be attached — skipped \(skipped.joined(separator: ", ")).", ok: false)
+        }
+        addAskAttachments(items, via: via)
+    }
+
+    private func addAskAttachments(_ items: [(image: NSImage, name: String)], via: String) {
+        guard !items.isEmpty else { return }
+        let room = AssistantState.maxAskAttachments - panel.state.askAttachments.count
+        guard room > 0 else {
+            hud.report("That's \(AssistantState.maxAskAttachments) images — remove one to add another.", ok: false)
+            return
+        }
+        let accepted = Array(items.prefix(room))
+        panel.state.askAttachments.append(contentsOf: accepted.map {
+            AssistantState.AskAttachment(image: $0.image, name: $0.name)
+        })
+        panel.state.askAttachmentsCollapsed = false
+        panel.state.tab = .ask
+        ActivityLog.recordAction("ask-attach", ["via": via, "added": "\(accepted.count)",
+                                                "total": "\(panel.state.askAttachments.count)"])
+        if accepted.count < items.count {
+            hud.report("Attached \(accepted.count) — the strip holds \(AssistantState.maxAskAttachments).", ok: false)
+        }
+    }
+
+    /// JPEGs of the strip, longest side capped so ten pictures don't blow
+    /// the request up; nil entries are dropped.
+    private func askAttachmentJPEGs() -> [(name: String, jpeg: Data)] {
+        panel.state.askAttachments.compactMap { item in
+            Self.jpegData(item.image, maxDimension: 1400).map { (item.name, $0) }
+        }
+    }
+
+    private static func jpegData(_ image: NSImage, maxDimension: CGFloat) -> Data? {
+        guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        let w = CGFloat(cg.width), h = CGFloat(cg.height)
+        let scale = min(1, maxDimension / max(w, h))
+        var source = cg
+        if scale < 1 {
+            let nw = Int(w * scale), nh = Int(h * scale)
+            if let ctx = CGContext(data: nil, width: nw, height: nh, bitsPerComponent: 8, bytesPerRow: 0,
+                                   space: CGColorSpaceCreateDeviceRGB(),
+                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
+                ctx.interpolationQuality = .high
+                ctx.draw(cg, in: CGRect(x: 0, y: 0, width: nw, height: nh))
+                if let scaled = ctx.makeImage() { source = scaled }
+            }
+        }
+        let rep = NSBitmapImageRep(cgImage: source)
+        return rep.representation(using: .jpeg, properties: [.compressionFactor: 0.85])
+    }
+
     func showAttachment(url: URL) {
         let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
         if !isDirectory, let image = NSImage(contentsOf: url), image.isValid, image.size.width > 0 {
@@ -224,6 +325,9 @@ final class AssistantController {
         panel.state.onCopyAgain = { [weak self] in self?.copyPairToClipboard() }
         panel.state.onDismissCapture = { [weak self] in self?.dismissCapture() }
         panel.state.onAttachFile = { [weak self] in self?.attachFileFromMac() }
+        panel.state.onAttachToAsk = { [weak self] in self?.attachImagesToAsk() }
+        panel.state.onDropIntoAsk = { [weak self] urls in self?.addAskAttachments(urls: urls, via: "drop") }
+        panel.state.onPasteIntoAsk = { [weak self] in self?.pasteIntoAsk() }
         captureFileWatcher.onChange = { [weak self] image in self?.handleCaptureEdited(image) }
         panel.state.onReadAloud = { [weak self] in self?.replayAnswer() }
         panel.state.onToggleRecording = { [weak self] in self?.toggleRecording() }
@@ -1177,7 +1281,12 @@ final class AssistantController {
                     context = "Actual text of the file currently focused in \(editor.appName) (read via the Accessibility API — use this as the primary source; the screenshot may only show part of it):\n\n\(editor.text)"
                 }
                 let claude = AnthropicService(apiKey: apiKey)
-                let answer = try await claude.ask(question: question, jpegImage: image, context: context) { [weak self] status in
+                let attachments = askAttachmentJPEGs()
+                if !attachments.isEmpty {
+                    ActivityLog.recordAction("ask-with-attachments", ["count": "\(attachments.count)"])
+                }
+                let answer = try await claude.ask(question: question, jpegImage: image, context: context,
+                                                  attachments: attachments) { [weak self] status in
                     guard let self, id == self.requestID else { return }
                     self.panel.state.answer = status
                 }
