@@ -399,6 +399,7 @@ final class AssistantController {
                 if id == requestID {
                     busy = false
                     currentTask = nil
+                    if talkSession { afterTalkSegment() }
                 }
             }
             do {
@@ -548,9 +549,10 @@ final class AssistantController {
                 self.panel.state.tab = .ask
             }
             // On Peeky Code with a project up, the question is about the code:
-            // full card, no streaming (the answer arrives whole in `onAsk`).
+            // same pause-to-answer streaming as Ask, routed to the code flow.
             if self.codeTabPinned {
                 self.showPanel(listening: true, full: true)
+                self.beginTalkStreaming(questionsOnly: true)
                 return
             }
             let asking = self.panel.state.tab == .ask
@@ -772,7 +774,12 @@ final class AssistantController {
             if self.busy, !self.streamQuestionsOnly { self.abandonWork() }
             if self.codeTabPinned {
                 self.showPanel(full: true)
-                self.handleCodeQuestion(question)
+                self.panel.state.transcript = question
+                if self.talkStreaming, self.streamQuestionsOnly {
+                    self.finishTalkStreaming(final: question)
+                } else {
+                    self.handleCodeQuestion(question)
+                }
                 return
             }
             if self.panel.state.tab != .captureDictate { self.panel.state.tab = .ask }
@@ -1025,7 +1032,7 @@ final class AssistantController {
         speech.onPartial = { [weak self] text in
             self?.applyPartial(text)
         }
-        if kind == .talk || kind == .ask { beginTalkStreaming(questionsOnly: kind == .ask) }
+        if kind == .talk || kind == .ask || kind == .code { beginTalkStreaming(questionsOnly: kind != .talk) }
 
         Task {
             guard await SpeechService.requestPermissions() else {
@@ -1047,7 +1054,7 @@ final class AssistantController {
         recordKind = .ask
         Task {
             let heard = await speech.finish()
-            if (kind == .talk || kind == .ask), talkStreaming {
+            if (kind == .talk || kind == .ask || kind == .code), talkStreaming {
                 if !heard.isEmpty { panel.state.transcript = heard }
                 finishTalkStreaming(final: heard)
                 return
@@ -1280,7 +1287,7 @@ final class AssistantController {
             talkTargetApp = front
         }
         if streamQuestionsOnly {
-            handleQuestion(segment)
+            if codeTabPinned { handleCodeQuestion(segment) } else { handleQuestion(segment) }
         } else {
             handleDo(segment, targetApp: talkTargetApp)
         }
