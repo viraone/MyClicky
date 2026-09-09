@@ -392,9 +392,13 @@ final class AssistantController {
             }
         }
         if force {
-            Task { [weak self] in
-                try? await Task.sleep(for: .seconds(150))
-                self?.refreshLiveCost()
+            // The usage report needs a little while to see the call.
+            for delay in [30, 150] {
+                Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(delay))
+                    self?.lastCostFetch = .distantPast
+                    self?.refreshLiveCost()
+                }
             }
         }
     }
