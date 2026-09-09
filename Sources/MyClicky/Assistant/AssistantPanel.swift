@@ -1846,30 +1846,19 @@ struct AssistantPanelView: View {
                     } else {
                         Text(codeSkippedLine(project))
                     }
+                    Spacer(minLength: 12)
+                    if let live = state.codeLiveCostUSD {
+                        codeCostPill("Cost: \(codeCostString(live)) this month",
+                                     help: "Real spend on Peeky's API key this month, from Anthropic's cost report (updates daily).")
+                    } else if state.codeSpentUSD > 0 {
+                        codeCostPill("Cost: \(codeCostString(state.codeSpentUSD))",
+                                     help: "Estimated from the tokens each answer reported, at Sonnet list prices (cache reads at a tenth). Running total since install. Add an Admin key to Keychain (account anthropic-admin) for the real figure.")
+                    }
                 }
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.5))
                 .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .overlay(alignment: .trailing) {
-                    if let live = state.codeLiveCostUSD {
-                        Text("Cost: \(codeCostString(live)) this month")
-                            .font(.system(size: 12, weight: .bold, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.7))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 2)
-                            .background(Capsule().fill(Color.white.opacity(0.08)))
-                            .help("Real spend on Peeky's API key this month, from Anthropic's cost report (updates daily).")
-                    } else if state.codeSpentUSD > 0 {
-                        Text("Cost: \(codeCostString(state.codeSpentUSD))")
-                            .font(.system(size: 12, weight: .bold, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.7))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 2)
-                            .background(Capsule().fill(Color.white.opacity(0.08)))
-                            .help("Estimated from the tokens each answer reported, at Sonnet list prices (cache reads at a tenth). Running total since install. Add an Admin key to Keychain (account anthropic-admin) for the real figure.")
-                    }
-                }
+                .truncationMode(.tail)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
@@ -2047,8 +2036,7 @@ struct AssistantPanelView: View {
                         .font(.system(size: 12, weight: .medium, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.85))
                         .lineLimit(1)
-                        .truncationMode(.middle)
-                        .frame(maxWidth: 220)
+                        .fixedSize()
                     Button {
                         withAnimation(.easeInOut(duration: 0.15)) {
                             state.codeImages.removeAll { $0.id == item.id }
@@ -2075,6 +2063,17 @@ struct AssistantPanelView: View {
 
     private func codeCostString(_ usd: Double) -> String {
         usd < 0.01 ? String(format: "$%.3f", usd) : String(format: "$%.2f", usd)
+    }
+
+    private func codeCostPill(_ text: String, help: String) -> some View {
+        Text(text)
+            .font(.system(size: 12, weight: .bold, design: .monospaced))
+            .foregroundStyle(.white.opacity(0.75))
+            .fixedSize()
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(Color.white.opacity(0.08)))
+            .help(help)
     }
 
     private func codeCardButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
