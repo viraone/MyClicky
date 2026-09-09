@@ -584,10 +584,10 @@ final class AssistantController {
             if self.panel.isVisible && !self.panel.state.collapsed {
                 self.panel.minimize()
             } else if self.panel.isVisible {
-                if !self.talkStreaming && !self.busy { self.panel.state.tab = .ask }
+                if !self.talkStreaming && !self.busy && !self.codeTabPinned { self.panel.state.tab = .ask }
                 self.panel.expand()
             } else {
-                if !self.talkStreaming && !self.busy { self.panel.state.tab = .ask }
+                if !self.talkStreaming && !self.busy && !self.codeTabPinned { self.panel.state.tab = .ask }
                 self.showPanel()
             }
         }
@@ -597,6 +597,9 @@ final class AssistantController {
             switch name {
             case "DICTATE", "CAPTURE", "CAPTURE_DICTATE": self.panel.state.tab = .captureDictate
             case "CODE": self.panel.state.tab = .code
+            // The phone's ASK key sends TAB ASK before it listens. With a
+            // project open on Peeky Code, that ask is about the code — stay.
+            case "ASK" where self.codeTabPinned: break
             default: self.panel.state.tab = .ask
             }
         }
