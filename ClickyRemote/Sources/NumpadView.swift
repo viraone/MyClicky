@@ -14,6 +14,7 @@ struct NumpadView: View {
     /// Short-lived toast over the whole console — used for warnings that fire
     /// while a recording is running, when the status line isn't visible.
     @State private var recordingNotice: String?
+    @State private var noticeOK = false
     @State private var recordingNoticeTask: Task<Void, Never>?
     /// True after tapping "1"/"3": speech goes to the Mac clipboard, not a question.
     @State private var dictateMode = false
@@ -169,9 +170,9 @@ struct NumpadView: View {
                 if !ok { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
             }
             client.onSavePhotoStatus = { message, ok in
-                guard mode == .whatsapp else { return }
                 statusText = (ok ? "✓ " : "⚠︎ ") + message
-                if !ok { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
+                showNotice(ok ? "Added to VIRADETH_RESUME on your Desktop" : message,
+                           ok: ok, seconds: ok ? 2.4 : 3.5)
             }
             client.start()
             permissionDenied = !(await SpeechRecorder.requestPermissions())
@@ -786,7 +787,6 @@ struct NumpadView: View {
     // appeared. Erasing per section keeps every type shallow.
     private var whatsappPad: some View {
         VStack(spacing: 10) {
-            whatsappDesktopSection
             whatsappChatsSection
             Spacer()
             clickyPill
@@ -799,37 +799,6 @@ struct NumpadView: View {
             .lineLimit(1)
             .minimumScaleFactor(0.7)
         }
-    }
-
-    private var whatsappDesktopSection: AnyView {
-        AnyView(
-            padSection(title: "DESKTOP", subtitle: "Skip WhatsApp — send a photo straight to your Mac's Desktop") {
-                HStack(spacing: 8) {
-                    padButton(icon: savingToDesktop ? "arrow.up.circle.dotted" : "photo.on.rectangle.angled",
-                              title: savingToDesktop ? "Saving…" : "Photos",
-                              hint: "Pick from Photos — saved to your Mac's Desktop",
-                              tint: Snes.whatsapp) { desktopPhotoTapped() }
-                        .disabled(savingToDesktop)
-                    padButton(icon: "camera.fill", title: "Camera",
-                              hint: "Snap a photo — saved to your Mac's Desktop", tint: Snes.whatsapp) { desktopCameraTapped() }
-                        .disabled(savingToDesktop)
-                }
-            }
-            .photosPicker(isPresented: $desktopPickerShown, selection: $desktopPick,
-                          matching: .images, photoLibrary: .shared())
-            .fullScreenCover(isPresented: $desktopCameraShown) {
-                CameraCapture { image in
-                    desktopCameraShown = false
-                    guard let image else { return }
-                    Task { await sendPhotoToDesktop(image) }
-                }
-                .ignoresSafeArea()
-            }
-            .onChange(of: desktopPick) { _, item in
-                guard let item else { return }
-                Task { await sendPhotoToDesktop(item) }
-            }
-        )
     }
 
     private var whatsappChatsSection: AnyView {
@@ -1023,7 +992,7 @@ struct NumpadView: View {
     /// Shared by the Photos picker and the camera.
     private func sendPhotoToDesktop(_ image: UIImage) async {
         savingToDesktop = true
-        statusText = "Sending photo to your Mac's Desktop…"
+        statusText = "Sending photo to VIRADETH_RESUME on your Mac…"
         defer { savingToDesktop = false }
         guard let jpeg = Self.jpegForSending(image) else {
             UINotificationFeedbackGenerator().notificationOccurred(.error)
@@ -1032,7 +1001,7 @@ struct NumpadView: View {
         }
         client.savePhoto(jpeg.base64EncodedString())
         UINotificationFeedbackGenerator().notificationOccurred(.success)
-        statusText = "Photo sent (\(jpeg.count / 1024) KB) — saving to Desktop…"
+        statusText = "Photo sent (\(jpeg.count / 1024) KB) — saving to VIRADETH_RESUME…"
     }
 
     private func whatsappTextTapped(_ chat: WhatsAppChat) {
@@ -1652,9 +1621,11 @@ struct NumpadView: View {
             // PEEKY bar (it only shows/hides the Mac panel, so it doesn't need
             // a hero tile), then a 2×2 grid of hero keys each two rows tall —
             // ASK | DICTATE over CAPTURE | TALK — so the four mic/capture
-            // actions line up exactly.
+            // actions line up exactly, and a one-row PHOTOS | CAMERA pair
+            // that drops a picture into Desktop/VIRADETH_RESUME on the Mac.
             let switchRows: CGFloat = 1.55
-            let rowH = (geo.size.height - topInset - gap * 5) / (5 + switchRows)
+            let photoRows: CGFloat = 1.25
+            let rowH = (geo.size.height - topInset - gap * 6) / (5 + switchRows + photoRows)
             let heroH = rowH * 2 + gap
             let heroW = (geo.size.width - gap) / 2
             VStack(spacing: gap) {
@@ -1686,8 +1657,32 @@ struct NumpadView: View {
                         tint: talkRecording ? Snes.red : Snes.talk, lit: true,
                         h: heroH, w: heroW, hero: true, waveform: talkRecording) { _ in talkTapped() }
                 }
+                HStack(alignment: .top, spacing: gap) {
+                    key("photos", label: savingToDesktop ? "SAVING…" : "PHOTOS",
+                        icon: savingToDesktop ? "arrow.up.circle.dotted" : "photo.on.rectangle.angled",
+                        tint: Snes.blue, lit: true,
+                        h: rowH * photoRows, w: heroW) { _ in desktopPhotoTapped() }
+                        .disabled(savingToDesktop)
+                    key("camera", label: "CAMERA", icon: "camera.fill", tint: Snes.purple, lit: true,
+                        h: rowH * photoRows, w: heroW) { _ in desktopCameraTapped() }
+                        .disabled(savingToDesktop)
+                }
             }
             .padding(.top, topInset)
+        }
+        .photosPicker(isPresented: $desktopPickerShown, selection: $desktopPick,
+                      matching: .images, photoLibrary: .shared())
+        .fullScreenCover(isPresented: $desktopCameraShown) {
+            CameraCapture { image in
+                desktopCameraShown = false
+                guard let image else { return }
+                Task { await sendPhotoToDesktop(image) }
+            }
+            .ignoresSafeArea()
+        }
+        .onChange(of: desktopPick) { _, item in
+            guard let item else { return }
+            Task { await sendPhotoToDesktop(item) }
         }
     }
 
@@ -1839,11 +1834,17 @@ struct NumpadView: View {
     /// Error haptic plus a warning shown where the user is actually looking
     /// while recording, fading out after a couple of seconds.
     private func showRecordingNotice(_ message: String) {
-        UINotificationFeedbackGenerator().notificationOccurred(.error)
+        showNotice(message, ok: false, seconds: 1.6)
+    }
+
+    /// Black pill toast: a green check for good news, a warning for the rest.
+    private func showNotice(_ message: String, ok: Bool, seconds: Double) {
+        UINotificationFeedbackGenerator().notificationOccurred(ok ? .success : .error)
         recordingNoticeTask?.cancel()
+        noticeOK = ok
         recordingNotice = message
         recordingNoticeTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(1.6))
+            try? await Task.sleep(for: .seconds(seconds))
             guard !Task.isCancelled else { return }
             recordingNotice = nil
         }
@@ -1852,8 +1853,8 @@ struct NumpadView: View {
     /// Black pill toast, centered at the bottom of the console.
     private func toast(_ message: String) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(Snes.yellow)
+            Image(systemName: noticeOK ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                .foregroundStyle(noticeOK ? Snes.green.lighter(0.25) : Snes.yellow)
             Text(message)
                 .foregroundStyle(.white)
                 .lineLimit(2)

@@ -135,6 +135,135 @@ final class AssistantController {
         }
     }
 
+    // MARK: Ask history
+
+    private func rememberAsk(question: String, answer: String) {
+        let entry = AskHistoryEntry(question: question, answer: answer, date: Date(),
+                                    attachmentNames: panel.state.askAttachments.map(\.name))
+        panel.state.askHistory.insert(entry, at: 0)
+        if panel.state.askHistory.count > AskHistoryStore.limit {
+            panel.state.askHistory.removeLast(panel.state.askHistory.count - AskHistoryStore.limit)
+        }
+        AskHistoryStore.save(panel.state.askHistory)
+    }
+
+    /// A History row was clicked: put that question and answer back on the
+    /// Ask tab, as text, without speaking it again.
+    private func restoreFromHistory(_ entry: AskHistoryEntry) {
+        guard !busy else { return }
+        ActivityLog.recordAction("ask-history-open", ["text": entry.question])
+        synthesizer.stopSpeaking(at: .immediate)
+        ring.hide()
+        panel.state.showingAskHistory = false
+        panel.state.tab = .ask
+        panel.state.transcript = entry.question
+        panel.state.answer = entry.answer
+        panel.state.errorText = nil
+        panel.state.restoredFromHistory = true
+        panel.state.status = .answering
+    }
+
+    // MARK: Ask attachments (pictures the question is about)
+
+    /// The Ask tab's + menu: a multi-select image picker.
+    private func attachImagesToAsk() {
+        let open = NSOpenPanel()
+        open.title = "Attach to your question"
+        open.message = "Pick up to \(AssistantState.maxAskAttachments) images — Peeky sees them with every question until you remove them."
+        open.prompt = "Attach"
+        open.canChooseFiles = true
+        open.canChooseDirectories = false
+        open.allowsMultipleSelection = true
+        open.allowedContentTypes = [.image]
+        open.level = .floating
+        let desktop = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")
+        let resumeFolder = desktop.appendingPathComponent("VIRADETH_RESUME")
+        open.directoryURL = FileManager.default.fileExists(atPath: resumeFolder.path) ? resumeFolder : desktop
+        NSApp.activate(ignoringOtherApps: true)
+        open.begin { [weak self] response in
+            guard response == .OK, let self else { return }
+            self.addAskAttachments(urls: open.urls, via: "picker")
+        }
+    }
+
+    /// ⌘V or the menu's "Paste image": an image, or image files, on the clipboard.
+    private func pasteIntoAsk() {
+        let pasteboard = NSPasteboard.general
+        if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
+           !urls.isEmpty {
+            addAskAttachments(urls: urls, via: "paste")
+            return
+        }
+        if let image = (pasteboard.readObjects(forClasses: [NSImage.self], options: nil) as? [NSImage])?.first {
+            addAskAttachments([(image, "Pasted image")], via: "paste")
+            return
+        }
+        hud.report("Nothing on the clipboard to attach.", ok: false)
+    }
+
+    private func addAskAttachments(urls: [URL], via: String) {
+        var items: [(NSImage, String)] = []
+        var skipped: [String] = []
+        for url in urls {
+            if let image = NSImage(contentsOf: url), image.isValid, image.size.width > 0 {
+                items.append((image, url.lastPathComponent))
+            } else {
+                skipped.append(url.lastPathComponent)
+            }
+        }
+        if !skipped.isEmpty {
+            hud.report("Only images can be attached — skipped \(skipped.joined(separator: ", ")).", ok: false)
+        }
+        addAskAttachments(items, via: via)
+    }
+
+    private func addAskAttachments(_ items: [(image: NSImage, name: String)], via: String) {
+        guard !items.isEmpty else { return }
+        let room = AssistantState.maxAskAttachments - panel.state.askAttachments.count
+        guard room > 0 else {
+            hud.report("That's \(AssistantState.maxAskAttachments) images — remove one to add another.", ok: false)
+            return
+        }
+        let accepted = Array(items.prefix(room))
+        panel.state.askAttachments.append(contentsOf: accepted.map {
+            AssistantState.AskAttachment(image: $0.image, name: $0.name)
+        })
+        panel.state.askAttachmentsCollapsed = false
+        panel.state.tab = .ask
+        ActivityLog.recordAction("ask-attach", ["via": via, "added": "\(accepted.count)",
+                                                "total": "\(panel.state.askAttachments.count)"])
+        if accepted.count < items.count {
+            hud.report("Attached \(accepted.count) — the strip holds \(AssistantState.maxAskAttachments).", ok: false)
+        }
+    }
+
+    /// JPEGs of the strip, longest side capped so ten pictures don't blow
+    /// the request up; nil entries are dropped.
+    private func askAttachmentJPEGs() -> [(name: String, jpeg: Data)] {
+        panel.state.askAttachments.compactMap { item in
+            Self.jpegData(item.image, maxDimension: 1400).map { (item.name, $0) }
+        }
+    }
+
+    private static func jpegData(_ image: NSImage, maxDimension: CGFloat) -> Data? {
+        guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        let w = CGFloat(cg.width), h = CGFloat(cg.height)
+        let scale = min(1, maxDimension / max(w, h))
+        var source = cg
+        if scale < 1 {
+            let nw = Int(w * scale), nh = Int(h * scale)
+            if let ctx = CGContext(data: nil, width: nw, height: nh, bitsPerComponent: 8, bytesPerRow: 0,
+                                   space: CGColorSpaceCreateDeviceRGB(),
+                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
+                ctx.interpolationQuality = .high
+                ctx.draw(cg, in: CGRect(x: 0, y: 0, width: nw, height: nh))
+                if let scaled = ctx.makeImage() { source = scaled }
+            }
+        }
+        let rep = NSBitmapImageRep(cgImage: source)
+        return rep.representation(using: .jpeg, properties: [.compressionFactor: 0.85])
+    }
+
     func showAttachment(url: URL) {
         let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
         if !isDirectory, let image = NSImage(contentsOf: url), image.isValid, image.size.width > 0 {
@@ -224,6 +353,22 @@ final class AssistantController {
         panel.state.onCopyAgain = { [weak self] in self?.copyPairToClipboard() }
         panel.state.onDismissCapture = { [weak self] in self?.dismissCapture() }
         panel.state.onAttachFile = { [weak self] in self?.attachFileFromMac() }
+        panel.state.onAttachToAsk = { [weak self] in self?.attachImagesToAsk() }
+        panel.state.askHistory = AskHistoryStore.load()
+        panel.state.onRestoreHistory = { [weak self] entry in self?.restoreFromHistory(entry) }
+        panel.state.onDeleteHistory = { [weak self] entry in
+            guard let self else { return }
+            self.panel.state.askHistory.removeAll { $0.id == entry.id }
+            AskHistoryStore.save(self.panel.state.askHistory)
+        }
+        panel.state.onClearHistory = { [weak self] in
+            guard let self else { return }
+            self.panel.state.askHistory = []
+            AskHistoryStore.save([])
+            ActivityLog.recordAction("ask-history-clear", [:])
+        }
+        panel.state.onDropIntoAsk = { [weak self] urls in self?.addAskAttachments(urls: urls, via: "drop") }
+        panel.state.onPasteIntoAsk = { [weak self] in self?.pasteIntoAsk() }
         captureFileWatcher.onChange = { [weak self] image in self?.handleCaptureEdited(image) }
         panel.state.onReadAloud = { [weak self] in self?.replayAnswer() }
         panel.state.onToggleRecording = { [weak self] in self?.toggleRecording() }
@@ -270,10 +415,13 @@ final class AssistantController {
         remote.onListenTalk = { [weak self] in
             guard let self else { return }
             self.talkTargetApp = NSWorkspace.shared.frontmostApplication
+            // Phone-driven: if the panel was closed, it comes back as the thin
+            // strip at the bottom of the work screen — a status readout, out
+            // of the way. If it's already up, it stays exactly as the user
+            // has it (size, spot, and all); only the tab changes.
+            let wasHidden = !self.panel.isVisible
             self.showPanel(listening: true)
-            // Phone-driven: the Mac panel is just a status readout, so park it
-            // as the thin strip at the bottom of the work screen.
-            if let screen = self.activeScreen { self.panel.showAsStrip(on: screen) }
+            if wasHidden, let screen = self.activeScreen { self.panel.showAsStrip(on: screen) }
             // The phone has its own ASK key, so TALK always means "do it" —
             // whatever tab the Mac panel was left on. (Deferring to the Ask
             // tab here turned "open Messages" into a question three times in
@@ -445,7 +593,7 @@ final class AssistantController {
         }
         remote.onSavePhoto = { [weak self] imageData in
             guard let self else { return }
-            self.toast.show("Saving photo to Desktop…", icon: "photo", tint: .yellow)
+            self.toast.show("Saving photo to VIRADETH_RESUME…", icon: "photo", tint: .yellow)
             PhotoSaveActions.save(imageData) { [weak self] message, ok in
                 self?.toast.show(message,
                                  icon: ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill",
@@ -1119,6 +1267,8 @@ final class AssistantController {
         panel.state.status = .thinking
         panel.state.answer = ""
         panel.state.errorText = nil
+        panel.state.showingAskHistory = false
+        panel.state.restoredFromHistory = false
         // With the study site open, the answer is also rendered in the page
         // (under the box being edited) so it can be read there.
         let siteBox = SiteEditActions.editContext()
@@ -1177,7 +1327,12 @@ final class AssistantController {
                     context = "Actual text of the file currently focused in \(editor.appName) (read via the Accessibility API — use this as the primary source; the screenshot may only show part of it):\n\n\(editor.text)"
                 }
                 let claude = AnthropicService(apiKey: apiKey)
-                let answer = try await claude.ask(question: question, jpegImage: image, context: context) { [weak self] status in
+                let attachments = askAttachmentJPEGs()
+                if !attachments.isEmpty {
+                    ActivityLog.recordAction("ask-with-attachments", ["count": "\(attachments.count)"])
+                }
+                let answer = try await claude.ask(question: question, jpegImage: image, context: context,
+                                                  attachments: attachments) { [weak self] status in
                     guard let self, id == self.requestID else { return }
                     self.panel.state.answer = status
                 }
@@ -1185,6 +1340,7 @@ final class AssistantController {
                 guard id == requestID else { return }
                 panel.state.status = .answering
                 panel.state.answer = answer.text
+                rememberAsk(question: question, answer: answer.text)
                 if siteOpen { SiteEditActions.showReply(answer.text, question: question) }
                 if let box = answer.highlight {
                     let rect = Self.screenRect(fromNormalized: box, on: screen)

@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum AssistantStatus {
     case idle, listening, thinking, answering
@@ -77,10 +78,11 @@ enum PanelSize: Int, CaseIterable, Comparable {
 }
 
 enum AssistantTab: String, CaseIterable {
+    /// Listed first so it's the leftmost tab: asking is what the panel is
+    /// for most of the time.
+    case ask = "Ask / Question"
     /// Region captures and dictation share one tab; both land on the clipboard together.
-    /// Listed first so it's the default, leftmost tab.
     case captureDictate = "Capture + Dictate"
-    case ask = "Ask / Question Only"
     /// Voice/typed commands Peeky *acts on* (e.g. "create a calendar event
     /// at 2pm"), same plan-and-do flow as the phone's TALK button.
     case talk = "Talk / Request"
@@ -274,6 +276,27 @@ final class AssistantState: ObservableObject {
     /// file URL rather than pixels.
     enum AttachmentKind { case capture, image, file }
     @Published var attachmentKind: AttachmentKind = .capture
+    /// Pictures the user dropped, pasted, or picked into the Ask tab so a
+    /// question can be about them ("what's wrong in the second one?"). They
+    /// ride along with every Ask until removed — captures stay on their own
+    /// tab and never land here.
+    struct AskAttachment: Identifiable, Equatable {
+        let id = UUID()
+        let image: NSImage
+        let name: String
+        static func == (a: AskAttachment, b: AskAttachment) -> Bool { a.id == b.id }
+    }
+    static let maxAskAttachments = 10
+    @Published var askAttachments: [AskAttachment] = []
+    @Published var askAttachmentsCollapsed = false
+    /// Every answered question, newest first — survives closing Peeky.
+    @Published var askHistory: [AskHistoryEntry] = []
+    /// The Ask tab is showing the History list instead of the current Q&A.
+    @Published var showingAskHistory = false
+    /// The Q&A on screen came back from History: show its text even when
+    /// answers are normally spoken rather than shown.
+    @Published var restoredFromHistory = false
+    @Published var historySearch = ""
     /// Reloaded from disk when the saved capture is edited in an external
     /// app (e.g. Preview.app's markup arrow) after being saved — nil until
     /// the file actually changes.
@@ -325,6 +348,15 @@ final class AssistantState: ObservableObject {
     /// Opens the macOS file picker so a file or folder from this Mac can be
     /// dropped into the capture preview (the + menu on Capture + Dictate).
     var onAttachFile: (() -> Void)?
+    /// The Ask tab's + menu: pick images for the attachment strip.
+    var onAttachToAsk: (() -> Void)?
+    /// History list actions; persistence lives with the controller.
+    var onRestoreHistory: ((AskHistoryEntry) -> Void)?
+    var onDeleteHistory: ((AskHistoryEntry) -> Void)?
+    var onClearHistory: (() -> Void)?
+    /// Files dropped on, or pasted into, the Ask tab.
+    var onDropIntoAsk: (([URL]) -> Void)?
+    var onPasteIntoAsk: (() -> Void)?
     /// Reads the current answer aloud on demand, regardless of `textOnlyMode`.
     var onReadAloud: (() -> Void)?
     /// Mic button: starts recording (a question on the Ask tab, a dictation
@@ -915,17 +947,31 @@ struct AssistantPanelView: View {
                 coachCard(message)
                     .animation(.easeInOut(duration: 0.25), value: state.coachMessage)
             }
-            switch state.tab {
-            case .ask:
-                topInputRow
-                transcriptView
-                answerView
-            case .talk:
-                topInputRow
-                if state.status == .listening { transcriptView }
-                talkLogView
-            case .captureDictate:
-                captureDictateTab
+            Group {
+                switch state.tab {
+                case .ask:
+                    topInputRow
+                    if state.showingAskHistory {
+                        askHistoryView
+                    } else {
+                        askAttachmentsStrip
+                        transcriptView
+                        answerView
+                    }
+                case .talk:
+                    topInputRow
+                    if state.status == .listening { transcriptView }
+                    talkLogView
+                case .captureDictate:
+                    captureDictateTab
+                }
+            }
+            .onDrop(of: [.fileURL, .image], isTargeted: nil) { providers in
+                guard state.tab == .ask else { return false }
+                return handleAskDrop(providers)
+            }
+            .onPasteCommand(of: [.image, .fileURL, .png, .tiff]) { _ in
+                if state.tab == .ask { state.onPasteIntoAsk?() }
             }
             Spacer(minLength: 0)
             bottomBar
@@ -1453,6 +1499,7 @@ struct AssistantPanelView: View {
     // Claude-style: big input field on top, mic status at top-right.
     private var topInputRow: some View {
         HStack(spacing: 10) {
+            if state.tab == .ask { historyButton }
             ZStack(alignment: .leading) {
                 if typedQuestion.isEmpty {
                     Text(inputPlaceholder)
@@ -1727,7 +1774,7 @@ struct AssistantPanelView: View {
 
     private var bottomBar: some View {
         HStack(spacing: 10) {
-            if state.tab == .captureDictate {
+            if state.tab == .captureDictate || state.tab == .ask {
                 addMenu
             }
             // Shell-prompt readout: `peeky on talk ❯` — the segments coloured
@@ -1818,7 +1865,8 @@ struct AssistantPanelView: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .help("Add a file or folder from this Mac to the preview")
+        .help(state.tab == .ask ? "Attach images for your question (or drop / paste them here)"
+                                : "Add a file or folder from this Mac to the preview")
     }
 
     private func showAddMenu() {
@@ -1827,14 +1875,348 @@ struct AssistantPanelView: View {
         let header = NSMenuItem(title: "Add", action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
-        let files = NSMenuItem(title: "Files and folders", action: #selector(MenuAction.fire), keyEquivalent: "")
-        files.image = NSImage(systemSymbolName: "paperclip", accessibilityDescription: nil)
-        let action = MenuAction { state.onAttachFile?() }
-        files.target = action
-        menu.addItem(files)
-        // popUp blocks until dismissed, so the local target stays alive.
+        var actions: [MenuAction] = []
+        if state.tab == .ask {
+            let full = state.askAttachments.count >= AssistantState.maxAskAttachments
+            let images = NSMenuItem(title: full ? "Images (10 of 10 attached)" : "Images…",
+                                    action: #selector(MenuAction.fire), keyEquivalent: "")
+            images.image = NSImage(systemSymbolName: "photo.on.rectangle.angled", accessibilityDescription: nil)
+            images.isEnabled = !full
+            let pick = MenuAction { state.onAttachToAsk?() }
+            images.target = pick
+            actions.append(pick)
+            menu.addItem(images)
+            let paste = NSMenuItem(title: "Paste image from clipboard", action: #selector(MenuAction.fire), keyEquivalent: "")
+            paste.image = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: nil)
+            paste.isEnabled = !full && NSPasteboard.general.canReadObject(forClasses: [NSImage.self, NSURL.self], options: nil)
+            let pasteAction = MenuAction { state.onPasteIntoAsk?() }
+            paste.target = pasteAction
+            actions.append(pasteAction)
+            menu.addItem(paste)
+        } else {
+            let files = NSMenuItem(title: "Files and folders", action: #selector(MenuAction.fire), keyEquivalent: "")
+            files.image = NSImage(systemSymbolName: "paperclip", accessibilityDescription: nil)
+            let action = MenuAction { state.onAttachFile?() }
+            files.target = action
+            actions.append(action)
+            menu.addItem(files)
+        }
+        // popUp blocks until dismissed, so the local targets stay alive.
         menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
-        _ = action
+        _ = actions
+    }
+
+    // MARK: Ask history
+
+    /// Clock at the head of the Ask line: flips between the current Q&A and
+    /// the list of everything asked before. Lit while the list is up.
+    private var historyButton: some View {
+        let on = state.showingAskHistory
+        return Button {
+            withAnimation(.easeInOut(duration: 0.18)) { state.showingAskHistory.toggle() }
+        } label: {
+            Image(systemName: "clock.arrow.circlepath")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(on ? Color.black.opacity(0.85) : .white.opacity(0.75))
+                .frame(width: 30, height: 30)
+                .background(Circle().fill(on ? Color.white.opacity(0.9) : Color.white.opacity(0.07)))
+                .overlay(Circle().strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .help(on ? "Back to the current question" : "History — every question you've asked, with its answer")
+    }
+
+    private var filteredHistory: [AskHistoryEntry] {
+        let needle = state.historySearch.trimmingCharacters(in: .whitespaces)
+        guard !needle.isEmpty else { return state.askHistory }
+        return state.askHistory.filter {
+            $0.question.localizedCaseInsensitiveContains(needle) || $0.answer.localizedCaseInsensitiveContains(needle)
+        }
+    }
+
+    private var askHistoryView: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Text("History")
+                    .font(.system(size: 20, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.white)
+                Text("\(state.askHistory.count)")
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .padding(.horizontal, 8).padding(.vertical, 2)
+                    .background(Capsule().fill(Color.white.opacity(0.08)))
+                Spacer()
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.5))
+                    TextField("search", text: $state.historySearch)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundStyle(.white)
+                        .frame(width: 150)
+                }
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .background(Capsule().fill(Color.white.opacity(0.06)))
+                .overlay(Capsule().strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
+                if !state.askHistory.isEmpty {
+                    Button { state.onClearHistory?() } label: {
+                        Text("clear all")
+                            .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.6))
+                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            .background(Capsule().fill(Color.white.opacity(0.07)))
+                            .overlay(Capsule().strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Delete every saved question")
+                }
+            }
+            if state.askHistory.isEmpty {
+                Text("Nothing yet — every question you ask shows up here with its answer, even after Peeky is closed.")
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.45))
+                    .padding(.top, 4)
+            } else if filteredHistory.isEmpty {
+                Text("No questions match “\(state.historySearch)”.")
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.45))
+                    .padding(.top, 4)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 4, pinnedViews: []) {
+                        ForEach(historySections, id: \.label) { section in
+                            Text(section.label.uppercased())
+                                .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                                .kerning(1.2)
+                                .foregroundStyle(.white.opacity(0.45))
+                                .padding(.top, 10).padding(.bottom, 2).padding(.leading, 4)
+                            ForEach(section.entries) { entry in
+                                historyRow(entry)
+                            }
+                        }
+                    }
+                    .padding(.bottom, 8)
+                }
+            }
+        }
+        .padding(.top, 6)
+    }
+
+    private struct HistorySection { let label: String; let entries: [AskHistoryEntry] }
+
+    private var historySections: [HistorySection] {
+        var sections: [HistorySection] = []
+        for entry in filteredHistory {
+            let label = AskHistoryStore.dayLabel(for: entry.date)
+            if let last = sections.last, last.label == label {
+                sections[sections.count - 1] = HistorySection(label: label, entries: last.entries + [entry])
+            } else {
+                sections.append(HistorySection(label: label, entries: [entry]))
+            }
+        }
+        return sections
+    }
+
+    private func historyRow(_ entry: AskHistoryEntry) -> some View {
+        HistoryRow(entry: entry,
+                   open: { state.onRestoreHistory?(entry) },
+                   delete: { state.onDeleteHistory?(entry) })
+    }
+
+    /// One saved question: the question as the title, when it was asked,
+    /// the first line of the answer under it. Click opens it; the trash on
+    /// the right (shown on hover) forgets it.
+    private struct HistoryRow: View {
+        let entry: AskHistoryEntry
+        let open: () -> Void
+        let delete: () -> Void
+        @State private var hovering = false
+
+        private static let time: DateFormatter = {
+            let f = DateFormatter(); f.dateFormat = "h:mm a"; return f
+        }()
+
+        var body: some View {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: entry.attachmentNames.isEmpty ? "bubble.left" : "photo.on.rectangle.angled")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .frame(width: 22)
+                    .padding(.top, 2)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(entry.question)
+                        .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.94))
+                        .lineLimit(2)
+                    HStack(spacing: 8) {
+                        Text(Self.time.string(from: entry.date))
+                            .foregroundStyle(.white.opacity(0.45))
+                        Text(entry.answer.replacingOccurrences(of: "\n", with: " "))
+                            .foregroundStyle(.white.opacity(0.6))
+                            .lineLimit(1)
+                    }
+                    .font(.system(size: 12.5, design: .monospaced))
+                }
+                Spacer(minLength: 0)
+                Button(action: delete) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .frame(width: 26, height: 26)
+                        .background(Circle().fill(Color.white.opacity(0.08)))
+                }
+                .buttonStyle(.plain)
+                .opacity(hovering ? 1 : 0)
+                .help("Forget this question")
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.white.opacity(hovering ? 0.08 : 0.035))
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .onTapGesture(perform: open)
+            .onHover { hovering = $0 }
+        }
+    }
+
+    // MARK: Ask attachments strip
+
+    /// Drops of image files (Finder) or raw image data (a browser picture).
+    private func handleAskDrop(_ providers: [NSItemProvider]) -> Bool {
+        let handled = providers.filter {
+            $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+                || $0.hasItemConformingToTypeIdentifier(UTType.image.identifier)
+        }
+        guard !handled.isEmpty else { return false }
+        let group = DispatchGroup()
+        var urls: [URL] = []
+        let lock = NSLock()
+        for provider in handled {
+            group.enter()
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                    defer { group.leave() }
+                    let url: URL? = (item as? URL) ?? (item as? Data).flatMap { URL(dataRepresentation: $0, relativeTo: nil) }
+                    if let url { lock.lock(); urls.append(url); lock.unlock() }
+                }
+            } else {
+                provider.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { data, _ in
+                    defer { group.leave() }
+                    guard let data else { return }
+                    let tmp = FileManager.default.temporaryDirectory
+                        .appendingPathComponent("peeky-drop-\(UUID().uuidString).png")
+                    if (try? data.write(to: tmp)) != nil { lock.lock(); urls.append(tmp); lock.unlock() }
+                }
+            }
+        }
+        group.notify(queue: .main) { [state] in
+            if !urls.isEmpty { state.onDropIntoAsk?(urls) }
+        }
+        return true
+    }
+
+    /// A thin row of thumbnails under the prompt line — pictures the
+    /// question is about. Each has an × to drop it; the chevron folds the
+    /// row to a one-line count when it's in the way. Hidden while empty.
+    @ViewBuilder
+    private var askAttachmentsStrip: some View {
+        if !state.askAttachments.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.18)) { state.askAttachmentsCollapsed.toggle() }
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 12, weight: .bold))
+                                .rotationEffect(.degrees(state.askAttachmentsCollapsed ? 0 : 90))
+                            Image(systemName: "photo.on.rectangle.angled")
+                                .font(.system(size: 14, weight: .semibold))
+                            Text("\(state.askAttachments.count) of \(AssistantState.maxAskAttachments) \(state.askAttachments.count == 1 ? "image" : "images") attached — Peeky sees these with every question")
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.75)
+                        }
+                        .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.72))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(state.askAttachmentsCollapsed ? "Show the attached images" : "Hide the attached images")
+                    Spacer(minLength: 0)
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.18)) { state.askAttachments.removeAll() }
+                    } label: {
+                        Text("clear all")
+                            .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.6))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(Capsule().fill(Color.white.opacity(0.07)))
+                            .overlay(Capsule().strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Remove every attached image")
+                }
+                if !state.askAttachmentsCollapsed {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 10) {
+                            ForEach(state.askAttachments) { item in
+                                askThumbnail(item)
+                            }
+                        }
+                        .padding(.top, 6)
+                        .padding(.trailing, 6)
+                    }
+                    .frame(height: 74)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.white.opacity(0.04))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.06), lineWidth: 1)
+                    )
+            )
+        }
+    }
+
+    private func askThumbnail(_ item: AssistantState.AskAttachment) -> some View {
+        ZStack(alignment: .topTrailing) {
+            Image(nsImage: item.image)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: 64, height: 58)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.16), lineWidth: 1)
+                )
+                .help(item.name)
+            Button {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    state.askAttachments.removeAll { $0.id == item.id }
+                }
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .black))
+                    .foregroundStyle(.white)
+                    .frame(width: 16, height: 16)
+                    .background(Circle().fill(Color.black.opacity(0.85)))
+                    .overlay(Circle().strokeBorder(Color.white.opacity(0.35), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .offset(x: 5, y: -5)
+            .help("Remove \(item.name)")
+        }
     }
 
     /// The break coach's countdown, and its on/off switch. Always visible so
@@ -2079,7 +2461,7 @@ struct AssistantPanelView: View {
                 // text too would defeat the point of the toggle. Talk is
                 // always text: its answer is a running log of what Peeky is
                 // doing, which is never spoken.
-                if state.textOnlyMode || state.tab == .talk {
+                if state.textOnlyMode || state.tab == .talk || state.restoredFromHistory {
                     // With a copied passage underneath, the answer (often just
                     // "Done.") hugs its own height so the passage — the thing
                     // worth reading — gets the room instead of a blank gap.
