@@ -460,6 +460,7 @@ final class AssistantController {
                 panel.state.codeShowingFiles = false
             }
             panel.state.codeDraft = updated
+            panel.state.codeViewerCollapsed = false
             if let line {
                 panel.state.codeJumpToLine = line
                 panel.state.codeJumpLineCount = max(1, code.trimmingCharacters(in: .newlines).components(separatedBy: "\n").count)
