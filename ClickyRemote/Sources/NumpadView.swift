@@ -653,13 +653,6 @@ struct NumpadView: View {
                     .fill(Color(red: 0.11, green: 0.11, blue: 0.14).opacity(0.94))
                     .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(0.14), lineWidth: 1))
             )
-            .overlay(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(Snes.talk)
-                    .frame(width: 3)
-                    .padding(.vertical, 12)
-                    .padding(.leading, 1)
-            }
             .accessibilityHidden(true)
     }
 
