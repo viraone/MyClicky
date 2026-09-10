@@ -1263,6 +1263,8 @@ struct AssistantPanelView: View {
     @State private var breathing = false
     @State private var resizeHoverCorner: PanelResizeCorner?
     @State private var codeViewerExpandHovering = false
+    @State private var captureCopyAgainHovering = false
+    @State private var captureCopyAgainFlash = false
 
     var body: some View {
         Group {
@@ -2027,6 +2029,7 @@ struct AssistantPanelView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(.green)
+                    captureCopyAgainButton
                     Text(captureStatusText)
                         .font(.system(size: 13, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.6))
@@ -2138,6 +2141,25 @@ struct AssistantPanelView: View {
     private func selectClipboardChoice(_ choice: CaptureClipboardChoice) {
         state.clipboardChoice = choice
         state.onCopyAgain?()
+    }
+
+    /// Re-copies the selected tray item — macOS only holds one clipboard
+    /// item, so a copy elsewhere bumps this one off. Flashes a checkmark
+    /// instead of resizing anything for feedback (fixed frame, no `.help`:
+    /// this panel's hint overlay lives in the header, out of reach here).
+    private var captureCopyAgainButton: some View {
+        Button {
+            state.onCopyAgain?()
+            captureCopyAgainFlash = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { captureCopyAgainFlash = false }
+        } label: {
+            Image(systemName: captureCopyAgainFlash ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white.opacity(captureCopyAgainHovering ? 1 : 0.6))
+                .frame(width: 16, height: 16)
+        }
+        .buttonStyle(.plain)
+        .onHover { captureCopyAgainHovering = $0 }
     }
 
     private var captureStatusText: String {
