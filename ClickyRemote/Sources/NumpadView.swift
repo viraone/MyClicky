@@ -541,13 +541,20 @@ struct NumpadView: View {
         }
         .padding(22)
         .background(
+            // Alpine sunset behind the card, dimmed enough to read white on.
             RoundedRectangle(cornerRadius: 28)
-                .fill(
-                    LinearGradient(colors: [Color(red: 0.13, green: 0.13, blue: 0.16),
-                                            Color(red: 0.07, green: 0.07, blue: 0.09)],
-                                   startPoint: .top, endPoint: .bottom)
+                .fill(Color(red: 0.07, green: 0.07, blue: 0.09))
+                .overlay(
+                    Image(uiImage: UIImage(named: "ConfirmBackground") ?? UIImage())
+                        .resizable()
+                        .scaledToFill()
+                        .overlay(
+                            LinearGradient(colors: [.black.opacity(0.25), .black.opacity(0.55), .black.opacity(0.75)],
+                                           startPoint: .top, endPoint: .bottom)
+                        )
                 )
-                .overlay(RoundedRectangle(cornerRadius: 28).strokeBorder(.white.opacity(0.10), lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: 28))
+                .overlay(RoundedRectangle(cornerRadius: 28).strokeBorder(.white.opacity(0.18), lineWidth: 1))
                 .shadow(color: .black.opacity(0.45), radius: 30, y: 12)
         )
     }

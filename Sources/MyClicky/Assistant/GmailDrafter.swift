@@ -119,7 +119,9 @@ enum GmailDrafter {
     /// Types the draft into the open compose: the subject only if the field
     /// is empty, the body replacing whatever the user had written above any
     /// quoted reply. Uses insertText so Gmail sees it as typing and keeps
-    /// its own autosave/undo working.
+    /// its own autosave/undo working. The body lands word by word — a
+    /// typewriter, paced so a normal email takes ~2 s — and stops early if
+    /// the user clicks away or starts typing themselves.
     static func fill(_ draft: Draft, replaceSubject: Bool) -> Bool {
         guard let subjectLiteral = jsString(draft.subject), let bodyLiteral = jsString(draft.body) else { return false }
         let js = """
@@ -128,11 +130,24 @@ enum GmailDrafter {
           var body=vis("div[aria-label='Message Body']"); if(!body){return 'none';}
           var subj=vis("input[name=subjectbox]");
           if(subj && \(replaceSubject ? "true" : "false")){subj.focus();subj.select();document.execCommand('insertText',false,\(subjectLiteral));}
+          if(window.__peekyTyper){clearInterval(window.__peekyTyper);}
           body.focus();
           var r=document.createRange(); r.selectNodeContents(body);
           var stop=body.querySelector('div[data-smartmail=gmail_signature], .gmail_quote'); if(stop){r.setEndBefore(stop);}
           var sel=window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
-          document.execCommand('insertText',false,\(bodyLiteral)+(stop?'\\n\\n':''));
+          if(!r.collapsed){document.execCommand('delete');}
+          var caret=sel.getRangeAt(0).cloneRange(); caret.collapse(true);
+          var text=\(bodyLiteral);
+          var words=text.match(/\\S+\\s*|\\s+/g)||[text];
+          if(stop){words.push('\\n\\n');}
+          var delay=Math.max(8,Math.min(30,Math.round(2000/words.length)));
+          var i=0;
+          window.__peekyTyper=setInterval(function(){
+            if(i>=words.length||document.activeElement!==body){clearInterval(window.__peekyTyper);window.__peekyTyper=null;return;}
+            var s=window.getSelection(); s.removeAllRanges(); s.addRange(caret);
+            document.execCommand('insertText',false,words[i++]);
+            caret=s.getRangeAt(0).cloneRange(); caret.collapse(false);
+          },delay);
           return 'ok';
         })()
         """
