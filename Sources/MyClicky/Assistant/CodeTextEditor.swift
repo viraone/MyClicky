@@ -319,8 +319,11 @@ final class CodeLineNumberRuler: NSRulerView {
     func rebuildLines() {
         lines = CodeLineIndex(textView?.string ?? "")
         let digits = String(lines.starts.count).count
-        ruleThickness = ceil((String(repeating: "0", count: digits) as NSString)
+        let thickness = ceil((String(repeating: "0", count: digits) as NSString)
             .size(withAttributes: [.font: numberFont]).width) + 16
+        // Setting the thickness re-tiles the scroll view even when unchanged,
+        // which from inside a SwiftUI update can feed a layout loop.
+        if thickness != ruleThickness { ruleThickness = thickness }
         needsDisplay = true
     }
 

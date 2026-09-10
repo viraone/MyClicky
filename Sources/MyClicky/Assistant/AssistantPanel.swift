@@ -726,6 +726,11 @@ final class AssistantState: ObservableObject {
     var onToggleRecording: (() -> Void)?
     var onDismiss: (() -> Void)?
     var onMinimize: (() -> Void)?
+    /// Header ↻ and ⏻: quit and reopen the installed build (so a fresh
+    /// `build-app.sh` takes effect without a terminal), or just quit — the
+    /// app has no Dock icon or menu bar, so these are the only way out.
+    var onRelaunch: (() -> Void)?
+    var onQuit: (() -> Void)?
     var onRestore: (() -> Void)?
     /// Left-edge chevron: shrinks to the strip, or grows back from it.
     var onToggleStrip: (() -> Void)?
@@ -1021,6 +1026,25 @@ final class AssistantPanelController {
     }
 
     var isVisible: Bool { panel?.isVisible ?? false }
+
+    /// Quits and reopens whatever is installed at this app's path — the
+    /// one-click version of `osascript -e 'quit app "MyClicky"'; open …`.
+    /// A detached shell waits for this process to actually exit before
+    /// calling `open`, otherwise `open` would just re-activate the old one.
+    static func relaunch() {
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let path = Bundle.main.bundlePath.replacingOccurrences(of: "'", with: "'\\''")
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/sh")
+        task.arguments = ["-c", "while kill -0 \(pid) 2>/dev/null; do sleep 0.1; done; /usr/bin/open '\(path)'"]
+        do {
+            try task.run()
+        } catch {
+            NSLog("Relaunch failed to start helper: \(error)")
+            return
+        }
+        NSApp.terminate(nil)
+    }
     var frame: NSRect? { panel?.frame }
     /// The display the panel is showing on — where the user has chosen to work.
     var screen: NSScreen? {
@@ -1050,6 +1074,8 @@ final class AssistantPanelController {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.setContentSize(Self.expandedSize)
         state.onDismiss = { [weak self] in self?.hide() }
+        state.onRelaunch = { Self.relaunch() }
+        state.onQuit = { NSApp.terminate(nil) }
         state.onMinimize = { [weak self] in self?.minimize() }
         state.onRestore = { [weak self] in self?.expand() }
         state.onToggleStrip = { [weak self] in self?.toggleStrip() }
@@ -1210,6 +1236,9 @@ final class KeyablePanel: NSPanel {
 struct AssistantPanelView: View {
     @ObservedObject var state: AssistantState
     @State private var typedQuestion = ""
+    /// What the hovered header button does, shown in the header itself —
+    /// system tooltips never appear over a non-activating panel.
+    @State private var headerHint: String?
     @State private var copiedAnswerID: UUID?
     @FocusState private var fieldFocused: Bool
     @FocusState private var findFocused: Bool
@@ -1302,7 +1331,7 @@ struct AssistantPanelView: View {
             Image(systemName: expanded ? "chevron.right" : "chevron.left")
                 .font(.system(size: 15, weight: .black))
                 .foregroundStyle(state.accent)
-                .frame(width: 26, height: expanded ? 64 : 40)
+                .frame(width: 26, height: 48)
                 .background(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .fill(state.accent.opacity(0.18))
@@ -1312,6 +1341,27 @@ struct AssistantPanelView: View {
         }
         .buttonStyle(.plain)
         .help(expanded ? "Shrink to a strip" : "Expand the panel")
+    }
+
+    /// Second tab on the right edge, under the strip chevron: tucks the
+    /// whole panel into its corner dot (what Minimize in the header did).
+    private var edgeMinimizeTab: some View {
+        Button {
+            state.onMinimize?()
+        } label: {
+            Image(systemName: "arrow.down.right.and.arrow.up.left")
+                .font(.system(size: 13, weight: .black))
+                .foregroundStyle(state.accent)
+                .frame(width: 26, height: 48)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(state.accent.opacity(0.18))
+                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(state.accent.opacity(0.6), lineWidth: 1))
+                )
+        }
+        .buttonStyle(.plain)
+        .help("Minimize to corner")
     }
 
     /// Three-segment size switch in the header: half · normal · tall. The
@@ -1336,6 +1386,11 @@ struct AssistantPanelView: View {
                 }
                 .buttonStyle(.plain)
                 .help(size.label)
+                .onHover { inside in
+                    withAnimation(.easeInOut(duration: 0.12)) {
+                        if inside { headerHint = size.label } else if headerHint == size.label { headerHint = nil }
+                    }
+                }
             }
         }
         .padding(2)
@@ -1375,13 +1430,36 @@ struct AssistantPanelView: View {
                 if state.micLive { recBadge }
                 Spacer()
                 sizeSwitch
-                headerButton("arrow.down.right.and.arrow.up.left", help: "Minimize to corner") {
-                    state.onMinimize?()
+                headerButton("arrow.clockwise", help: "Relaunch Peeky") {
+                    state.onRelaunch?()
+                }
+                headerButton("power", help: "Quit Peeky") {
+                    state.onQuit?()
                 }
                 headerButton("xmark", help: "Close") {
                     state.onDismiss?()
                 }
             }
+            // The hovered button's description floats just under the header
+            // row as an overlay, so showing it never changes the header's
+            // own size (a layout-affecting hint fed a constraints loop).
+            .overlay(alignment: .topTrailing) {
+                if let hint = headerHint {
+                    Text(hint)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .lineLimit(1)
+                        .fixedSize()
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(Color(red: 0.12, green: 0.12, blue: 0.14)))
+                        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.white.opacity(0.15), lineWidth: 1))
+                        .offset(y: 34)
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
+                }
+            }
+            .zIndex(1)
             // Thin rule under the tabs, as a terminal draws under its tab row.
             Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
             phaseStrip
@@ -1475,7 +1553,13 @@ struct AssistantPanelView: View {
                 )
         )
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(alignment: .trailing) { edgeChevron(expanded: true).padding(.trailing, 3) }
+        .overlay(alignment: .trailing) {
+            VStack(spacing: 8) {
+                edgeChevron(expanded: true)
+                edgeMinimizeTab
+            }
+            .padding(.trailing, 3)
+        }
         .overlay(alignment: .bottom) { bottomEdgeHandle }
         .overlay(alignment: .leading) { leadingEdgeHandle }
         .overlay(alignment: .topLeading) { resizeHandle(.topLeading) }
@@ -3760,15 +3844,21 @@ struct AssistantPanelView: View {
     }
 
     private func headerButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        let hovering = headerHint == help
+        return Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(.white.opacity(0.55))
+                .foregroundStyle(.white.opacity(hovering ? 0.95 : 0.55))
                 .frame(width: 22, height: 22)
-                .background(Circle().fill(Color.white.opacity(0.07)))
+                .background(Circle().fill(Color.white.opacity(hovering ? 0.16 : 0.07)))
         }
         .buttonStyle(.plain)
         .help(help)
+        .onHover { inside in
+            withAnimation(.easeInOut(duration: 0.12)) {
+                if inside { headerHint = help } else if headerHint == help { headerHint = nil }
+            }
+        }
     }
 
     /// Drag-to-resize grip in one corner of the panel. Diagonal-arrow icon
