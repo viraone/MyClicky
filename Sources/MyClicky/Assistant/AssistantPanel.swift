@@ -726,6 +726,11 @@ final class AssistantState: ObservableObject {
     var onToggleRecording: (() -> Void)?
     var onDismiss: (() -> Void)?
     var onMinimize: (() -> Void)?
+    /// Header ↻ and ⏻: quit and reopen the installed build (so a fresh
+    /// `build-app.sh` takes effect without a terminal), or just quit — the
+    /// app has no Dock icon or menu bar, so these are the only way out.
+    var onRelaunch: (() -> Void)?
+    var onQuit: (() -> Void)?
     var onRestore: (() -> Void)?
     /// Left-edge chevron: shrinks to the strip, or grows back from it.
     var onToggleStrip: (() -> Void)?
@@ -1021,6 +1026,25 @@ final class AssistantPanelController {
     }
 
     var isVisible: Bool { panel?.isVisible ?? false }
+
+    /// Quits and reopens whatever is installed at this app's path — the
+    /// one-click version of `osascript -e 'quit app "MyClicky"'; open …`.
+    /// A detached shell waits for this process to actually exit before
+    /// calling `open`, otherwise `open` would just re-activate the old one.
+    static func relaunch() {
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let path = Bundle.main.bundlePath.replacingOccurrences(of: "'", with: "'\\''")
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/sh")
+        task.arguments = ["-c", "while kill -0 \(pid) 2>/dev/null; do sleep 0.1; done; /usr/bin/open '\(path)'"]
+        do {
+            try task.run()
+        } catch {
+            NSLog("Relaunch failed to start helper: \(error)")
+            return
+        }
+        NSApp.terminate(nil)
+    }
     var frame: NSRect? { panel?.frame }
     /// The display the panel is showing on — where the user has chosen to work.
     var screen: NSScreen? {
@@ -1050,6 +1074,8 @@ final class AssistantPanelController {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.setContentSize(Self.expandedSize)
         state.onDismiss = { [weak self] in self?.hide() }
+        state.onRelaunch = { Self.relaunch() }
+        state.onQuit = { NSApp.terminate(nil) }
         state.onMinimize = { [weak self] in self?.minimize() }
         state.onRestore = { [weak self] in self?.expand() }
         state.onToggleStrip = { [weak self] in self?.toggleStrip() }
@@ -1377,6 +1403,12 @@ struct AssistantPanelView: View {
                 sizeSwitch
                 headerButton("arrow.down.right.and.arrow.up.left", help: "Minimize to corner") {
                     state.onMinimize?()
+                }
+                headerButton("arrow.clockwise", help: "Relaunch Peeky — quits and reopens the installed build") {
+                    state.onRelaunch?()
+                }
+                headerButton("power", help: "Quit Peeky") {
+                    state.onQuit?()
                 }
                 headerButton("xmark", help: "Close") {
                     state.onDismiss?()
