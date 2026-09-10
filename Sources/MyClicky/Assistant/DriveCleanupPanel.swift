@@ -25,6 +25,13 @@ final class DriveCleanupState: ObservableObject {
     /// Ticked rows. Seeded from Claude's flags, but the person decides.
     @Published var selection: Set<String> = []
     @Published var confirming = false
+    /// Account storage totals for the quota meter. Optional: the cleanup flow
+    /// still works if this fetch fails, it just skips the meter.
+    @Published var quota: DriveService.StorageQuota?
+    @Published var confirmingEmptyTrash = false
+    /// True only while an empty-trash call is in flight, so the button can't
+    /// be double-tapped.
+    @Published var emptyingTrash = false
 
     var selectedCandidates: [DriveCleanupPlanner.Candidate] {
         candidates.filter { selection.contains($0.id) }
@@ -36,6 +43,35 @@ final class DriveCleanupState: ObservableObject {
     /// Moves the ticked files to Drive's trash. Set by the controller.
     var onTrash: (() -> Void)?
     var onCancel: (() -> Void)?
+    /// Permanently empties Drive's trash. Set by the controller.
+    var onEmptyTrash: (() -> Void)?
+}
+
+/// Pure quota-projection arithmetic, kept apart from the view so it's unit
+/// testable without SwiftUI.
+enum DriveQuotaMath {
+    /// Google's free tier, in the decimal bytes Drive itself reports in.
+    static let freeTierBytes: Int64 = 15_000_000_000
+
+    /// The account's cap for planning purposes. Unlimited accounts (no
+    /// `limit`) and paid plans above the free tier both collapse to the free
+    /// tier, since the point of this meter is life after cancelling Google One.
+    static func targetBytes(limit: Int64?) -> Int64 {
+        guard let limit else { return freeTierBytes }
+        return min(limit, freeTierBytes)
+    }
+
+    struct Projection {
+        let remainingBytes: Int64
+        let overBytes: Int64
+        let isUnderLimit: Bool
+    }
+
+    static func projection(usage: Int64, selectedBytes: Int64, target: Int64) -> Projection {
+        let remaining = max(0, usage - selectedBytes)
+        let over = max(0, remaining - target)
+        return Projection(remainingBytes: remaining, overBytes: over, isUnderLimit: over == 0)
+    }
 }
 
 @MainActor
@@ -110,29 +146,72 @@ struct DriveCleanupView: View {
                  + "They stay in Drive's trash for 30 days, and you can restore any of them from there. "
                  + "Nothing is permanently deleted.")
         }
+        .alert("Permanently delete everything in Drive Trash?",
+               isPresented: $state.confirmingEmptyTrash) {
+            Button("Cancel", role: .cancel) {}
+            Button("Empty Trash", role: .destructive) { state.onEmptyTrash?() }
+        } message: {
+            Text("\(DriveCleanupPlanner.byteText(state.quota?.usageInDriveTrash ?? 0)) will be freed. "
+                 + "Unlike moving files to Trash, this cannot be undone.")
+        }
     }
 
     // MARK: - Header
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Drive Cleanup").font(.headline)
-                Text(subtitle).font(.subheadline).foregroundStyle(.secondary)
-            }
-            Spacer()
-            if case .review = state.phase {
-                HStack(spacing: 8) {
-                    Button("Select all") { state.selection = Set(state.candidates.map(\.id)) }
-                    Button("Select none") { state.selection = [] }
-                    Button("Claude's picks") {
-                        state.selection = Set(state.candidates.filter(\.flagged).map(\.id))
-                    }
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Drive Cleanup").font(.headline)
+                    Text(subtitle).font(.subheadline).foregroundStyle(.secondary)
                 }
-                .controlSize(.small)
+                Spacer()
+                if case .review = state.phase {
+                    HStack(spacing: 8) {
+                        Button("Select all") { state.selection = Set(state.candidates.map(\.id)) }
+                        Button("Select none") { state.selection = [] }
+                        Button("Claude's picks") {
+                            state.selection = Set(state.candidates.filter(\.flagged).map(\.id))
+                        }
+                    }
+                    .controlSize(.small)
+                }
+            }
+            if let quota = state.quota {
+                quotaMeter(quota)
             }
         }
         .padding(12)
+    }
+
+    @ViewBuilder
+    private func quotaMeter(_ quota: DriveService.StorageQuota) -> some View {
+        let target = DriveQuotaMath.targetBytes(limit: quota.limit)
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                Text("\(DriveCleanupPlanner.byteText(quota.usage)) used of \(DriveCleanupPlanner.byteText(target))")
+                    .font(.system(size: 12, weight: .medium))
+                Text("Free tier is 15 GB after cancelling Google One")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            if case .review = state.phase {
+                let projection = DriveQuotaMath.projection(
+                    usage: quota.usage, selectedBytes: state.selectedBytes, target: target)
+                HStack(spacing: 4) {
+                    Text("After this cleanup: \(DriveCleanupPlanner.byteText(projection.remainingBytes))")
+                    Text(projection.isUnderLimit
+                         ? "— under the limit"
+                         : "— still \(DriveCleanupPlanner.byteText(projection.overBytes)) over")
+                        .fontWeight(.medium)
+                }
+                .font(.system(size: 11))
+                .foregroundStyle(projection.isUnderLimit ? .green : .orange)
+            }
+            if quota.usageInDriveTrash > 0 {
+                Text("\(DriveCleanupPlanner.byteText(quota.usageInDriveTrash)) in Drive Trash")
+                    .font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+        }
     }
 
     private var subtitle: String {
@@ -283,6 +362,10 @@ struct DriveCleanupView: View {
                     .font(.callout).foregroundStyle(.secondary)
             }
             Spacer()
+            if showsEmptyTrashButton {
+                Button(emptyTrashButtonTitle) { state.confirmingEmptyTrash = true }
+                    .disabled(state.emptyingTrash)
+            }
             switch state.phase {
             case .review:
                 Button("Cancel") { state.onCancel?() }
@@ -299,5 +382,19 @@ struct DriveCleanupView: View {
             }
         }
         .padding(12)
+    }
+
+    /// Only offered where it's relevant (review/finished) and where there's
+    /// actually something in the trash to empty.
+    private var showsEmptyTrashButton: Bool {
+        guard (state.quota?.usageInDriveTrash ?? 0) > 0 else { return false }
+        switch state.phase {
+        case .review, .finished: return true
+        default: return false
+        }
+    }
+
+    private var emptyTrashButtonTitle: String {
+        "Empty Trash (\(DriveCleanupPlanner.byteText(state.quota?.usageInDriveTrash ?? 0)))"
     }
 }

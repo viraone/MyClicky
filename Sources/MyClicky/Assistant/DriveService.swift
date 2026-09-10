@@ -116,6 +116,36 @@ struct DriveService {
         return rfc3339.date(from: string) ?? ISO8601DateFormatter().date(from: string)
     }
 
+    /// Account-wide storage totals from Drive's `about` endpoint. `usage` is
+    /// the total across Drive+Gmail+Photos, not just Drive.
+    struct StorageQuota {
+        /// Absent for unlimited-storage accounts (e.g. Workspace plans).
+        let limit: Int64?
+        let usage: Int64
+        let usageInDrive: Int64
+        let usageInDriveTrash: Int64
+    }
+
+    func storageQuota() async throws -> StorageQuota {
+        let token = try await auth.validAccessToken()
+        var request = URLRequest(url: URL(string:
+            "https://www.googleapis.com/drive/v3/about?fields=storageQuota")!)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try Self.check(response: response, data: data)
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let quota = json["storageQuota"] as? [String: Any] else {
+            throw DriveError.badResponse
+        }
+        func int64(_ key: String) -> Int64? { (quota[key] as? String).flatMap(Int64.init) }
+        return StorageQuota(
+            limit: int64("limit"),
+            usage: int64("usage") ?? 0,
+            usageInDrive: int64("usageInDrive") ?? 0,
+            usageInDriveTrash: int64("usageInDriveTrash") ?? 0
+        )
+    }
+
     /// Moves the file to Drive's trash — recoverable for 30 days.
     func trash(id: String) async throws {
         let token = try await auth.validAccessToken()
@@ -125,6 +155,17 @@ struct DriveService {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: ["trashed": true])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        try Self.check(response: response, data: data)
+    }
+
+    /// Permanently deletes everything in Drive's trash. Unlike `trash(id:)`,
+    /// this cannot be undone — callers must confirm with the user first.
+    func emptyTrash() async throws {
+        let token = try await auth.validAccessToken()
+        var request = URLRequest(url: URL(string: "https://www.googleapis.com/drive/v3/files/trash")!)
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         let (data, response) = try await URLSession.shared.data(for: request)
         try Self.check(response: response, data: data)
     }

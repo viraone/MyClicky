@@ -87,6 +87,173 @@ struct GmailService {
         try await post(URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/threads/\(id)/untrash")!)
     }
 
+    // MARK: - Large-attachment cleanup
+
+    struct LargeMessage: Identifiable, Hashable {
+        let id: String
+        let threadId: String
+        let from: String
+        let subject: String
+        let date: Date?
+        let sizeEstimate: Int64
+        let hasAttachment: Bool
+    }
+
+    /// Messages over `minBytes`, largest first, one per thread. Mailbox size
+    /// is the only signal here — no Claude pass, since "this is big" needs no
+    /// judgement call the way a Drive file's staleness does.
+    func largeMessages(
+        minBytes: Int = 10_000_000, cap: Int = 300,
+        progress: @escaping @MainActor (Int) -> Void
+    ) async throws -> [LargeMessage] {
+        let megabytes = max(1, minBytes / 1_000_000)
+        let ids = try await matchingMessageIDs(query: "larger:\(megabytes)M -in:trash -in:spam", cap: cap)
+
+        var messages: [LargeMessage] = []
+        for batch in Self.chunked(ids, size: 10) {
+            try Task.checkCancellation()
+            let details = try await withThrowingTaskGroup(of: LargeMessage?.self) { group in
+                for id in batch {
+                    group.addTask { try await self.largeMessageDetail(id: id) }
+                }
+                var out: [LargeMessage] = []
+                for try await message in group {
+                    if let message { out.append(message) }
+                }
+                return out
+            }
+            messages.append(contentsOf: details)
+            let count = messages.count
+            await MainActor.run { progress(count) }
+        }
+        return Self.dedupeKeepingLargest(messages)
+    }
+
+    /// Permanently deletes every message in Trash and Spam. This is the one
+    /// Gmail action in MyClicky with no undo — callers must confirm with the
+    /// user first.
+    func emptyTrashAndSpam(progress: @escaping @MainActor (String) -> Void) async throws -> Int {
+        await MainActor.run { progress("Listing Gmail Trash…") }
+        let trashIDs = try await matchingMessageIDs(query: "in:trash")
+        await MainActor.run { progress("Listing Gmail Spam…") }
+        let spamIDs = try await matchingMessageIDs(query: "in:spam")
+        let ids = Array(Set(trashIDs + spamIDs))
+        guard !ids.isEmpty else { return 0 }
+
+        await MainActor.run { progress("Deleting \(ids.count) messages…") }
+        for chunk in Self.chunked(ids, size: 1000) {
+            try await batchDelete(ids: chunk)
+        }
+        return ids.count
+    }
+
+    /// Quick count of what `emptyTrashAndSpam` would delete, for the button
+    /// label and confirmation copy — ids only, no per-message detail fetch.
+    func trashAndSpamCount() async throws -> Int {
+        let trashIDs = try await matchingMessageIDs(query: "in:trash")
+        let spamIDs = try await matchingMessageIDs(query: "in:spam")
+        return Set(trashIDs + spamIDs).count
+    }
+
+    /// Keeps only the largest message per thread, sorted largest first.
+    static func dedupeKeepingLargest(_ messages: [LargeMessage]) -> [LargeMessage] {
+        var best: [String: LargeMessage] = [:]
+        for message in messages {
+            if let existing = best[message.threadId], existing.sizeEstimate >= message.sizeEstimate { continue }
+            best[message.threadId] = message
+        }
+        return best.values.sorted { $0.sizeEstimate > $1.sizeEstimate }
+    }
+
+    private static func chunked<T>(_ items: [T], size: Int) -> [[T]] {
+        stride(from: 0, to: items.count, by: size).map { Array(items[$0..<min($0 + size, items.count)]) }
+    }
+
+    private func largeMessageDetail(id: String) async throws -> LargeMessage? {
+        var components = URLComponents(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages/\(id)")!
+        components.queryItems = [
+            .init(name: "format", value: "metadata"),
+            .init(name: "metadataHeaders", value: "From"),
+            .init(name: "metadataHeaders", value: "Subject"),
+            .init(name: "metadataHeaders", value: "Date"),
+        ]
+        let json = try await getJSON(components.url!)
+        guard let threadId = json["threadId"] as? String else { return nil }
+        let payload = json["payload"] as? [String: Any]
+        let headers = payload?["headers"] as? [[String: Any]] ?? []
+        func header(_ name: String) -> String {
+            headers.first { ($0["name"] as? String)?.caseInsensitiveCompare(name) == .orderedSame }?["value"] as? String ?? ""
+        }
+        let sizeEstimate = (json["sizeEstimate"] as? Int).map(Int64.init) ?? 0
+        return LargeMessage(
+            id: id, threadId: threadId,
+            from: header("From"), subject: header("Subject"),
+            date: Self.parseHeaderDate(header("Date")),
+            sizeEstimate: sizeEstimate,
+            hasAttachment: Self.hasAttachment(payload)
+        )
+    }
+
+    private static func hasAttachment(_ payload: [String: Any]?) -> Bool {
+        guard let parts = payload?["parts"] as? [[String: Any]] else { return false }
+        return parts.contains { part in
+            if let filename = part["filename"] as? String, !filename.isEmpty { return true }
+            return hasAttachment(part)
+        }
+    }
+
+    private static let rfc2822DateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "EEE, d MMM yyyy HH:mm:ss Z"
+        return formatter
+    }()
+
+    private static func parseHeaderDate(_ value: String) -> Date? {
+        guard !value.isEmpty else { return nil }
+        return rfc2822DateFormatter.date(from: value)
+    }
+
+    /// Message ids matching a Gmail search query, paginated. `cap` stops
+    /// early once enough matches are found; `nil` collects everything (used
+    /// by the two permanent-delete queries, which must be exhaustive).
+    private func matchingMessageIDs(query: String, cap: Int? = nil) async throws -> [String] {
+        var ids: [String] = []
+        var pageToken: String?
+        repeat {
+            var components = URLComponents(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages")!
+            components.queryItems = [
+                .init(name: "q", value: query),
+                .init(name: "maxResults", value: "100"),
+            ] + (pageToken.map { [URLQueryItem(name: "pageToken", value: $0)] } ?? [])
+            let json = try await getJSON(components.url!)
+            let page = (json["messages"] as? [[String: Any]] ?? []).compactMap { $0["id"] as? String }
+            ids.append(contentsOf: page)
+            pageToken = json["nextPageToken"] as? String
+            try Task.checkCancellation()
+        } while pageToken != nil && (cap == nil || ids.count < cap!)
+        if let cap { return Array(ids.prefix(cap)) }
+        return ids
+    }
+
+    private func batchDelete(ids: [String]) async throws {
+        let token = try await auth.validAccessToken()
+        var request = URLRequest(url: URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages/batchDelete")!)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["ids": ids])
+        request.timeoutInterval = 60
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw GmailError.badResponse }
+        guard (200..<300).contains(http.statusCode) else {
+            let message = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])
+                .flatMap { $0["error"] as? [String: Any] }
+                .flatMap { $0["message"] as? String }
+            throw GmailError.api(message ?? "HTTP \(http.statusCode)")
+        }
+    }
+
     // MARK: - API calls
 
     /// Thread ID of the newest message in the Primary inbox (what Gmail shows
