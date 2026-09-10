@@ -122,7 +122,8 @@ later, so an editor open on the same folder (VS Code, Xcode) picks the change
 up on its own. **⌘F** opens a find bar (⌘G / ⇧⌘G next and previous match,
 ⌥⌘F find-and-replace, Esc closes it), like VS Code's. Put the caret next to
 a `{`, `(` or `[` and its partner is outlined; double-click a bracket to
-select the whole block. Edits don't touch the cached project block — the changed
+select the whole block. A line-number gutter follows hard lines through wrapping,
+and a faint band highlights the caret’s line when no text is selected. Edits don't touch the cached project block — the changed
 file goes along with the next question as a short addendum (pennies) rather
 than re-priming the cache; ↻ re-reads everything when you want a fresh
 snapshot. Code blocks in answers have **Copy** and **Apply to <file>**
