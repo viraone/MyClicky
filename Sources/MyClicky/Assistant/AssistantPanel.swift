@@ -1412,7 +1412,7 @@ struct AssistantPanelView: View {
                 headerButton("arrow.down.right.and.arrow.up.left", help: "Minimize to corner") {
                     state.onMinimize?()
                 }
-                headerButton("arrow.clockwise", help: "Relaunch Peeky — quits and reopens the installed build") {
+                headerButton("arrow.clockwise", help: "Relaunch Peeky") {
                     state.onRelaunch?()
                 }
                 headerButton("power", help: "Quit Peeky") {
