@@ -53,6 +53,29 @@ the trash" / "delete this file." MyClicky reads the active tab's URL, looks
 up the file via the Drive API, and asks for confirmation before moving it to
 the trash (restorable for 30 days from Drive).
 
+### Storage cleanup (⌥⌘D Drive, ⌥⌘G Gmail)
+
+Two hold-to-open windows for clearing out Google account storage:
+
+- **⌥⌘D — Drive Cleanup**: scans every file you own, flags likely junk
+  (empty docs, large stale files, near-duplicates) with Claude, and shows a
+  review table you tick and send to Drive's trash (restorable for 30 days).
+  The window header shows a live quota meter — usage against the 15 GB free
+  tier, a projected "after this cleanup" total that updates as you tick rows,
+  and how much is sitting in Drive's trash. If there's anything in the trash,
+  an **Empty Trash** button permanently deletes it after a confirmation that
+  spells out it can't be undone.
+- **⌥⌘G — Gmail Cleanup**: finds messages over 10 MB (largest first, one row
+  per thread), with a "Select all over 25 MB" shortcut. Selected threads move
+  to Gmail's trash (restorable for 30 days) the same way Drive cleanup does.
+  An **Empty Gmail Trash & Spam** button is also available, gated behind the
+  same kind of permanent-delete confirmation. This feature needs no Anthropic
+  key — message size is the only signal, no Claude review involved.
+
+Google Photos isn't covered by either window: the Photos API doesn't let a
+third-party app list or delete media it didn't create, so there's no way to
+build an equivalent cleanup flow for it.
+
 ### One-time setup
 
 Store your Anthropic API key in the macOS Keychain (never written to disk in
@@ -219,9 +242,17 @@ The dashboard lives at
 - `Assistant/ActivityLog`: local JSONL activity log powering ClickyLogs
 - `Assistant/GoogleAuthService`: Google OAuth 2.0 for a native app (PKCE +
   loopback redirect); refresh token in Keychain, access token in memory
-- `Assistant/GmailService`: Gmail REST client, builds a read-only inbox digest
+- `Assistant/GmailService`: Gmail REST client, builds a read-only inbox digest,
+  finds large messages and empties Trash/Spam for Gmail Cleanup
 - `Assistant/DriveService`: Drive REST client — fetch a file's full text, look
-  up file metadata, move a file to the trash
+  up file metadata, move a file to the trash, read the account's storage
+  quota, empty the trash permanently
+- `Assistant/DriveCleanupPanel`: Drive Cleanup review window (⌥⌘D) — quota
+  meter, candidate table, trash and empty-trash confirmations
+- `Assistant/DriveCleanupPlanner`: heuristics + Claude shortlist behind Drive
+  Cleanup
+- `Assistant/GmailCleanupPanel`: Gmail Cleanup review window (⌥⌘G) for large
+  messages, mirroring `DriveCleanupPanel`
 - `Assistant/BrowserTabReader`: reads the active tab URL from Chrome, Safari,
   Arc, Edge, or Brave via Apple Events, used to detect an open Drive file
 - `Assistant/EditorContextReader`: reads the focused file's text from a

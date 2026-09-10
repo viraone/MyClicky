@@ -11,6 +11,7 @@ final class AssistantController {
     private let hotkey = AssistantHotkeyMonitor()
     private let dictationHotkey = AssistantHotkeyMonitor(keyCode: 9) // ⌥⌘V
     private let driveCleanupHotkey = AssistantHotkeyMonitor(keyCode: 2) // ⌥⌘D
+    private let gmailCleanupHotkey = AssistantHotkeyMonitor(keyCode: 5) // ⌥⌘G
     private let speech = SpeechService()
     private let capture = ScreenCaptureService()
     private let panel = AssistantPanelController()
@@ -26,6 +27,7 @@ final class AssistantController {
     private let gmailUnread = GmailUnreadWatcher()
     private let captureFileWatcher = CaptureFileWatcher()
     private let driveCleanup = DriveCleanupWindowController()
+    private let gmailCleanup = GmailCleanupWindowController()
     private let breakCoach = BreakCoach()
     /// The passage a copy verb last put on the clipboard — what "that" means
     /// in "text that to Noah". Kept apart from `NSPasteboard.general` on
@@ -57,6 +59,8 @@ final class AssistantController {
     /// The in-flight inventory/flagging pass, so Cancel and a second ⌥⌘D can
     /// stop it rather than stacking a second scan on top.
     private var driveCleanupTask: Task<Void, Never>?
+    /// Same as `driveCleanupTask`, for the Gmail large-attachment scan (⌥⌘G).
+    private var gmailCleanupTask: Task<Void, Never>?
 
     private var activeScreen: NSScreen?
     /// The display the user is working on, decided at the moment it's needed:
@@ -856,6 +860,8 @@ final class AssistantController {
         // a one-shot that opens a window, not a press-and-hold like the others.
         driveCleanupHotkey.onHoldBegan = { [weak self] in self?.beginDriveCleanup() }
         driveCleanupHotkey.start()
+        gmailCleanupHotkey.onHoldBegan = { [weak self] in self?.beginGmailCleanup() }
+        gmailCleanupHotkey.start()
 
         // Peeky Remote (iOS app) commands over the local network.
         remote.onShow = { [weak self] in
@@ -4062,12 +4068,20 @@ final class AssistantController {
             self?.driveCleanupTask = nil
         }
         state.onTrash = { [weak self] in self?.trashSelectedDriveFiles() }
+        state.onEmptyTrash = { [weak self] in self?.emptyDriveTrash() }
         driveCleanup.show()
 
         driveCleanupTask = Task { [weak self] in
             guard let self else { return }
             defer { self.driveCleanupTask = nil }
             let drive = DriveService(auth: googleAuth)
+            do {
+                state.quota = try await drive.storageQuota()
+            } catch {
+                // The meter is a nice-to-have; a fetch failure shouldn't block
+                // the scan that actually finds files to clean up.
+                log.error("storage quota fetch failed: \(error.localizedDescription, privacy: .public)")
+            }
             do {
                 let files = try await drive.inventory { count in
                     state.scannedCount = count
@@ -4122,11 +4136,163 @@ final class AssistantController {
                 }
             }
             state.phase = .finished(trashed: trashed, failed: failed, bytes: bytes)
+            if let quota = try? await drive.storageQuota() {
+                state.quota = quota
+            }
             self.toast.show(
                 "Moved \(trashed) file\(trashed == 1 ? "" : "s") to Drive's trash",
                 icon: "trash",
                 tint: failed > 0 ? .orange : .green
             )
+        }
+    }
+
+    /// The other place the cleanup flow writes to Drive, and the only one
+    /// that's permanent. Requires the review window's own confirmation first.
+    private func emptyDriveTrash() {
+        let state = driveCleanup.state
+        guard !state.emptyingTrash else { return }
+        let bytes = state.quota?.usageInDriveTrash ?? 0
+        state.emptyingTrash = true
+
+        Task { [weak self] in
+            guard let self else { return }
+            defer { state.emptyingTrash = false }
+            let drive = DriveService(auth: googleAuth)
+            do {
+                try await drive.emptyTrash()
+                ActivityLog.recordAction("drive-empty-trash", ["bytes": "\(bytes)"])
+                if let quota = try? await drive.storageQuota() {
+                    state.quota = quota
+                }
+                self.toast.show(
+                    "Emptied Drive's trash — \(DriveCleanupPlanner.byteText(bytes)) freed",
+                    icon: "trash.slash", tint: .green
+                )
+            } catch {
+                self.toast.show(
+                    "Couldn't empty Drive's trash: \(error.localizedDescription)",
+                    icon: "exclamationmark.triangle", tint: .orange
+                )
+            }
+        }
+    }
+
+    // MARK: - Gmail cleanup (⌥⌘G)
+
+    /// Same shape as Drive cleanup, minus the Claude pass — message size is
+    /// the only signal needed to find what's eating quota, so scanning goes
+    /// straight from inventory to review.
+    private func beginGmailCleanup() {
+        // A second ⌥⌘G while a scan is running just brings the window back.
+        if gmailCleanupTask != nil {
+            gmailCleanup.show()
+            return
+        }
+
+        let state = gmailCleanup.state
+        state.phase = .scanning("Scanning Gmail for large messages…")
+        state.scannedCount = 0
+        state.messages = []
+        state.selection = []
+        state.trashAndSpamCount = nil
+        state.onCancel = { [weak self] in self?.gmailCleanup.close() }
+        // Closing the window by any route stops the scan, same as Drive's.
+        gmailCleanup.onClose = { [weak self] in
+            self?.gmailCleanupTask?.cancel()
+            self?.gmailCleanupTask = nil
+        }
+        state.onTrash = { [weak self] in self?.trashSelectedGmailThreads() }
+        state.onEmptyTrash = { [weak self] in self?.emptyGmailTrash() }
+        gmailCleanup.show()
+
+        gmailCleanupTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.gmailCleanupTask = nil }
+            let gmail = GmailService(auth: googleAuth)
+            do {
+                let messages = try await gmail.largeMessages { count in
+                    state.scannedCount = count
+                    state.phase = .scanning("Checking large messages… \(count) so far")
+                }
+                try Task.checkCancellation()
+                state.messages = messages
+                state.phase = .review
+                state.trashAndSpamCount = try? await gmail.trashAndSpamCount()
+            } catch is CancellationError {
+                return
+            } catch {
+                state.phase = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    /// The one place this flow writes to Gmail short of a permanent delete —
+    /// moves ticked threads to Gmail's own trash, recoverable for 30 days.
+    private func trashSelectedGmailThreads() {
+        let state = gmailCleanup.state
+        let targets = state.selectedMessages
+        guard !targets.isEmpty else { return }
+
+        gmailCleanupTask = Task { [weak self] in
+            guard let self else { return }
+            defer { self.gmailCleanupTask = nil }
+            let gmail = GmailService(auth: googleAuth)
+            var trashed = 0
+            var failed = 0
+            var bytes: Int64 = 0
+            for (index, message) in targets.enumerated() {
+                state.phase = .trashing(done: index, total: targets.count)
+                do {
+                    try await gmail.trashThread(id: message.threadId)
+                    trashed += 1
+                    bytes += message.sizeEstimate
+                    ActivityLog.recordAction("gmail-cleanup-trash", ["subject": message.subject])
+                } catch {
+                    failed += 1
+                    log.error("trashing gmail thread \(message.threadId, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+                }
+            }
+            state.phase = .finished(trashed: trashed, failed: failed, bytes: bytes)
+            state.trashAndSpamCount = try? await gmail.trashAndSpamCount()
+            self.toast.show(
+                "Moved \(trashed) message\(trashed == 1 ? "" : "s") to Gmail's trash",
+                icon: "trash",
+                tint: failed > 0 ? .orange : .green
+            )
+        }
+    }
+
+    /// Permanently deletes everything in Gmail's Trash and Spam. Requires the
+    /// review window's own confirmation first.
+    private func emptyGmailTrash() {
+        let state = gmailCleanup.state
+        guard !state.emptyingTrash else { return }
+        state.emptyingTrash = true
+
+        Task { [weak self] in
+            guard let self else { return }
+            defer {
+                state.emptyingTrash = false
+                state.emptyingTrashStatus = nil
+            }
+            let gmail = GmailService(auth: googleAuth)
+            do {
+                let deleted = try await gmail.emptyTrashAndSpam { message in
+                    state.emptyingTrashStatus = message
+                }
+                ActivityLog.recordAction("gmail-empty-trash-spam", ["deleted": "\(deleted)"])
+                state.trashAndSpamCount = 0
+                self.toast.show(
+                    "Permanently deleted \(deleted) message\(deleted == 1 ? "" : "s") from Gmail Trash & Spam",
+                    icon: "trash.slash", tint: .green
+                )
+            } catch {
+                self.toast.show(
+                    "Couldn't empty Gmail Trash & Spam: \(error.localizedDescription)",
+                    icon: "exclamationmark.triangle", tint: .orange
+                )
+            }
         }
     }
 
