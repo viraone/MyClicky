@@ -68,6 +68,9 @@ struct CodeTextEditor: NSViewRepresentable {
         textView.onEscape = { [weak coordinator = context.coordinator] in coordinator?.parent.onEscape?() }
 
         scroll.documentView = textView
+        scroll.hasVerticalRuler = true
+        scroll.verticalRulerView = CodeLineNumberRuler(textView: textView, scrollView: scroll)
+        scroll.rulersVisible = true
         context.coordinator.textView = textView
         return scroll
     }
@@ -88,6 +91,8 @@ struct CodeTextEditor: NSViewRepresentable {
                 textView.undoManager?.setActionName("Apply")
                 textView.undoManager?.endUndoGrouping()
             }
+            (scroll.verticalRulerView as? CodeLineNumberRuler)?.rebuildLines()
+            (textView as? FindableTextView)?.refreshBracketMatch()
             let end = (text as NSString).length
             textView.setSelectedRange(NSRange(location: min(selected.location, end), length: 0))
             if let storage = textView.textStorage {
@@ -186,17 +191,43 @@ final class FindableTextView: NSTextView {
     var onFind: (() -> Void)?
     var onEscape: (() -> Void)?
     private var bracketPair: BracketMatcher.Pair?
+    private var lastCaretLine: NSRange?
+
+    /// Includes wrapped fragments, and the extra insertion line after a final newline.
+    var currentLineRect: NSRect? {
+        let selection = selectedRange()
+        guard selection.length == 0, selection.location <= (string as NSString).length,
+              let layout = layoutManager, let container = textContainer else { return nil }
+        let line = (string as NSString).lineRange(for: selection)
+        layout.ensureLayout(for: container)
+        let glyphs = layout.glyphRange(forCharacterRange: line, actualCharacterRange: nil)
+        var band = line.length == 0 ? layout.extraLineFragmentRect
+            : layout.boundingRect(forGlyphRange: glyphs, in: container)
+        if band.height == 0 {
+            band.size.height = layout.defaultLineHeight(for: font ?? .monospacedSystemFont(ofSize: 12.5, weight: .regular))
+        }
+        band.origin = NSPoint(x: bounds.minX, y: band.minY + textContainerOrigin.y)
+        band.size.width = bounds.width
+        return band
+    }
 
     func refreshBracketMatch() {
         let selected = selectedRange()
         let next = selected.length == 0 ? BracketMatcher.pair(in: string as NSString, caret: selected.location) : nil
-        guard next != bracketPair else { return }
+        let caretLine = selected.length == 0 ? (string as NSString).lineRange(for: selected) : nil
+        enclosingScrollView?.verticalRulerView?.needsDisplay = true
+        guard next != bracketPair || caretLine != lastCaretLine else { return }
+        lastCaretLine = caretLine
         bracketPair = next
         needsDisplay = true
     }
 
     override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
+        if let band = currentLineRect, band.intersects(rect) {
+            NSColor.white.withAlphaComponent(0.05).setFill()
+            band.intersection(rect).fill(using: .sourceOver)
+        }
         guard let pair = bracketPair, let layout = layoutManager, let container = textContainer else { return }
         let color = NSColor.white.withAlphaComponent(0.55)
         for index in [pair.open, pair.close] {
@@ -237,6 +268,95 @@ final class FindableTextView: NSTextView {
 
     override func cancelOperation(_ sender: Any?) {
         if let onEscape { onEscape() } else { nextResponder?.tryToPerform(#selector(cancelOperation(_:)), with: sender) }
+    }
+}
+
+/// UTF-16 offsets match NSLayoutManager's character indices, including emoji.
+struct CodeLineIndex {
+    let starts: [Int]
+
+    init(_ text: String) {
+        starts = [0] + text.utf16.enumerated().compactMap { $0.element == 10 ? $0.offset + 1 : nil }
+    }
+
+    func line(at character: Int) -> Int {
+        var low = 0, high = starts.count
+        while low < high {
+            let middle = (low + high) / 2
+            if starts[middle] <= character { low = middle + 1 } else { high = middle }
+        }
+        return max(1, low)
+    }
+}
+
+final class CodeLineNumberRuler: NSRulerView {
+    private weak var textView: NSTextView?
+    private(set) var lines = CodeLineIndex("")
+    private let numberFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+    override var isOpaque: Bool { false }
+
+    init(textView: NSTextView, scrollView: NSScrollView) {
+        self.textView = textView
+        super.init(scrollView: scrollView, orientation: .verticalRuler)
+        clientView = textView
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        let center = NotificationCenter.default
+        center.addObserver(self, selector: #selector(textChanged), name: NSText.didChangeNotification, object: textView)
+        center.addObserver(self, selector: #selector(redraw), name: NSTextView.didChangeSelectionNotification, object: textView)
+        center.addObserver(self, selector: #selector(redraw), name: NSView.boundsDidChangeNotification, object: scrollView.contentView)
+        rebuildLines()
+    }
+
+    required init(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    deinit { NotificationCenter.default.removeObserver(self) }
+
+    @objc private func redraw(_ notification: Notification) { needsDisplay = true }
+    @objc private func textChanged(_ notification: Notification) {
+        rebuildLines()
+        textView?.needsDisplay = true
+    }
+
+    func rebuildLines() {
+        lines = CodeLineIndex(textView?.string ?? "")
+        let digits = String(lines.starts.count).count
+        ruleThickness = ceil((String(repeating: "0", count: digits) as NSString)
+            .size(withAttributes: [.font: numberFont]).width) + 16
+        needsDisplay = true
+    }
+
+    // Avoid NSRulerView's opaque default background and ruler markings.
+    override func draw(_ dirtyRect: NSRect) { drawHashMarksAndLabels(in: dirtyRect) }
+
+    override func drawHashMarksAndLabels(in rect: NSRect) {
+        guard let textView, let layout = textView.layoutManager,
+              let container = textView.textContainer else { return }
+        let origin = textView.textContainerOrigin
+        let visible = textView.visibleRect.offsetBy(dx: -origin.x, dy: -origin.y)
+        let glyphs = layout.glyphRange(forBoundingRect: visible, in: container)
+        let selection = textView.selectedRange()
+        let caretLine = selection.length == 0 ? lines.line(at: selection.location) : nil
+        func drawNumber(_ line: Int, fragment: NSRect) {
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: numberFont,
+                .foregroundColor: NSColor.white.withAlphaComponent(line == caretLine ? 0.7 : 0.28)
+            ]
+            let label = String(line) as NSString
+            let size = label.size(withAttributes: attributes)
+            let point = convert(NSPoint(x: 0, y: fragment.minY + origin.y), from: textView)
+            label.draw(at: NSPoint(x: ruleThickness - 8 - size.width,
+                                   y: point.y + (fragment.height - size.height) / 2), withAttributes: attributes)
+        }
+        layout.enumerateLineFragments(forGlyphRange: glyphs) { fragment, _, _, range, _ in
+            let character = layout.characterIndexForGlyph(at: range.location)
+            let line = self.lines.line(at: character)
+            // Continuation fragments of a wrapped line get no additional number.
+            if self.lines.starts[line - 1] == character { drawNumber(line, fragment: fragment) }
+        }
+        if layout.extraLineFragmentTextContainer === container,
+           lines.starts.last == (textView.string as NSString).length,
+           layout.extraLineFragmentRect.intersects(visible) {
+            drawNumber(lines.starts.count, fragment: layout.extraLineFragmentRect)
+        }
     }
 }
 
