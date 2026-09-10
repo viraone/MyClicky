@@ -1061,7 +1061,12 @@ final class AssistantPanelController {
             return true
         }
         panel.onPaste = { [weak self] in
-            guard let self, self.state.tab == .code else { return false }
+            guard let self else { return false }
+            if self.state.tab == .terminal {
+                self.state.terminal.view.paste(self)
+                return true
+            }
+            guard self.state.tab == .code else { return false }
             let board = NSPasteboard.general
             // Text on the clipboard means a normal paste into a field; only
             // a bare image (a Capture, a screenshot) becomes an attachment.
@@ -1153,12 +1158,12 @@ final class AssistantPanelController {
     }
 }
 
-private final class KeyablePanel: NSPanel {
+final class KeyablePanel: NSPanel {
     override var canBecomeKey: Bool { true }
     /// Return true to consume Esc (e.g. to stop an in-flight answer) instead of closing.
     var onCancel: (() -> Bool)?
-    /// ⌘V anywhere in the panel. Return true to consume it (an image was
-    /// taken off the clipboard); false lets the focused field paste text.
+    /// ⌘V anywhere in the panel. Return true for terminal paste or a Code
+    /// image attachment; false lets the focused field paste text.
     var onPaste: (() -> Bool)?
     /// ⌘F anywhere in the panel. Return true when a find bar took it.
     var onFind: (() -> Bool)?
