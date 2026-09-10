@@ -307,6 +307,9 @@ final class AssistantState: ObservableObject {
     /// When the focused file was last written to disk, for the header.
     @Published var codeLastSaved: Date?
 
+    /// Folders in the file list the user has folded shut. Reset on load.
+    @Published var codeCollapsedFolders: Set<String> = []
+
     // MARK: Run in Simulator
     /// The Xcode project/workspace inside the loaded folder, if any — shows ▶ Run.
     var codeXcodeContainer: URL? { codeProject.flatMap { XcodeRunner.container(in: $0.root) } }
@@ -2224,19 +2227,40 @@ struct AssistantPanelView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 1) {
                 ForEach(project.filesByFolder, id: \.folder) { group in
+                    let collapsed = state.codeCollapsedFolders.contains(group.folder)
                     if !group.folder.isEmpty {
-                        HStack(spacing: 6) {
-                            Image(systemName: "folder")
-                                .font(.system(size: 11, weight: .semibold))
-                            Text(group.folder + "/")
+                        Button {
+                            if collapsed { state.codeCollapsedFolders.remove(group.folder) }
+                            else { state.codeCollapsedFolders.insert(group.folder) }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .rotationEffect(.degrees(collapsed ? 0 : 90))
+                                    .frame(width: 10)
+                                Image(systemName: collapsed ? "folder" : "folder.fill")
+                                    .font(.system(size: 11, weight: .semibold))
+                                Text(group.folder + "/")
+                                Spacer(minLength: 0)
+                                if collapsed {
+                                    Text("\(group.files.count) file\(group.files.count == 1 ? "" : "s")")
+                                        .fontWeight(.regular)
+                                        .foregroundStyle(.white.opacity(0.35))
+                                }
+                            }
+                            .font(.system(size: 12.5, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.55))
+                            .padding(.top, 8)
+                            .padding(.bottom, 2)
+                            .contentShape(Rectangle())
                         }
-                        .font(.system(size: 12.5, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.55))
-                        .padding(.top, 8)
-                        .padding(.bottom, 2)
+                        .buttonStyle(.plain)
+                        .help(collapsed ? "Show files" : "Hide files")
                     }
-                    ForEach(group.files, id: \.path) { file in
-                        codeFileRow(file, indented: !group.folder.isEmpty)
+                    if !collapsed {
+                        ForEach(group.files, id: \.path) { file in
+                            codeFileRow(file, indented: !group.folder.isEmpty)
+                        }
                     }
                 }
             }

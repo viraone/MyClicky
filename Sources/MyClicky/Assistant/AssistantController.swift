@@ -343,6 +343,7 @@ final class AssistantController {
             }
             panel.state.codeEdits = [:]
             panel.state.codeLastSaved = nil
+            if panel.state.codeProject?.root != project.root { panel.state.codeCollapsedFolders = [] }
             panel.state.codeProject = project
             if let focused = panel.state.codeFocusedFile {
                 panel.state.codeDraft = project.file(at: focused)?.text ?? ""
