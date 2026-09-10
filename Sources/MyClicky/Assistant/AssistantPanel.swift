@@ -68,7 +68,7 @@ enum PanelSize: Int, CaseIterable, Comparable {
         case .half: return "rectangle.lefthalf.inset.filled"
         case .normal: return "rectangle.inset.filled"
         case .tall: return "rectangle.portrait.inset.filled"
-        case .full: return "rectangle.expand.vertical"
+        case .full: return "arrow.up.left.and.arrow.down.right.square"
         }
     }
     var label: String {
@@ -76,7 +76,7 @@ enum PanelSize: Int, CaseIterable, Comparable {
         case .half: return "Half width — a tall column down one side"
         case .normal: return "Normal"
         case .tall: return "Tall — room for a long answer"
-        case .full: return "Full height — top to bottom of the screen"
+        case .full: return "Full screen — edge to edge"
         }
     }
 }
@@ -148,15 +148,18 @@ enum PanelResizeCorner: Equatable {
     /// The whole bottom edge: drag it up to shrink the panel, down to grow
     /// it. Only the height changes; the top edge stays put.
     case bottom
+    /// The whole left edge: drag it out to widen the panel, in to narrow
+    /// it. Only the width changes; the right edge stays put.
+    case leading
 
-    var isEdge: Bool { self == .bottom }
+    var isEdge: Bool { self == .bottom || self == .leading }
 
     /// The opposite corner, which stays put while this one moves.
     func anchor(in rect: NSRect) -> NSPoint {
         switch self {
         case .topLeading: NSPoint(x: rect.maxX, y: rect.minY)
         case .topTrailing: NSPoint(x: rect.minX, y: rect.minY)
-        case .bottomLeading: NSPoint(x: rect.maxX, y: rect.maxY)
+        case .bottomLeading, .leading: NSPoint(x: rect.maxX, y: rect.maxY)
         case .bottomTrailing, .bottom: NSPoint(x: rect.minX, y: rect.maxY)
         }
     }
@@ -166,7 +169,7 @@ enum PanelResizeCorner: Equatable {
         switch self {
         case .topLeading: NSPoint(x: rect.minX, y: rect.maxY)
         case .topTrailing: NSPoint(x: rect.maxX, y: rect.maxY)
-        case .bottomLeading: NSPoint(x: rect.minX, y: rect.minY)
+        case .bottomLeading, .leading: NSPoint(x: rect.minX, y: rect.minY)
         case .bottomTrailing, .bottom: NSPoint(x: rect.maxX, y: rect.minY)
         }
     }
@@ -732,15 +735,15 @@ final class AssistantPanelController {
         case .normal: return expandedSize
         case .tall: return tallSize
         case .full:
-            // As tall as the screen allows, never shorter than Tall.
-            let visible = (screen ?? NSScreen.main)?.visibleFrame.height ?? tallSize.height
-            return NSSize(width: expandedSize.width, height: max(tallSize.height, visible - 16))
+            // The whole screen, edge to edge, never smaller than Tall.
+            let visible = (screen ?? NSScreen.main)?.visibleFrame.size ?? tallSize
+            return NSSize(width: max(tallSize.width, visible.width - 16), height: max(tallSize.height, visible.height - 16))
         }
     }
     private static let collapsedSize = NSSize(width: 56, height: 56)
     private static let stripSize = NSSize(width: 420 + glowMargin * 2, height: 52 + glowMargin * 2)
     private static let minPanelSize = NSSize(width: 480 + glowMargin * 2, height: 160 + glowMargin * 2)
-    private static let maxPanelSize = NSSize(width: 1500, height: 1000)
+    private static let maxPanelSize = NSSize(width: 2400, height: 1600)
     /// Full frame just before minimizing, so restoring puts it back exactly
     /// (including any manual corner-resize) rather than snapping to a preset.
     private var savedFrame: NSRect?
@@ -828,15 +831,17 @@ final class AssistantPanelController {
     func setSize(_ size: PanelSize) {
         guard let panel, !state.collapsed, !state.strip else { return }
         let wasHalf = state.size == .half
+        let wasFull = state.size == .full
         state.size = size
         let screen = panel.screen ?? NSScreen.main
         let visible = screen?.visibleFrame ?? .zero
         let target = Self.frameSize(for: size, on: screen)
         let height = target.height
-        // Width only changes when entering or leaving the half column; the
-        // other two keep whatever width the user dragged out. The right edge
-        // stays put so a panel parked at the screen edge stays there.
-        let width = (size == .half || wasHalf) ? target.width : panel.frame.width
+        // Width only changes when entering or leaving the half column or
+        // the full screen; the other two keep whatever width the user
+        // dragged out. The right edge stays put so a panel parked at the
+        // screen edge stays there.
+        let width = (size == .half || wasHalf || size == .full || wasFull) ? target.width : panel.frame.width
         var origin = panel.frame.origin
         origin.x = panel.frame.maxX - width
         origin.x = min(max(origin.x, visible.minX + 8), visible.maxX - width - 8)
@@ -879,8 +884,13 @@ final class AssistantPanelController {
             // pointer in screen space instead — the edge simply follows the
             // mouse, keeping the grab offset from where the drag began.
             let mouse = NSEvent.mouseLocation
-            if resizeGrabOffset == nil { resizeGrabOffset = mouse.y - original.y }
-            dragged = NSPoint(x: original.x, y: mouse.y - (resizeGrabOffset ?? 0))
+            if corner == .leading {
+                if resizeGrabOffset == nil { resizeGrabOffset = mouse.x - original.x }
+                dragged = NSPoint(x: mouse.x - (resizeGrabOffset ?? 0), y: original.y)
+            } else {
+                if resizeGrabOffset == nil { resizeGrabOffset = mouse.y - original.y }
+                dragged = NSPoint(x: original.x, y: mouse.y - (resizeGrabOffset ?? 0))
+            }
         } else {
             // Flip the y sign: SwiftUI's translation is down-positive,
             // AppKit's window coordinates are up-positive.
@@ -889,9 +899,9 @@ final class AssistantPanelController {
 
         let width = min(max(abs(dragged.x - anchor.x), Self.minPanelSize.width), Self.maxPanelSize.width)
         let height = min(max(abs(dragged.y - anchor.y), Self.minPanelSize.height), Self.maxPanelSize.height)
-        let x = dragged.x >= anchor.x ? anchor.x : anchor.x - width
-        // The bottom edge always hangs below its (top) anchor, even if the
-        // pointer overshoots above it.
+        // The left edge always sits left of its (right) anchor, and the
+        // bottom edge below its (top) anchor, even if the pointer overshoots.
+        let x = corner == .leading || dragged.x < anchor.x ? anchor.x - width : anchor.x
         let y = corner.isEdge || dragged.y < anchor.y ? anchor.y - height : anchor.y
 
         let screen = panel.screen ?? NSScreen.main
@@ -1370,6 +1380,7 @@ struct AssistantPanelView: View {
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(alignment: .trailing) { edgeChevron(expanded: true).padding(.trailing, 3) }
         .overlay(alignment: .bottom) { bottomEdgeHandle }
+        .overlay(alignment: .leading) { leadingEdgeHandle }
         .overlay(alignment: .topLeading) { resizeHandle(.topLeading) }
         .overlay(alignment: .topTrailing) { resizeHandle(.topTrailing) }
         .overlay(alignment: .bottomLeading) { resizeHandle(.bottomLeading) }
@@ -3754,6 +3765,29 @@ struct AssistantPanelView: View {
                     .onEnded { _ in state.onResize?(.bottom, nil) }
             )
             .help("Drag up to shrink, down to grow")
+    }
+
+    /// Grab strip up the left edge: drag it out to widen the panel (or in
+    /// to narrow it) while the right edge stays where it is. Mirrors the
+    /// bottom grip — a short vertical pill lights up on hover.
+    private var leadingEdgeHandle: some View {
+        let hovering = resizeHoverCorner == .leading
+        return Capsule()
+            .fill(.white.opacity(hovering ? 0.55 : 0.18))
+            .frame(width: 4, height: 44)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 40)
+            .contentShape(Rectangle())
+            .onHover { hovering in
+                resizeHoverCorner = hovering ? .leading : nil
+                if hovering { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+            }
+            .gesture(
+                DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                    .onChanged { value in state.onResize?(.leading, value.translation) }
+                    .onEnded { _ in state.onResize?(.leading, nil) }
+            )
+            .help("Drag left to widen, right to narrow")
     }
 
     @ViewBuilder

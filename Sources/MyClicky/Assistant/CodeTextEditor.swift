@@ -147,6 +147,10 @@ struct CodeTextEditor: NSViewRepresentable {
         private var recolor: DispatchWorkItem?
         init(_ parent: CodeTextEditor) { self.parent = parent }
 
+        func textViewDidChangeSelection(_ notification: Notification) {
+            (notification.object as? FindableTextView)?.refreshBracketMatch()
+        }
+
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
             parent.text = textView.string
@@ -167,10 +171,52 @@ struct CodeTextEditor: NSViewRepresentable {
     }
 }
 
-/// `NSTextView` that hands ⌘F and Esc to Peeky's own find bar.
+/// `NSTextView` that hands ⌘F and Esc to Peeky's own find bar, outlines
+/// the bracket pair around the caret, and selects a whole block when a
+/// bracket is double-clicked.
 final class FindableTextView: NSTextView {
     var onFind: (() -> Void)?
     var onEscape: (() -> Void)?
+    private var bracketPair: BracketMatcher.Pair?
+
+    func refreshBracketMatch() {
+        let selected = selectedRange()
+        let next = selected.length == 0 ? BracketMatcher.pair(in: string as NSString, caret: selected.location) : nil
+        guard next != bracketPair else { return }
+        bracketPair = next
+        needsDisplay = true
+    }
+
+    override func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+        guard let pair = bracketPair, let layout = layoutManager, let container = textContainer else { return }
+        let color = NSColor.white.withAlphaComponent(0.55)
+        for index in [pair.open, pair.close] {
+            let glyphs = layout.glyphRange(forCharacterRange: NSRange(location: index, length: 1), actualCharacterRange: nil)
+            var box = layout.boundingRect(forGlyphRange: glyphs, in: container)
+            box.origin.x += textContainerOrigin.x
+            box.origin.y += textContainerOrigin.y
+            box = box.insetBy(dx: -0.5, dy: 0.5)
+            let path = NSBezierPath(roundedRect: box, xRadius: 2, yRadius: 2)
+            NSColor.white.withAlphaComponent(0.10).setFill(); path.fill()
+            color.setStroke(); path.lineWidth = 1; path.stroke()
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2 {
+            let point = convert(event.locationInWindow, from: nil)
+            let index = characterIndexForInsertion(at: point)
+            let ns = string as NSString
+            for candidate in [index, index - 1] where candidate >= 0 && candidate < ns.length {
+                if let pair = BracketMatcher.pair(in: ns, caret: candidate + 1), pair.open == candidate || pair.close == candidate {
+                    setSelectedRange(NSRange(location: pair.open, length: pair.close - pair.open + 1))
+                    return
+                }
+            }
+        }
+        super.mouseDown(with: event)
+    }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -183,5 +229,64 @@ final class FindableTextView: NSTextView {
 
     override func cancelOperation(_ sender: Any?) {
         if let onEscape { onEscape() } else { nextResponder?.tryToPerform(#selector(cancelOperation(_:)), with: sender) }
+    }
+}
+
+/// Finds the `{}` `()` `[]` partner of the bracket next to the caret,
+/// skipping brackets that sit inside string literals.
+enum BracketMatcher {
+    struct Pair: Equatable { let open: Int; let close: Int }
+
+    private static let opens: [unichar: unichar] = [123: 125, 40: 41, 91: 93]   // { ( [
+    private static let closes: [unichar: unichar] = [125: 123, 41: 40, 93: 91]  // } ) ]
+
+    /// The pair for the bracket just before the caret, else just after it.
+    static func pair(in text: NSString, caret: Int) -> Pair? {
+        for index in [caret - 1, caret] where index >= 0 && index < text.length {
+            let ch = text.character(at: index)
+            if let close = opens[ch], let partner = scan(text, from: index, open: ch, close: close, forward: true) {
+                return Pair(open: index, close: partner)
+            }
+            if let open = closes[ch], let partner = scan(text, from: index, open: open, close: ch, forward: false) {
+                return Pair(open: partner, close: index)
+            }
+        }
+        return nil
+    }
+
+    /// Walks from `start`, counting depth, and returns the index where it
+    /// comes back to zero. Brackets inside quotes on their line don't count.
+    private static func scan(_ text: NSString, from start: Int, open: unichar, close: unichar, forward: Bool) -> Int? {
+        if inString(text, at: start) { return nil }
+        var depth = 0
+        var index = start
+        let step = forward ? 1 : -1
+        while index >= 0 && index < text.length {
+            let ch = text.character(at: index)
+            if ch == open || ch == close, !inString(text, at: index) {
+                depth += (ch == open) == forward ? 1 : -1
+                if depth == 0 { return index }
+            }
+            index += step
+        }
+        return nil
+    }
+
+    /// True when `index` is inside a quoted string on its line.
+    private static func inString(_ text: NSString, at index: Int) -> Bool {
+        guard index >= 0, index < text.length else { return false }
+        let line = text.lineRange(for: NSRange(location: index, length: 0))
+        var quote: unichar? = nil
+        var i = line.location
+        while i < index {
+            let ch = text.character(at: i)
+            if let q = quote {
+                if ch == q, !(i > 0 && text.character(at: i - 1) == 92) { quote = nil }
+            } else if ch == 34 || ch == 39 || ch == 96 {
+                quote = ch
+            }
+            i += 1
+        }
+        return quote != nil
     }
 }
