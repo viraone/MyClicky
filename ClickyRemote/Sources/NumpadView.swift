@@ -252,10 +252,10 @@ struct NumpadView: View {
         // pad is up until it's answered.
         .overlay {
             if let confirm = client.pendingConfirm {
+                // Edge to edge: nothing of the pad underneath should show.
                 confirmView(confirm)
-                    .padding(12)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.black.opacity(0.35))
+                    .background(Color.black)
                     .clipShape(RoundedRectangle(cornerRadius: 20))
                     .transition(.scale(scale: 0.94).combined(with: .opacity))
             } else if let choice = client.pendingChoice {
@@ -540,17 +540,33 @@ struct NumpadView: View {
             }
         }
         .padding(22)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(
-            RoundedRectangle(cornerRadius: 28)
-                .fill(
-                    LinearGradient(colors: [Color(red: 0.13, green: 0.13, blue: 0.16),
-                                            Color(red: 0.07, green: 0.07, blue: 0.09)],
-                                   startPoint: .top, endPoint: .bottom)
+            // Alpine sunset behind the card, dimmed enough to read white on.
+            RoundedRectangle(cornerRadius: 20)
+                .fill(Color(red: 0.07, green: 0.07, blue: 0.09))
+                .overlay(
+                    Image(uiImage: Self.confirmBackdrop ?? UIImage())
+                        .resizable()
+                        .scaledToFill()
+                        .overlay(
+                            LinearGradient(colors: [.black.opacity(0.25), .black.opacity(0.55), .black.opacity(0.75)],
+                                           startPoint: .top, endPoint: .bottom)
+                        )
                 )
-                .overlay(RoundedRectangle(cornerRadius: 28).strokeBorder(.white.opacity(0.10), lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: 20))
+                .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.white.opacity(0.18), lineWidth: 1))
                 .shadow(color: .black.opacity(0.45), radius: 30, y: 12)
         )
     }
+
+    /// Loose JPEG in the bundle — `UIImage(named:)` only guesses `.png`,
+    /// so load it by URL.
+    private static let confirmBackdrop: UIImage? = {
+        guard let url = Bundle.main.url(forResource: "ConfirmBackground", withExtension: "jpg"),
+              let data = try? Data(contentsOf: url) else { return nil }
+        return UIImage(data: data)
+    }()
 
     private static func isSendShaped(_ headline: String) -> Bool {
         let lowered = headline.lowercased()
@@ -568,13 +584,13 @@ struct NumpadView: View {
                     .font(.system(.title, design: .rounded).weight(.bold))
                     .dynamicTypeSize(.large ... .accessibility4)
                     .foregroundStyle(.white)
-                (run ? Text("Are you sure you want to run this in \(Text(recipient).bold())?")
+                (run ? Text("Are you sure you want to run this in \(Text(recipient).fontWeight(.heavy).foregroundColor(.white))?")
                      : recipient.isEmpty ? Text("Are you sure you want to send this message?")
-                     : Text("Are you sure you want to send this message to \(Text(recipient).bold())?"))
-                    .font(.system(.body, design: .rounded))
+                     : Text("Are you sure you want to send this message to \(Text(recipient).fontWeight(.heavy).foregroundColor(.white))?"))
+                    .font(.system(.body, design: .rounded).weight(.medium))
                     .dynamicTypeSize(.large ... .accessibility4)
                     .multilineTextAlignment(.center)
-                    .foregroundStyle(.white.opacity(0.75))
+                    .foregroundStyle(.white.opacity(0.9))
                     .fixedSize(horizontal: false, vertical: true)
             }
             .accessibilityElement(children: .combine)
@@ -626,23 +642,17 @@ struct NumpadView: View {
 
     private func previewQuote(_ preview: String) -> some View {
         Text(preview)
-            .font(.system(.callout, design: .monospaced))
-            .foregroundStyle(.white.opacity(0.85))
+            .font(.system(.callout, design: .monospaced).weight(.semibold))
+            .foregroundStyle(.white)
             .lineLimit(6)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(14)
             .background(
+                // Solid near-black so the quote stays legible over the photo.
                 RoundedRectangle(cornerRadius: 14)
-                    .fill(.white.opacity(0.07))
-                    .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(0.12), lineWidth: 1))
+                    .fill(Color(red: 0.11, green: 0.11, blue: 0.14).opacity(0.94))
+                    .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(0.14), lineWidth: 1))
             )
-            .overlay(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(Snes.talk)
-                    .frame(width: 3)
-                    .padding(.vertical, 12)
-                    .padding(.leading, 1)
-            }
             .accessibilityHidden(true)
     }
 

@@ -11,6 +11,7 @@
 		3312FEFF9E3CCF65229DA6BA /* NumpadView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 27253BD6F61C4068F28E1B83 /* NumpadView.swift */; };
 		AD5938797EE297E880BDF904 /* SpeechRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68E569B420BBB248B89D64D8 /* SpeechRecorder.swift */; };
 		B7687B4BFD561FF84BD058A7 /* ClickyRemoteApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D34AEED81DAFA7B380917FAC /* ClickyRemoteApp.swift */; };
+		FAECF3D7900EB7734A564594 /* ConfirmBackground.jpg in Resources */ = {isa = PBXBuildFile; fileRef = 9932B929AB78A0E00A55C541 /* ConfirmBackground.jpg */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -18,6 +19,7 @@
 		3D0085676455D5774E8FAC42 /* ClickyRemote.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = ClickyRemote.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		68E569B420BBB248B89D64D8 /* SpeechRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechRecorder.swift; sourceTree = "<group>"; };
 		86227D5231F0CBF8D14857D5 /* ClickyClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClickyClient.swift; sourceTree = "<group>"; };
+		9932B929AB78A0E00A55C541 /* ConfirmBackground.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = ConfirmBackground.jpg; sourceTree = "<group>"; };
 		D34AEED81DAFA7B380917FAC /* ClickyRemoteApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClickyRemoteApp.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -28,6 +30,14 @@
 				3D0085676455D5774E8FAC42 /* ClickyRemote.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		5E4E7453D95A7C4FDF08D1FA /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				9932B929AB78A0E00A55C541 /* ConfirmBackground.jpg */,
+			);
+			path = Resources;
 			sourceTree = "<group>";
 		};
 		B3DA4E7484EEB3EAF3F53CA3 /* Sources */ = {
@@ -44,6 +54,7 @@
 		DACFC7AFC0FCA51AA20237E2 = {
 			isa = PBXGroup;
 			children = (
+				5E4E7453D95A7C4FDF08D1FA /* Resources */,
 				B3DA4E7484EEB3EAF3F53CA3 /* Sources */,
 				1D68E261B09D7ACEC6C0CB71 /* Products */,
 			);
@@ -57,6 +68,7 @@
 			buildConfigurationList = BFDFB3FBC08870373A8C36A2 /* Build configuration list for PBXNativeTarget "ClickyRemote" */;
 			buildPhases = (
 				F1F290DD32B09CD849C4063A /* Sources */,
+				649F4A2F88C5C9C78C13E569 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -101,6 +113,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		649F4A2F88C5C9C78C13E569 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				FAECF3D7900EB7734A564594 /* ConfirmBackground.jpg in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		F1F290DD32B09CD849C4063A /* Sources */ = {

@@ -7,7 +7,7 @@ targets:
   ClickyRemote:
     type: application
     platform: iOS
-    sources: [Sources]
+    sources: [Sources, Resources]
     settings:
       base:
         DEVELOPMENT_TEAM: V9MXHWMVTM
