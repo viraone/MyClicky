@@ -1043,6 +1043,7 @@ private final class KeyablePanel: NSPanel {
 struct AssistantPanelView: View {
     @ObservedObject var state: AssistantState
     @State private var typedQuestion = ""
+    @State private var copiedAnswerID: UUID?
     @FocusState private var fieldFocused: Bool
     @FocusState private var findFocused: Bool
     @State private var breathing = false
@@ -2607,13 +2608,17 @@ struct AssistantPanelView: View {
                     .font(.system(size: 14.5, weight: .semibold, design: .monospaced))
                     .foregroundStyle(.white)
             case .answer:
-                codeAnswerView(entry.text)
-                    .padding(10)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(Color.white.opacity(0.04))
-                    )
+                VStack(alignment: .trailing, spacing: 4) {
+                    codeAnswerView(entry.text)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    copyAnswerButton(entry)
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.white.opacity(0.04))
+                )
             case .status:
                 Text(entry.text)
                     .font(.system(size: 13.5, design: .monospaced))
@@ -2629,6 +2634,32 @@ struct AssistantPanelView: View {
         .fixedSize(horizontal: false, vertical: true)
         .textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Copies the whole answer (prose and code, as Claude wrote it). Shows a
+    /// ✓ for a moment so you know it landed.
+    private func copyAnswerButton(_ entry: CodeLogEntry) -> some View {
+        let copied = copiedAnswerID == entry.id
+        return Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(entry.text, forType: .string)
+            copiedAnswerID = entry.id
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                if copiedAnswerID == entry.id { copiedAnswerID = nil }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 11, weight: .semibold))
+                if copied { Text("Copied").font(.system(size: 11, weight: .semibold, design: .monospaced)) }
+            }
+            .foregroundStyle(copied ? AssistantPhase.done.color : .white.opacity(0.45))
+            .frame(height: 20)
+            .padding(.horizontal, 5)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Copy Peeky's whole answer")
     }
 
     /// An answer with its fenced code blocks pulled out into cards, each
