@@ -454,24 +454,24 @@ final class AssistantController {
         let name = (path as NSString).lastPathComponent
         let (updated, outcome) = CodeBlockApplier.apply(code, replacing: find, in: current)
         // Land in the changed file, on the changed lines.
-        func show() {
+        func show(line: Int?) {
             if panel.state.codeFocusedFile != path {
                 panel.state.codeFocusedFile = path
                 panel.state.codeShowingFiles = false
             }
             panel.state.codeDraft = updated
-            if let line = CodeBlockLocator.firstLine(of: code, in: updated) {
+            if let line {
                 panel.state.codeJumpToLine = line
                 panel.state.codeJumpLineCount = max(1, code.trimmingCharacters(in: .newlines).components(separatedBy: "\n").count)
             }
         }
         switch outcome {
-        case .replaced(let lines):
-            show()
+        case .replaced(let lines, let atLine):
+            show(line: atLine)
             saveCodeFile(path: path, text: updated)
             panel.state.logCode(.status, "Replaced \(lines) line\(lines == 1 ? "" : "s") in \(name) — saved.")
         case .rewroteFile:
-            show()
+            show(line: 1)
             saveCodeFile(path: path, text: updated)
             panel.state.logCode(.status, "Rewrote \(name) with that block — saved.")
         case .notFound:

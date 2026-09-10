@@ -121,11 +121,11 @@ final class CodeProjectBundlerTests: XCTestCase {
     func testApplierReplacesFindBlock() {
         let file = "a\nb\nc\nd\n"
         let (out, outcome) = CodeBlockApplier.apply("B\nC", replacing: "b\nc", in: file)
-        XCTAssertEqual(outcome, .replaced(lines: 2))
+        XCTAssertEqual(outcome, .replaced(lines: 2, atLine: 2))
         XCTAssertEqual(out, "a\nB\nC\nd\n")
         // Trailing whitespace in the file shouldn't break the match.
         let (out2, outcome2) = CodeBlockApplier.apply("X", replacing: "b\nc", in: "a\nb  \nc\nd\n")
-        XCTAssertEqual(outcome2, .replaced(lines: 2))
+        XCTAssertEqual(outcome2, .replaced(lines: 2, atLine: 2))
         XCTAssertEqual(out2, "a\nX\nd\n")
     }
 

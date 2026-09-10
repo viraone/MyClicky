@@ -320,8 +320,9 @@ enum CodeAnswerSegment: Equatable {
 /// Putting a code block from an answer into a file.
 enum CodeBlockApplier {
     enum Outcome: Equatable {
-        /// `find` was located and swapped for the block.
-        case replaced(lines: Int)
+        /// `find` was located and swapped for the block. `atLine` is the
+        /// 1-based line the replacement starts on.
+        case replaced(lines: Int, atLine: Int)
         /// The block reads as the whole file and took its place.
         case rewroteFile
         /// Nowhere obvious to put it.
@@ -335,12 +336,15 @@ enum CodeBlockApplier {
         let block = trimmedNewlines(code)
         if let find, !find.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let needle = trimmedNewlines(find)
+            let lineOf = { (t: String, i: String.Index) in t[..<i].reduce(1) { $1 == "\n" ? $0 + 1 : $0 } }
             if let range = text.range(of: needle) {
-                return (text.replacingCharacters(in: range, with: block), .replaced(lines: needle.components(separatedBy: "\n").count))
+                return (text.replacingCharacters(in: range, with: block),
+                        .replaced(lines: needle.components(separatedBy: "\n").count, atLine: lineOf(text, range.lowerBound)))
             }
             let looseText = normalized(text), looseNeedle = normalized(needle)
             if let range = looseText.range(of: looseNeedle) {
-                return (looseText.replacingCharacters(in: range, with: block), .replaced(lines: looseNeedle.components(separatedBy: "\n").count))
+                return (looseText.replacingCharacters(in: range, with: block),
+                        .replaced(lines: looseNeedle.components(separatedBy: "\n").count, atLine: lineOf(looseText, range.lowerBound)))
             }
         }
         // A whole-file rewrite: opens the way the file does and is about as long.
