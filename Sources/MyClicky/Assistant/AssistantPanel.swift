@@ -2395,10 +2395,23 @@ struct AssistantPanelView: View {
                         .font(.system(size: 11.5, weight: .medium, design: .monospaced))
                         .foregroundStyle(AssistantPhase.done.color.opacity(0.9))
                 } else {
-                    Text("edit here — saves to disk · ⌘F find")
+                    Text("edit here — saves to disk")
                         .font(.system(size: 11.5, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.3))
-                        .onTapGesture { state.codeFindVisible = true; state.codeFindFocusRequest += 1 }
+                }
+                if !state.codeViewerCollapsed {
+                    Button {
+                        state.codeFindVisible = true
+                        state.codeFindFocusRequest += 1
+                    } label: {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(state.codeFindVisible ? AssistantPhase.working.color : .white.opacity(0.5))
+                            .frame(width: 22, height: 20)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Find in this file (⌘F — click in the file first so Peeky has the keyboard)")
                 }
             }
             .padding(.horizontal, 12)
