@@ -188,3 +188,55 @@ final class XcodeRunnerParseTests: XCTestCase {
         XCTAssertEqual(errs[2].file, "App/Model.swift")
     }
 }
+
+final class CodeBlockLocatorTests: XCTestCase {
+    private let files: [String: String] = [
+        "app.js": """
+        const timeSignupStart = 19;
+
+        function getSeattleScheduleMode(now) {
+          return now.getHours() >= timeSignupStart ? 'lineup' : 'signup';
+        }
+
+        function initializeApp() {
+          render();
+        }
+        """,
+        "css/style.css": ".tag-new { color: red; }\n",
+    ]
+    private var paths: [String] { Array(files.keys).sorted() }
+
+    func testFenceCarriesFilePath() {
+        let segs = CodeAnswerSegment.parse("```js app.js\nfoo()\n```\n```src/x.py\nprint(1)\n```")
+        XCTAssertEqual(segs[0], .code(language: "js", code: "foo()", file: "app.js"))
+        XCTAssertEqual(segs[1], .code(language: "py", code: "print(1)", file: "src/x.py"))
+    }
+
+    func testLocatesFindBlockInTaggedFile() {
+        let find = "function initializeApp() {\n  render();\n}"
+        let loc = CodeBlockLocator.locate(code: "function initializeApp() {\n  boot();\n}", find: find, tagged: "app.js",
+                                          focused: "css/style.css", paths: paths) { self.files[$0] }
+        XCTAssertEqual(loc, .init(path: "app.js", line: 7, lineCount: 3))
+    }
+
+    func testFallsBackToDefinedName() {
+        let loc = CodeBlockLocator.locate(code: "function getSeattleScheduleMode(now) {\n  return 'x';\n}", find: nil, tagged: nil,
+                                          focused: nil, paths: paths) { self.files[$0] }
+        XCTAssertEqual(loc?.path, "app.js")
+        XCTAssertEqual(loc?.line, 3)
+    }
+
+    func testResolvesBySuffixAndLeaf() {
+        XCTAssertEqual(CodeBlockLocator.resolve("style.css", in: paths), "css/style.css")
+        XCTAssertEqual(CodeBlockLocator.resolve("./app.js", in: paths), "app.js")
+        XCTAssertNil(CodeBlockLocator.resolve("nope.js", in: paths))
+    }
+
+    func testIdentifierFindsDefinitionOverUse() {
+        let loc = CodeBlockLocator.locate(identifier: "timeSignupStart", focused: nil, paths: paths) { self.files[$0] }
+        XCTAssertEqual(loc?.line, 1)
+        let fn = CodeBlockLocator.locate(identifier: "initializeApp()", focused: nil, paths: paths) { self.files[$0] }
+        XCTAssertEqual(fn?.line, 7)
+        XCTAssertNil(CodeBlockLocator.locate(identifier: "nothingHere", focused: nil, paths: paths) { self.files[$0] })
+    }
+}

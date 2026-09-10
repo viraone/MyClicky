@@ -317,6 +317,7 @@ final class AssistantState: ObservableObject {
     @Published var codeBuildErrors: [XcodeRunner.BuildError] = []
     /// Set by an error row; the editor scrolls there once the file is open.
     @Published var codeJumpToLine: Int?
+    @Published var codeJumpLineCount = 1
     /// Text the bottom question box should adopt (an error row filled it in).
     @Published var codePrefillQuestion: String?
     var onRunCode: (() -> Void)?
@@ -371,10 +372,69 @@ final class AssistantState: ObservableObject {
         guard let path = codeFocusedFile, let current = codeCurrentText(of: path) else { return false }
         return codeDraft != current
     }
-    /// An answer's code block that's just quoting the open file as it is.
-    func codeBlockIsAlreadyInFile(_ code: String) -> Bool {
-        guard codeFocusedFile != nil else { return false }
-        return CodeBlockApplier.alreadyContains(code, in: codeDraft)
+    /// An answer's code block that's just quoting `path` as it is.
+    func codeBlockIsAlreadyInFile(_ code: String, path: String) -> Bool {
+        guard let text = codeLiveText(of: path) else { return false }
+        return CodeBlockApplier.alreadyContains(code, in: text)
+    }
+    /// Current text of a file: the unsaved draft when it's the open one.
+    func codeLiveText(of path: String) -> String? {
+        path == codeFocusedFile ? codeDraft : codeCurrentText(of: path)
+    }
+    var codePaths: [String] { codeProject?.files.map(\.path) ?? [] }
+
+    /// Where a code block from an answer belongs — free, from the bundle.
+    func codeLocate(code: String, find: String?, tagged: String?) -> CodeBlockLocator.Location? {
+        guard codeProject != nil else { return nil }
+        return CodeBlockLocator.locate(code: code, find: find, tagged: tagged, focused: codeFocusedFile,
+                                       paths: codePaths, text: { self.codeLiveText(of: $0) })
+    }
+
+    /// Opens the file and puts the caret on the line.
+    func jump(to location: CodeBlockLocator.Location) {
+        if codeFocusedFile != location.path { codeFocusedFile = location.path }
+        codeShowingFiles = false
+        if let line = location.line {
+            codeJumpToLine = line
+            codeJumpLineCount = max(1, location.lineCount)
+        }
+    }
+
+    /// Prose with `identifiers` that exist in the project turned into links.
+    func codeLinkedProse(_ prose: String) -> AttributedString {
+        var out = AttributedString(prose)
+        guard codeProject != nil else { return out }
+        let ns = prose as NSString
+        let regex = try! NSRegularExpression(pattern: "`([^`\\n]{3,80})`")
+        for m in regex.matches(in: prose, range: NSRange(location: 0, length: ns.length)) {
+            let name = ns.substring(with: m.range(at: 1))
+            let loc: CodeBlockLocator.Location?
+            if let path = CodeBlockLocator.resolve(name, in: codePaths), name.contains(".") {
+                loc = CodeBlockLocator.Location(path: path, line: nil, lineCount: 0)
+            } else {
+                loc = CodeBlockLocator.locate(identifier: name, focused: codeFocusedFile, paths: codePaths, text: { self.codeLiveText(of: $0) })
+            }
+            guard let loc, let range = Range(m.range, in: prose),
+                  let lower = AttributedString.Index(range.lowerBound, within: out),
+                  let upper = AttributedString.Index(range.upperBound, within: out) else { continue }
+            out[lower..<upper].link = Self.jumpURL(for: loc)
+            out[lower..<upper].underlineStyle = .single
+            out[lower..<upper].foregroundColor = NSColor(AssistantPhase.working.color)
+        }
+        return out
+    }
+
+    static func jumpURL(for loc: CodeBlockLocator.Location) -> URL {
+        var c = URLComponents()
+        c.scheme = "peeky-code"; c.host = "jump"
+        c.queryItems = [URLQueryItem(name: "path", value: loc.path), URLQueryItem(name: "line", value: loc.line.map(String.init))]
+        return c.url!
+    }
+    static func jumpLocation(from url: URL) -> CodeBlockLocator.Location? {
+        guard url.scheme == "peeky-code", let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
+              let path = items.first(where: { $0.name == "path" })?.value else { return nil }
+        let line = items.first(where: { $0.name == "line" })?.value.flatMap(Int.init)
+        return CodeBlockLocator.Location(path: path, line: line, lineCount: 1)
     }
     /// Edited files whose text differs from the snapshot Claude has cached.
     var codeChangedFiles: [(path: String, text: String)] {
@@ -560,7 +620,7 @@ final class AssistantState: ObservableObject {
     var onSaveCodeFile: ((String, String) -> Void)?
     /// Put a code block from an answer into the focused file. `find` is the
     /// block that preceded it in the answer, if any — the code to replace.
-    var onApplyCodeBlock: ((_ code: String, _ find: String?) -> Void)?
+    var onApplyCodeBlock: ((_ code: String, _ find: String?, _ path: String) -> Void)?
     var onReloadCodeProject: (() -> Void)?
     var onRemoveCodeProject: (() -> Void)?
     var onAskCode: ((String) -> Void)?
@@ -2184,8 +2244,7 @@ struct AssistantPanelView: View {
         Button {
             guard !err.isWarning || true else { return }
             if !err.file.isEmpty, state.codeProject?.file(at: err.file) != nil {
-                state.codeFocusedFile = err.file
-                state.codeJumpToLine = err.line
+                state.jump(to: CodeBlockLocator.Location(path: err.file, line: err.line, lineCount: 1))
             }
             let place = err.file.isEmpty ? "" : " at \((err.file as NSString).lastPathComponent):\(err.line)"
             state.codePrefillQuestion = "Build \(err.isWarning ? "warning" : "error")\(place): \(err.message). Fix it."
@@ -2353,6 +2412,7 @@ struct AssistantPanelView: View {
                                onEscape: { state.closeCodeFind() },
                                language: SyntaxHighlighter.language(for: file.path),
                                jumpToLine: state.codeJumpToLine,
+                               jumpLineCount: state.codeJumpLineCount,
                                onDidJump: { state.codeJumpToLine = nil })
                     .padding(.horizontal, 6)
                     .padding(.bottom, 6)
@@ -2662,88 +2722,115 @@ struct AssistantPanelView: View {
         .help("Copy Peeky's whole answer")
     }
 
-    /// An answer with its fenced code blocks pulled out into cards, each
-    /// with Copy and — when a file is open — Apply, which puts the code into
-    /// that file (replacing the block that preceded it in the answer, when
-    /// the answer gave one).
+    /// An answer with its fenced code blocks pulled out into cards. Each
+    /// card says where the code goes (file:line, worked out locally), with
+    /// Copy, a jump to that spot, and Apply — which targets that file even
+    /// when a different one is open. Backticked names in the prose that
+    /// exist in the project are links to where they're defined.
     private func codeAnswerView(_ text: String) -> some View {
         let segments = CodeAnswerSegment.parse(text)
         return VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(segments.enumerated()), id: \.offset) { index, segment in
                 switch segment {
                 case .prose(let prose):
-                    Text(prose)
+                    Text(state.codeLinkedProse(prose))
                         .font(.system(size: 14, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.92))
                         .lineSpacing(3)
                         .textSelection(.enabled)
-                case .code(let language, let code):
+                        .environment(\.openURL, OpenURLAction { url in
+                            if let loc = AssistantState.jumpLocation(from: url) { state.jump(to: loc) }
+                            return .handled
+                        })
+                case .code(let language, let code, let tagged):
                     let previous: String? = index > 0 ? {
-                        if case .code(_, let earlier) = segments[index - 1] { return earlier }
-                        if index > 1, case .code(_, let earlier) = segments[index - 2],
+                        if case .code(_, let earlier, _) = segments[index - 1] { return earlier }
+                        if index > 1, case .code(_, let earlier, _) = segments[index - 2],
                            case .prose(let between) = segments[index - 1], between.count < 80 { return earlier }
                         return nil
                     }() : nil
-                    VStack(alignment: .leading, spacing: 0) {
-                        HStack(spacing: 8) {
-                            Text(language.isEmpty ? "code" : language)
-                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(.white.opacity(0.4))
-                            Spacer(minLength: 0)
-                            Button {
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(code, forType: .string)
-                            } label: {
-                                Label("Copy", systemImage: "doc.on.doc")
-                            }
-                            .buttonStyle(.plain)
-                            .help("Copy this code")
-                            if let path = state.codeFocusedFile {
-                                if state.codeBlockIsAlreadyInFile(code) {
-                                    // A quote of what's there now — the
-                                    // "find" half of a change, or just a
-                                    // pointer to where something lives.
-                                    Label("already in \((path as NSString).lastPathComponent)", systemImage: "checkmark")
-                                        .foregroundStyle(.white.opacity(0.4))
-                                        .help("This is what the file says now — nothing to apply")
-                                } else {
-                                    Button {
-                                        state.onApplyCodeBlock?(code, previous)
-                                    } label: {
-                                        Label("Apply to \((path as NSString).lastPathComponent)", systemImage: "arrow.down.doc")
-                                    }
-                                    .buttonStyle(.plain)
-                                    .foregroundStyle(AssistantPhase.done.color)
-                                    .help(previous == nil
-                                          ? "Put this code into the open file"
-                                          : "Replace the code shown before it with this, in the open file")
-                                }
-                            }
-                        }
-                        .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.7))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(Color.white.opacity(0.05))
-                        Text(code)
-                            .font(.system(size: 13, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.92))
-                            .lineSpacing(2)
-                            .textSelection(.enabled)
-                            .padding(10)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color.black.opacity(0.35))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
-                    )
+                    codeBlockCard(language: language, code: code, previous: previous, tagged: tagged)
                 }
             }
         }
+    }
+
+    private func codeBlockCard(language: String, code: String, previous: String?, tagged: String?) -> some View {
+        let location = state.codeLocate(code: code, find: previous, tagged: tagged)
+        let target: String? = location?.path ?? state.codeFocusedFile
+        return VStack(alignment: .leading, spacing: 0) {
+            codeBlockHeader(language: language, code: code, previous: previous, location: location, target: target)
+            Text(code)
+                .font(.system(size: 13, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.92))
+                .lineSpacing(2)
+                .textSelection(.enabled)
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.black.opacity(0.35))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    private func codeBlockHeader(language: String, code: String, previous: String?,
+                                 location: CodeBlockLocator.Location?, target: String?) -> some View {
+        let targetName: String? = target.map { ($0 as NSString).lastPathComponent }
+        let alreadyThere: Bool = target.map { state.codeBlockIsAlreadyInFile(code, path: $0) } ?? false
+        return HStack(spacing: 8) {
+            Text(language.isEmpty ? "code" : language)
+                .foregroundStyle(.white.opacity(0.4))
+            if let location, let name = targetName {
+                let label: String = location.line.map { "\(name):\($0)" } ?? name
+                Button {
+                    state.jump(to: location)
+                } label: {
+                    Label(label, systemImage: "arrow.right.circle")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(AssistantPhase.working.color)
+                .help(location.line == nil ? "Open \(location.path)" : "Open \(location.path) at line \(location.line ?? 0)")
+            }
+            Spacer(minLength: 0)
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(code, forType: .string)
+            } label: {
+                Label("Copy", systemImage: "doc.on.doc")
+            }
+            .buttonStyle(.plain)
+            .help("Copy this code")
+            if let target, let name = targetName {
+                if alreadyThere {
+                    // A quote of what's there now — the "find" half of a
+                    // change, or just a pointer to where something lives.
+                    Label("already in \(name)", systemImage: "checkmark")
+                        .foregroundStyle(.white.opacity(0.4))
+                        .help("This is what the file says now — nothing to apply")
+                } else {
+                    Button {
+                        state.onApplyCodeBlock?(code, previous, target)
+                    } label: {
+                        Label("Apply to \(name)", systemImage: "arrow.down.doc")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(AssistantPhase.done.color)
+                    .help(previous == nil
+                          ? "Put this code into \(target)"
+                          : "Replace the code shown before it with this, in \(target)")
+                }
+            }
+        }
+        .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+        .foregroundStyle(.white.opacity(0.7))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(Color.white.opacity(0.05))
     }
 
     /// A copied passage inline in the log, like `cat` output under the command

@@ -270,13 +270,18 @@ enum CodeProjectBundler {
 /// shown as cards with Copy/Apply.
 enum CodeAnswerSegment: Equatable {
     case prose(String)
-    case code(language: String, code: String)
+    /// `file` is the path Claude put after the language on the fence
+    /// (```js app.js), when it did.
+    case code(language: String, code: String, file: String?)
+
+    static func code(language: String, code: String) -> CodeAnswerSegment { .code(language: language, code: code, file: nil) }
 
     static func parse(_ text: String) -> [CodeAnswerSegment] {
         var segments: [CodeAnswerSegment] = []
         var prose: [String] = []
         var code: [String]?
         var language = ""
+        var file: String?
         func flushProse() {
             let joined = prose.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
             if !joined.isEmpty { segments.append(.prose(joined)) }
@@ -286,11 +291,18 @@ enum CodeAnswerSegment: Equatable {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.hasPrefix("```") {
                 if let open = code {
-                    segments.append(.code(language: language, code: open.joined(separator: "\n")))
+                    segments.append(.code(language: language, code: open.joined(separator: "\n"), file: file))
                     code = nil
                 } else {
                     flushProse()
-                    language = String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+                    let info = String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+                    let words = info.split(separator: " ").map(String.init)
+                    language = words.first ?? ""
+                    // "```js app.js" or "```app.js" — anything with a dot or slash is a path.
+                    file = words.dropFirst().first { $0.contains(".") || $0.contains("/") }
+                    if file == nil, language.contains("."), language.contains("/") || language.split(separator: ".").count == 2 {
+                        file = language; language = (language as NSString).pathExtension
+                    }
                     code = []
                 }
             } else if code != nil {
@@ -299,7 +311,7 @@ enum CodeAnswerSegment: Equatable {
                 prose.append(line)
             }
         }
-        if let open = code { segments.append(.code(language: language, code: open.joined(separator: "\n"))) }
+        if let open = code { segments.append(.code(language: language, code: open.joined(separator: "\n"), file: file)) }
         flushProse()
         return segments
     }
@@ -363,5 +375,145 @@ enum CodeBlockApplier {
         let block = normalized(trimmedNewlines(code))
         guard !block.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         return normalized(text).contains(block)
+    }
+}
+
+
+/// Works out, without asking Claude, which file an answer's code block is
+/// about and the line it lands on — so the panel can offer "go there" and
+/// apply the change even when that file isn't the one open.
+enum CodeBlockLocator {
+    struct Location: Equatable {
+        let path: String
+        /// 1-based first line of the code that will change (or of the best
+        /// hint to it). nil when the file is known but the spot isn't.
+        let line: Int?
+        /// Lines the match spans, for highlighting.
+        let lineCount: Int
+    }
+
+    /// `tagged` is the fence's file name; `find` the "current code" block
+    /// before this one; `focused` the file open in the preview.
+    /// `text(for:)` returns a file's current text (edits included).
+    static func locate(code: String, find: String?, tagged: String?, focused: String?,
+                       paths: [String], text: (String) -> String?) -> Location? {
+        let candidates = candidateFiles(tagged: tagged, focused: focused, paths: paths)
+        guard !candidates.isEmpty else { return nil }
+        // 1. The exact "current code" — that's what Apply replaces.
+        if let find, !find.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            for path in candidates {
+                if let t = text(path), let line = firstLine(of: find, in: t) {
+                    return Location(path: path, line: line, lineCount: max(1, trimmed(find).components(separatedBy: "\n").count))
+                }
+            }
+        }
+        // 2. The block itself already lives in the file (a quote, or already applied).
+        for path in candidates {
+            if let t = text(path), let line = firstLine(of: code, in: t) {
+                return Location(path: path, line: line, lineCount: max(1, trimmed(code).components(separatedBy: "\n").count))
+            }
+        }
+        // 3. The thing the block defines — "function foo", "func bar", "let x".
+        if let name = definedName(in: code) {
+            for path in candidates {
+                if let t = text(path), let line = firstLine(ofIdentifier: name, in: t) {
+                    return Location(path: path, line: line, lineCount: 1)
+                }
+            }
+        }
+        // 4. A tagged file we know, just not where in it.
+        if let tagged, let path = resolve(tagged, in: paths) { return Location(path: path, line: nil, lineCount: 0) }
+        return nil
+    }
+
+    /// Where an identifier mentioned in prose is defined (or first used).
+    static func locate(identifier: String, focused: String?, paths: [String], text: (String) -> String?) -> Location? {
+        let name = identifier.trimmingCharacters(in: CharacterSet(charactersIn: "`()"))
+        guard name.range(of: #"^[A-Za-z_$][A-Za-z0-9_$.]*$"#, options: .regularExpression) != nil, name.count >= 3 else { return nil }
+        let leaf = name.split(separator: ".").last.map(String.init) ?? name
+        var ordered = paths
+        if let focused, let i = ordered.firstIndex(of: focused) { ordered.remove(at: i); ordered.insert(focused, at: 0) }
+        // Prefer a definition anywhere over a mere use in the open file.
+        for path in ordered {
+            if let t = text(path), let line = definitionLine(of: leaf, in: t) { return Location(path: path, line: line, lineCount: 1) }
+        }
+        for path in ordered {
+            if let t = text(path), let line = firstLine(ofIdentifier: leaf, in: t) { return Location(path: path, line: line, lineCount: 1) }
+        }
+        return nil
+    }
+
+    /// A project path matching a name Claude used: exact, or by suffix
+    /// ("app.js" → "src/app.js"), or by file name alone.
+    static func resolve(_ name: String, in paths: [String]) -> String? {
+        let clean = name.trimmingCharacters(in: CharacterSet(charactersIn: "`'\"():,")).replacingOccurrences(of: "./", with: "")
+        guard !clean.isEmpty else { return nil }
+        if paths.contains(clean) { return clean }
+        if let p = paths.first(where: { $0.hasSuffix("/" + clean) }) { return p }
+        let leaf = (clean as NSString).lastPathComponent
+        let byLeaf = paths.filter { ($0 as NSString).lastPathComponent == leaf }
+        return byLeaf.count == 1 ? byLeaf.first : nil
+    }
+
+    private static func candidateFiles(tagged: String?, focused: String?, paths: [String]) -> [String] {
+        var out: [String] = []
+        if let tagged, let p = resolve(tagged, in: paths) { out.append(p) }
+        if let focused, !out.contains(focused) { out.append(focused) }
+        for p in paths where !out.contains(p) { out.append(p) }
+        return out
+    }
+
+    private static func trimmed(_ s: String) -> String {
+        var out = s
+        while out.hasSuffix("\n") { out.removeLast() }
+        while out.hasPrefix("\n") { out.removeFirst() }
+        return out
+    }
+
+    private static func stripTrailing(_ s: String) -> String {
+        s.components(separatedBy: "\n").map { line in
+            var l = line
+            while let last = l.last, last == " " || last == "\t" { l.removeLast() }
+            return l
+        }.joined(separator: "\n")
+    }
+
+    /// 1-based line where `needle` (multi-line, trailing whitespace ignored) starts in `text`.
+    static func firstLine(of needle: String, in text: String) -> Int? {
+        let n = stripTrailing(trimmed(needle))
+        guard !n.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        let hay = stripTrailing(text)
+        guard let range = hay.range(of: n) else { return nil }
+        return hay[..<range.lowerBound].reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
+    }
+
+    private static func firstLine(ofIdentifier name: String, in text: String) -> Int? {
+        let pattern = "(?<![A-Za-z0-9_$])" + NSRegularExpression.escapedPattern(for: name) + "(?![A-Za-z0-9_$])"
+        guard let range = text.range(of: pattern, options: .regularExpression) else { return nil }
+        return text[..<range.lowerBound].reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
+    }
+
+    private static let definers = "(?:function|func|class|struct|enum|protocol|interface|type|def|let|var|const|val|fn|static func|private func|public func|async function|export function|export const|export default function|@State private var|@Published var)"
+
+    private static func definitionLine(of name: String, in text: String) -> Int? {
+        let escaped = NSRegularExpression.escapedPattern(for: name)
+        let pattern = "(?m)^[ \\t]*(?:export\\s+)?(?:(?:public|private|internal|static|final|override|async)\\s+)*" + definers + "\\s+" + escaped + "(?![A-Za-z0-9_$])"
+        if let range = text.range(of: pattern, options: .regularExpression) {
+            return text[..<range.lowerBound].reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
+        }
+        // "foo: function(" / "foo = (" / "foo(" at line start — object methods and CSS-ish keys.
+        let alt = "(?m)^[ \\t]*" + escaped + "\\s*(?:[:=]|\\()"
+        if let range = text.range(of: alt, options: .regularExpression) {
+            return text[..<range.lowerBound].reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
+        }
+        return nil
+    }
+
+    /// The first identifier a block defines, if it opens with a definition.
+    static func definedName(in code: String) -> String? {
+        let pattern = "(?m)^[ \\t]*(?:export\\s+)?(?:(?:public|private|internal|static|final|override|async)\\s+)*" + definers + "\\s+([A-Za-z_$][A-Za-z0-9_$]*)"
+        guard let match = code.range(of: pattern, options: .regularExpression) else { return nil }
+        let line = String(code[match])
+        return line.split(whereSeparator: { !$0.isLetter && !$0.isNumber && $0 != "_" && $0 != "$" }).last.map(String.init)
     }
 }

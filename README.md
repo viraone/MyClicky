@@ -128,6 +128,18 @@ buttons; when Claude gives a "current code" block followed by a
 "replacement" block, Apply swaps the first for the second in the file
 you're viewing (or rewrites the file when the block is a whole-file
 rewrite), and copies it to the clipboard when it can't find a place.
+Each block's header also says where it goes — `app.js:412`, worked out
+locally from the fence's file name and the "current code" block, no Claude
+call — and clicking that opens the file at those lines. **Apply** targets
+that file whether or not it's the one open, then lands you on the change.
+Backticked names in the prose (`initializeApp()`, `style.css`) that exist
+in the project are links to where they're defined.
+Each block's header also says where it goes — `app.js:412`, worked out
+locally from the fence's file name and the "current code" block, no Claude
+call — and clicking that opens the file at those lines. **Apply** targets
+that file whether or not it's the one open, then lands you on the change.
+Backticked names in the prose (`initializeApp()`, `style.css`) that exist
+in the project are links to where they're defined.
 
 **▶ Run** appears on the project card when the folder holds an
 `.xcodeproj` or `.xcworkspace`. It runs `xcodebuild` for the iOS Simulator

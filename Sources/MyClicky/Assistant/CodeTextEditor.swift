@@ -14,6 +14,7 @@ struct CodeTextEditor: NSViewRepresentable {
     var language: SyntaxHighlighter.Language = .other
     /// Scroll to and select this 1-based line once, then call `onDidJump`.
     var jumpToLine: Int?
+    var jumpLineCount = 1
     var onDidJump: (() -> Void)?
     var font: NSFont = .monospacedSystemFont(ofSize: 12.5, weight: .regular)
 
@@ -96,7 +97,12 @@ struct CodeTextEditor: NSViewRepresentable {
                 let r = ns.lineRange(for: NSRange(location: index, length: 0))
                 index = NSMaxRange(r); current += 1
             }
-            let range = ns.lineRange(for: NSRange(location: min(index, max(ns.length - 1, 0)), length: 0))
+            var range = ns.lineRange(for: NSRange(location: min(index, max(ns.length - 1, 0)), length: 0))
+            var extra = jumpLineCount - 1
+            while extra > 0, NSMaxRange(range) < ns.length {
+                let next = ns.lineRange(for: NSRange(location: NSMaxRange(range), length: 0))
+                range = NSUnionRange(range, next); extra -= 1
+            }
             textView.setSelectedRange(range)
             textView.scrollRangeToVisible(range)
             textView.window?.makeFirstResponder(textView)
