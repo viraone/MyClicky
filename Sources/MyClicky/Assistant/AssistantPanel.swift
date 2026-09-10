@@ -68,7 +68,7 @@ enum PanelSize: Int, CaseIterable, Comparable {
         case .half: return "rectangle.lefthalf.inset.filled"
         case .normal: return "rectangle.inset.filled"
         case .tall: return "rectangle.portrait.inset.filled"
-        case .full: return "rectangle.expand.vertical"
+        case .full: return "arrow.up.left.and.arrow.down.right.square"
         }
     }
     var label: String {
@@ -76,7 +76,7 @@ enum PanelSize: Int, CaseIterable, Comparable {
         case .half: return "Half width — a tall column down one side"
         case .normal: return "Normal"
         case .tall: return "Tall — room for a long answer"
-        case .full: return "Full height — top to bottom of the screen"
+        case .full: return "Full screen — edge to edge"
         }
     }
 }
@@ -735,9 +735,9 @@ final class AssistantPanelController {
         case .normal: return expandedSize
         case .tall: return tallSize
         case .full:
-            // As tall as the screen allows, never shorter than Tall.
-            let visible = (screen ?? NSScreen.main)?.visibleFrame.height ?? tallSize.height
-            return NSSize(width: expandedSize.width, height: max(tallSize.height, visible - 16))
+            // The whole screen, edge to edge, never smaller than Tall.
+            let visible = (screen ?? NSScreen.main)?.visibleFrame.size ?? tallSize
+            return NSSize(width: max(tallSize.width, visible.width - 16), height: max(tallSize.height, visible.height - 16))
         }
     }
     private static let collapsedSize = NSSize(width: 56, height: 56)
@@ -831,15 +831,17 @@ final class AssistantPanelController {
     func setSize(_ size: PanelSize) {
         guard let panel, !state.collapsed, !state.strip else { return }
         let wasHalf = state.size == .half
+        let wasFull = state.size == .full
         state.size = size
         let screen = panel.screen ?? NSScreen.main
         let visible = screen?.visibleFrame ?? .zero
         let target = Self.frameSize(for: size, on: screen)
         let height = target.height
-        // Width only changes when entering or leaving the half column; the
-        // other two keep whatever width the user dragged out. The right edge
-        // stays put so a panel parked at the screen edge stays there.
-        let width = (size == .half || wasHalf) ? target.width : panel.frame.width
+        // Width only changes when entering or leaving the half column or
+        // the full screen; the other two keep whatever width the user
+        // dragged out. The right edge stays put so a panel parked at the
+        // screen edge stays there.
+        let width = (size == .half || wasHalf || size == .full || wasFull) ? target.width : panel.frame.width
         var origin = panel.frame.origin
         origin.x = panel.frame.maxX - width
         origin.x = min(max(origin.x, visible.minX + 8), visible.maxX - width - 8)
