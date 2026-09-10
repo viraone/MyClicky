@@ -81,15 +81,13 @@ final class AssistantController {
     /// puts it on the clipboard alongside the latest dictation. Also the
     /// landing point for files added via the + menu, which set `kind`.
     func showCapture(image: NSImage, url: URL, kind: AssistantState.AttachmentKind = .capture) {
-        // A grab taken while working on Peeky Code belongs to that
-        // conversation: attach it as a chip and stay put, panel and tab alike.
-        if kind == .capture, panel.state.tab == .code, panel.state.codeProject != nil {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.writeObjects([image])
+        // A grab taken while working on Peeky Code also belongs to that
+        // conversation: attach it as a chip and stay on the Code tab. The
+        // Capture tab still gets it, as always — it's just not brought forward.
+        let stayOnCode = kind == .capture && panel.state.tab == .code && panel.state.codeProject != nil
+        if stayOnCode {
             addCodeImages([(image, url.lastPathComponent)], via: "capture")
-            return
-        }
-        if kind == .capture {
+        } else if kind == .capture {
             // A region grab: the mouse is where the drag ended, so that's the
             // display the capture came from. Park the preview in its top-right
             // corner rather than wherever the panel last sat.
@@ -106,7 +104,7 @@ final class AssistantController {
         } else {
             showPanel()
         }
-        panel.state.tab = .captureDictate
+        if !stayOnCode { panel.state.tab = .captureDictate }
         panel.state.attachmentKind = kind
         panel.state.captureImage = image
         panel.state.captureURL = url
