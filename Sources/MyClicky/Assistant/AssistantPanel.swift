@@ -1343,6 +1343,27 @@ struct AssistantPanelView: View {
         .help(expanded ? "Shrink to a strip" : "Expand the panel")
     }
 
+    /// Second tab on the right edge, under the strip chevron: tucks the
+    /// whole panel into its corner dot (what Minimize in the header did).
+    private var edgeMinimizeTab: some View {
+        Button {
+            state.onMinimize?()
+        } label: {
+            Image(systemName: "arrow.down.right.and.arrow.up.left")
+                .font(.system(size: 12, weight: .black))
+                .foregroundStyle(state.accent)
+                .frame(width: 26, height: 40)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(state.accent.opacity(0.18))
+                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(state.accent.opacity(0.6), lineWidth: 1))
+                )
+        }
+        .buttonStyle(.plain)
+        .help("Minimize to corner")
+    }
+
     /// Three-segment size switch in the header: half · normal · tall. The
     /// current size is lit; click another to jump straight to it. Sits
     /// left of Minimize and Close so the row reads smallest-to-gone.
@@ -1409,9 +1430,6 @@ struct AssistantPanelView: View {
                 if state.micLive { recBadge }
                 Spacer()
                 sizeSwitch
-                headerButton("arrow.down.right.and.arrow.up.left", help: "Minimize to corner") {
-                    state.onMinimize?()
-                }
                 headerButton("arrow.clockwise", help: "Relaunch Peeky") {
                     state.onRelaunch?()
                 }
@@ -1535,7 +1553,13 @@ struct AssistantPanelView: View {
                 )
         )
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .overlay(alignment: .trailing) { edgeChevron(expanded: true).padding(.trailing, 3) }
+        .overlay(alignment: .trailing) {
+            VStack(spacing: 8) {
+                edgeChevron(expanded: true)
+                edgeMinimizeTab
+            }
+            .padding(.trailing, 3)
+        }
         .overlay(alignment: .bottom) { bottomEdgeHandle }
         .overlay(alignment: .leading) { leadingEdgeHandle }
         .overlay(alignment: .topLeading) { resizeHandle(.topLeading) }
