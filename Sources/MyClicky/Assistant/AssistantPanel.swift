@@ -148,15 +148,18 @@ enum PanelResizeCorner: Equatable {
     /// The whole bottom edge: drag it up to shrink the panel, down to grow
     /// it. Only the height changes; the top edge stays put.
     case bottom
+    /// The whole left edge: drag it out to widen the panel, in to narrow
+    /// it. Only the width changes; the right edge stays put.
+    case leading
 
-    var isEdge: Bool { self == .bottom }
+    var isEdge: Bool { self == .bottom || self == .leading }
 
     /// The opposite corner, which stays put while this one moves.
     func anchor(in rect: NSRect) -> NSPoint {
         switch self {
         case .topLeading: NSPoint(x: rect.maxX, y: rect.minY)
         case .topTrailing: NSPoint(x: rect.minX, y: rect.minY)
-        case .bottomLeading: NSPoint(x: rect.maxX, y: rect.maxY)
+        case .bottomLeading, .leading: NSPoint(x: rect.maxX, y: rect.maxY)
         case .bottomTrailing, .bottom: NSPoint(x: rect.minX, y: rect.maxY)
         }
     }
@@ -166,7 +169,7 @@ enum PanelResizeCorner: Equatable {
         switch self {
         case .topLeading: NSPoint(x: rect.minX, y: rect.maxY)
         case .topTrailing: NSPoint(x: rect.maxX, y: rect.maxY)
-        case .bottomLeading: NSPoint(x: rect.minX, y: rect.minY)
+        case .bottomLeading, .leading: NSPoint(x: rect.minX, y: rect.minY)
         case .bottomTrailing, .bottom: NSPoint(x: rect.maxX, y: rect.minY)
         }
     }
@@ -740,7 +743,7 @@ final class AssistantPanelController {
     private static let collapsedSize = NSSize(width: 56, height: 56)
     private static let stripSize = NSSize(width: 420 + glowMargin * 2, height: 52 + glowMargin * 2)
     private static let minPanelSize = NSSize(width: 480 + glowMargin * 2, height: 160 + glowMargin * 2)
-    private static let maxPanelSize = NSSize(width: 1500, height: 1000)
+    private static let maxPanelSize = NSSize(width: 2400, height: 1600)
     /// Full frame just before minimizing, so restoring puts it back exactly
     /// (including any manual corner-resize) rather than snapping to a preset.
     private var savedFrame: NSRect?
@@ -879,8 +882,13 @@ final class AssistantPanelController {
             // pointer in screen space instead — the edge simply follows the
             // mouse, keeping the grab offset from where the drag began.
             let mouse = NSEvent.mouseLocation
-            if resizeGrabOffset == nil { resizeGrabOffset = mouse.y - original.y }
-            dragged = NSPoint(x: original.x, y: mouse.y - (resizeGrabOffset ?? 0))
+            if corner == .leading {
+                if resizeGrabOffset == nil { resizeGrabOffset = mouse.x - original.x }
+                dragged = NSPoint(x: mouse.x - (resizeGrabOffset ?? 0), y: original.y)
+            } else {
+                if resizeGrabOffset == nil { resizeGrabOffset = mouse.y - original.y }
+                dragged = NSPoint(x: original.x, y: mouse.y - (resizeGrabOffset ?? 0))
+            }
         } else {
             // Flip the y sign: SwiftUI's translation is down-positive,
             // AppKit's window coordinates are up-positive.
@@ -889,9 +897,9 @@ final class AssistantPanelController {
 
         let width = min(max(abs(dragged.x - anchor.x), Self.minPanelSize.width), Self.maxPanelSize.width)
         let height = min(max(abs(dragged.y - anchor.y), Self.minPanelSize.height), Self.maxPanelSize.height)
-        let x = dragged.x >= anchor.x ? anchor.x : anchor.x - width
-        // The bottom edge always hangs below its (top) anchor, even if the
-        // pointer overshoots above it.
+        // The left edge always sits left of its (right) anchor, and the
+        // bottom edge below its (top) anchor, even if the pointer overshoots.
+        let x = corner == .leading || dragged.x < anchor.x ? anchor.x - width : anchor.x
         let y = corner.isEdge || dragged.y < anchor.y ? anchor.y - height : anchor.y
 
         let screen = panel.screen ?? NSScreen.main
@@ -1370,6 +1378,7 @@ struct AssistantPanelView: View {
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(alignment: .trailing) { edgeChevron(expanded: true).padding(.trailing, 3) }
         .overlay(alignment: .bottom) { bottomEdgeHandle }
+        .overlay(alignment: .leading) { leadingEdgeHandle }
         .overlay(alignment: .topLeading) { resizeHandle(.topLeading) }
         .overlay(alignment: .topTrailing) { resizeHandle(.topTrailing) }
         .overlay(alignment: .bottomLeading) { resizeHandle(.bottomLeading) }
@@ -3754,6 +3763,29 @@ struct AssistantPanelView: View {
                     .onEnded { _ in state.onResize?(.bottom, nil) }
             )
             .help("Drag up to shrink, down to grow")
+    }
+
+    /// Grab strip up the left edge: drag it out to widen the panel (or in
+    /// to narrow it) while the right edge stays where it is. Mirrors the
+    /// bottom grip — a short vertical pill lights up on hover.
+    private var leadingEdgeHandle: some View {
+        let hovering = resizeHoverCorner == .leading
+        return Capsule()
+            .fill(.white.opacity(hovering ? 0.55 : 0.18))
+            .frame(width: 4, height: 44)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 40)
+            .contentShape(Rectangle())
+            .onHover { hovering in
+                resizeHoverCorner = hovering ? .leading : nil
+                if hovering { NSCursor.resizeLeftRight.push() } else { NSCursor.pop() }
+            }
+            .gesture(
+                DragGesture(minimumDistance: 0, coordinateSpace: .local)
+                    .onChanged { value in state.onResize?(.leading, value.translation) }
+                    .onEnded { _ in state.onResize?(.leading, nil) }
+            )
+            .help("Drag left to widen, right to narrow")
     }
 
     @ViewBuilder
