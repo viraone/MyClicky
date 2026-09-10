@@ -470,11 +470,11 @@ final class AssistantController {
         case .replaced(let lines, let atLine):
             show(line: atLine)
             saveCodeFile(path: path, text: updated)
-            panel.state.logCode(.status, "Replaced \(lines) line\(lines == 1 ? "" : "s") in \(name) — saved.")
+            panel.state.logCode(.status, "Replaced \(lines) line\(lines == 1 ? "" : "s") in \(name) — saved. ⌘Z undoes it.")
         case .rewroteFile:
             show(line: 1)
             saveCodeFile(path: path, text: updated)
-            panel.state.logCode(.status, "Rewrote \(name) with that block — saved.")
+            panel.state.logCode(.status, "Rewrote \(name) with that block — saved. ⌘Z undoes it.")
         case .notFound:
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(code, forType: .string)

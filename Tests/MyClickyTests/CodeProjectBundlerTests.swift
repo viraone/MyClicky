@@ -251,6 +251,46 @@ final class CodeBlockLocatorTests: XCTestCase {
 }
 
 
+final class LineDiffTests: XCTestCase {
+    func testIdenticalTextsAreAllSame() {
+        let text = "a\nb\nc\n"
+        let lines = LineDiff.diff(text, text)
+        XCTAssertTrue(lines.allSatisfy { $0.kind == .same })
+        XCTAssertEqual(lines.map(\.text), ["a", "b", "c"])
+    }
+
+    func testSingleInsertedLine() {
+        let lines = LineDiff.diff("a\nb\n", "a\nx\nb\n")
+        XCTAssertEqual(lines, [
+            .init(kind: .same, text: "a"),
+            .init(kind: .added, text: "x"),
+            .init(kind: .same, text: "b"),
+        ])
+    }
+
+    func testChangedLineIsRemovedThenAdded() {
+        let lines = LineDiff.diff("a\nb\nc\n", "a\nB\nc\n")
+        XCTAssertEqual(lines, [
+            .init(kind: .same, text: "a"),
+            .init(kind: .removed, text: "b"),
+            .init(kind: .added, text: "B"),
+            .init(kind: .same, text: "c"),
+        ])
+    }
+
+    func testTrailingWhitespaceOnlyChangeIsIgnored() {
+        let lines = LineDiff.diff("a\nb  \nc\n", "a\nb\t\nc\n")
+        XCTAssertTrue(lines.allSatisfy { $0.kind == .same })
+    }
+
+    func testSummaryCountsAddedAndRemoved() {
+        let lines = LineDiff.diff("a\nb\nc\n", "a\nB\nc\nd\n")
+        let summary = LineDiff.summary(lines)
+        XCTAssertEqual(summary.added, 2)
+        XCTAssertEqual(summary.removed, 1)
+    }
+}
+
 final class BracketMatcherTests: XCTestCase {
     func testMatchesFromEitherSideOfCaret() {
         let text = "fn(a, [1, 2]) {\n  x\n}" as NSString
