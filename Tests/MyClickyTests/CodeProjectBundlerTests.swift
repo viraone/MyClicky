@@ -249,3 +249,26 @@ final class CodeBlockLocatorTests: XCTestCase {
         XCTAssertNil(CodeBlockLocator.locate(identifier: "nothingHere", focused: nil, paths: paths) { self.files[$0] })
     }
 }
+
+
+final class BracketMatcherTests: XCTestCase {
+    func testMatchesFromEitherSideOfCaret() {
+        let text = "fn(a, [1, 2]) {\n  x\n}" as NSString
+        XCTAssertEqual(BracketMatcher.pair(in: text, caret: 3), .init(open: 2, close: 12))   // after (
+        XCTAssertEqual(BracketMatcher.pair(in: text, caret: 2), .init(open: 2, close: 12))   // before (
+        XCTAssertEqual(BracketMatcher.pair(in: text, caret: 12), .init(open: 6, close: 11))  // after ] wins over before )
+        XCTAssertEqual(BracketMatcher.pair(in: text, caret: text.length), .init(open: 14, close: text.length - 1))
+    }
+
+    func testIgnoresBracketsInsideStrings() {
+        let text = "{ \"a\": \"}\", \"b\": [1] }" as NSString
+        XCTAssertEqual(BracketMatcher.pair(in: text, caret: 1), .init(open: 0, close: text.length - 1))
+        XCTAssertNil(BracketMatcher.pair(in: text, caret: 10)) // caret next to the quoted }
+    }
+
+    func testUnbalancedReturnsNil() {
+        XCTAssertNil(BracketMatcher.pair(in: "( a ( b", caret: 1))
+        XCTAssertNil(BracketMatcher.pair(in: "a ) b", caret: 3))
+        XCTAssertNil(BracketMatcher.pair(in: "plain text", caret: 3))
+    }
+}
