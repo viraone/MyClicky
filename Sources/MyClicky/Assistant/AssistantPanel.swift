@@ -1331,7 +1331,7 @@ struct AssistantPanelView: View {
             Image(systemName: expanded ? "chevron.right" : "chevron.left")
                 .font(.system(size: 15, weight: .black))
                 .foregroundStyle(state.accent)
-                .frame(width: 26, height: expanded ? 64 : 40)
+                .frame(width: 26, height: 48)
                 .background(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .fill(state.accent.opacity(0.18))
@@ -1350,9 +1350,9 @@ struct AssistantPanelView: View {
             state.onMinimize?()
         } label: {
             Image(systemName: "arrow.down.right.and.arrow.up.left")
-                .font(.system(size: 12, weight: .black))
+                .font(.system(size: 13, weight: .black))
                 .foregroundStyle(state.accent)
-                .frame(width: 26, height: 40)
+                .frame(width: 26, height: 48)
                 .background(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .fill(state.accent.opacity(0.18))
