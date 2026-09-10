@@ -68,6 +68,7 @@ struct TerminalPane: NSViewRepresentable {
 
     static func dismantleNSView(_ view: LocalProcessTerminalView, coordinator: Coordinator) {
         coordinator.focusRequest?.cancel()
+        coordinator.removeClickMonitor()
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(session) }
@@ -76,9 +77,11 @@ struct TerminalPane: NSViewRepresentable {
         let session: TerminalSession
         private var didFocus = false
         fileprivate var focusRequest: DispatchWorkItem?
+        private var clickMonitor: Any?
         init(_ session: TerminalSession) { self.session = session }
 
         func focusWhenMounted(_ view: LocalProcessTerminalView) {
+            installClickMonitorIfNeeded(for: view)
             guard !didFocus else { return }
             focusRequest?.cancel()
             // SwiftUI attaches the view after updateNSView. Focus once per
@@ -86,10 +89,35 @@ struct TerminalPane: NSViewRepresentable {
             let request = DispatchWorkItem { [weak self, weak view] in
                 guard let self, let view, let window = view.window,
                       !view.isHiddenOrHasHiddenAncestor else { return }
+                // Peeky is a non-activating, becomesKeyOnlyIfNeeded panel.
+                // A plain NSView like the terminal never asks AppKit to make
+                // the panel key, so without this ⌘-shortcuts (⌘K, ⌘V…)
+                // silently go nowhere: performKeyEquivalent only fires on
+                // the key window.
+                window.makeKey()
                 self.didFocus = window.makeFirstResponder(view)
             }
             focusRequest = request
             DispatchQueue.main.async(execute: request)
+        }
+
+        /// Clicking straight into the terminal (rather than switching tabs)
+        /// hits the same "never asks to become key" gap, since it's a plain
+        /// NSView. Promote the panel to key on any click while this tab is
+        /// mounted, so a ⌘-shortcut pressed right after actually arrives.
+        private func installClickMonitorIfNeeded(for view: LocalProcessTerminalView) {
+            guard clickMonitor == nil else { return }
+            clickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak view] event in
+                if let window = view?.window, event.window === window, !window.isKeyWindow {
+                    window.makeKey()
+                }
+                return event
+            }
+        }
+
+        fileprivate func removeClickMonitor() {
+            if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
+            clickMonitor = nil
         }
 
         func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
