@@ -545,7 +545,7 @@ struct NumpadView: View {
             RoundedRectangle(cornerRadius: 28)
                 .fill(Color(red: 0.07, green: 0.07, blue: 0.09))
                 .overlay(
-                    Image(uiImage: UIImage(named: "ConfirmBackground") ?? UIImage())
+                    Image(uiImage: Self.confirmBackdrop ?? UIImage())
                         .resizable()
                         .scaledToFill()
                         .overlay(
@@ -558,6 +558,14 @@ struct NumpadView: View {
                 .shadow(color: .black.opacity(0.45), radius: 30, y: 12)
         )
     }
+
+    /// Loose JPEG in the bundle — `UIImage(named:)` only guesses `.png`,
+    /// so load it by URL.
+    private static let confirmBackdrop: UIImage? = {
+        guard let url = Bundle.main.url(forResource: "ConfirmBackground", withExtension: "jpg"),
+              let data = try? Data(contentsOf: url) else { return nil }
+        return UIImage(data: data)
+    }()
 
     private static func isSendShaped(_ headline: String) -> Bool {
         let lowered = headline.lowercased()
