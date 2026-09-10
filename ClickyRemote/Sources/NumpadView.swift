@@ -647,9 +647,10 @@ struct NumpadView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(14)
             .background(
+                // Solid near-black so the quote stays legible over the photo.
                 RoundedRectangle(cornerRadius: 14)
-                    .fill(.white.opacity(0.07))
-                    .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(0.12), lineWidth: 1))
+                    .fill(Color(red: 0.11, green: 0.11, blue: 0.14).opacity(0.94))
+                    .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(.white.opacity(0.14), lineWidth: 1))
             )
             .overlay(alignment: .leading) {
                 RoundedRectangle(cornerRadius: 2)
