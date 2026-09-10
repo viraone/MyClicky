@@ -1699,15 +1699,13 @@ struct NumpadView: View {
         }
     }
 
-    /// Tinted glass tiles share the shortcut chips' coloured glyphs and light fill.
-    /// The banner stays saturated; recording and saving temporarily fill a tile.
+    /// Saturated tiles match the banner; active tiles gain a brighter face and rim.
     private func key(_ id: String, label: String? = nil, icon: String? = nil, tint: Color? = nil, lit: Bool = false,
                      h: CGFloat? = nil, w: CGFloat? = nil, small: Bool = false, hero: Bool = false,
                      banner: Bool = false, waveform: Bool = false,
                      action: ((String) -> Void)? = nil) -> some View {
         let face = tint ?? Snes.key
         let active = waveform || (id == "photos" && savingToDesktop)
-        let foreground = banner || active ? Color.white : face
         let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
         return Button {
             (action ?? tapped)(id)
@@ -1734,9 +1732,9 @@ struct NumpadView: View {
                 } else {
                     ZStack(alignment: .topLeading) {
                         Image(systemName: icon ?? "")
-                            .font(.system(size: hero ? 28 : 20, weight: .regular))
+                            .font(.system(size: hero ? 30 : 22, weight: .semibold))
                         Text(label ?? id)
-                            .font(.system(size: hero ? 13 : 12, weight: .semibold, design: .rounded))
+                            .font(.system(size: hero ? 15 : 13, weight: .heavy, design: .rounded))
                             .lineLimit(1)
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                     }
@@ -1745,17 +1743,22 @@ struct NumpadView: View {
                     .animation(.easeInOut(duration: 0.2), value: label)
                 }
             }
-            .foregroundStyle(foreground)
+            .foregroundStyle(.white)
+            .shadow(color: .black.opacity(0.35), radius: 1, y: 1)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background {
                 if banner {
                     shape.fill(LinearGradient(colors: [face.lighter(0.18), face],
                                               startPoint: .top, endPoint: .bottom))
+                } else if active {
+                    shape.fill(id == "3" || id == "photos" ? face.lighter(0.1) : Snes.red)
                 } else {
-                    shape.fill(face.opacity(active ? 1 : 0.20))
+                    shape.fill(LinearGradient(colors: [face.lighter(0.12), face.darker(0.06)],
+                                              startPoint: .top, endPoint: .bottom))
                 }
             }
-            .overlay(shape.strokeBorder(face.opacity(0.40), lineWidth: 1))
+            .overlay(shape.strokeBorder(.white.opacity(active ? 0.6 : 0.22),
+                                        lineWidth: active ? 2 : 1))
         }
         .buttonStyle(PadKeyStyle())
         .frame(width: w, height: h)
