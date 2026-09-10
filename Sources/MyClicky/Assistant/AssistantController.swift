@@ -105,15 +105,74 @@ final class AssistantController {
             showPanel()
         }
         if !stayOnCode { panel.state.tab = .captureDictate }
+        saveCurrentCaptureIntoTray()
         panel.state.attachmentKind = kind
         panel.state.captureImage = image
         panel.state.captureURL = url
         panel.state.editedCaptureImage = nil
         panel.state.clipboardChoice = .edited
+        // Earlier additions stay in the tray beneath the preview; the newest
+        // becomes current. Oldest ones fall off once the tray is full.
+        let item = AssistantState.CaptureTrayItem(image: image, url: url, kind: kind)
+        panel.state.captureTray.append(item)
+        panel.state.captureTraySelection = item.id
+        if panel.state.captureTray.count > AssistantState.maxCaptureTray {
+            panel.state.captureTray.removeFirst(panel.state.captureTray.count - AssistantState.maxCaptureTray)
+        }
         copyPairToClipboard()
         // Only pixels can be "edited in Preview and reloaded" — a folder or
         // a PDF changing on disk means nothing to the icon we show for it.
         if kind == .file { captureFileWatcher.stop() } else { captureFileWatcher.start(url: url) }
+    }
+
+    /// Writes the current preview's state (promoted image, edited version,
+    /// clipboard choice) back onto its tray entry so it survives switching
+    /// to another item and back.
+    private func saveCurrentCaptureIntoTray() {
+        guard let id = panel.state.captureTraySelection,
+              let index = panel.state.captureTray.firstIndex(where: { $0.id == id }),
+              let image = panel.state.captureImage else { return }
+        panel.state.captureTray[index].image = image
+        panel.state.captureTray[index].edited = panel.state.editedCaptureImage
+        panel.state.captureTray[index].choice = panel.state.clipboardChoice
+    }
+
+    /// A tray thumbnail was clicked: that item becomes the current preview,
+    /// gets the file watcher, and goes on the clipboard.
+    private func selectCaptureItem(_ id: UUID) {
+        guard id != panel.state.captureTraySelection,
+              let item = panel.state.captureTray.first(where: { $0.id == id }) else { return }
+        saveCurrentCaptureIntoTray()
+        panel.state.captureTraySelection = id
+        panel.state.attachmentKind = item.kind
+        panel.state.captureImage = item.image
+        panel.state.captureURL = item.url
+        panel.state.editedCaptureImage = item.edited
+        panel.state.clipboardChoice = item.edited == nil ? .edited : item.choice
+        copyPairToClipboard()
+        if item.kind == .file { captureFileWatcher.stop() } else { captureFileWatcher.start(url: item.url) }
+    }
+
+    /// Drops one item from the tray. Removing the current one promotes the
+    /// most recent remaining item; removing the last one clears the tab.
+    private func removeCaptureItem(_ id: UUID) {
+        panel.state.captureTray.removeAll { $0.id == id }
+        guard id == panel.state.captureTraySelection else { return }
+        if let next = panel.state.captureTray.last {
+            panel.state.captureTraySelection = nil
+            selectCaptureItem(next.id)
+        } else {
+            dismissCapture()
+        }
+    }
+
+    /// The ✕ on the big preview: drops just the current item.
+    private func removeCurrentCapture() {
+        if let id = panel.state.captureTraySelection {
+            removeCaptureItem(id)
+        } else {
+            dismissCapture()
+        }
     }
 
     /// The + menu's "Files and folders": a native picker, then the choice
@@ -290,15 +349,19 @@ final class AssistantController {
     private func handleCaptureEdited(_ image: NSImage) {
         panel.state.editedCaptureImage = image
         panel.state.clipboardChoice = .edited
+        saveCurrentCaptureIntoTray()
         copyPairToClipboard()
     }
 
+    /// Clears the whole tab — every tray item, the preview, the watcher.
     private func dismissCapture() {
         captureFileWatcher.stop()
         panel.state.captureImage = nil
         panel.state.captureURL = nil
         panel.state.editedCaptureImage = nil
         panel.state.attachmentKind = .capture
+        panel.state.captureTray.removeAll()
+        panel.state.captureTraySelection = nil
     }
 
     /// Drops just one version from the Original/Edited pair (the ✕ on each
@@ -322,7 +385,9 @@ final class AssistantController {
             hud.report("Kept the edited version", ok: true)
         }
         if panel.state.captureImage == nil {
-            dismissCapture()
+            removeCurrentCapture()
+        } else {
+            saveCurrentCaptureIntoTray()
         }
     }
 
@@ -730,7 +795,9 @@ final class AssistantController {
         }
         panel.state.onStop = { [weak self] in self?.stop() }
         panel.state.onCopyAgain = { [weak self] in self?.copyPairToClipboard() }
-        panel.state.onDismissCapture = { [weak self] in self?.dismissCapture() }
+        panel.state.onDismissCapture = { [weak self] in self?.removeCurrentCapture() }
+        panel.state.onSelectCaptureItem = { [weak self] id in self?.selectCaptureItem(id) }
+        panel.state.onRemoveCaptureItem = { [weak self] id in self?.removeCaptureItem(id) }
         panel.state.onDiscardCaptureVersion = { [weak self] which in self?.discardCaptureVersion(which) }
         panel.state.onAttachFile = { [weak self] in self?.attachFileFromMac() }
         panel.state.onAttachToAsk = { [weak self] in self?.attachImagesToAsk() }
