@@ -50,8 +50,10 @@ final class DriveCleanupState: ObservableObject {
 /// Pure quota-projection arithmetic, kept apart from the view so it's unit
 /// testable without SwiftUI.
 enum DriveQuotaMath {
-    /// Google's free tier, in the decimal bytes Drive itself reports in.
-    static let freeTierBytes: Int64 = 15_000_000_000
+    /// Google's free tier. Google's "15 GB" is 15 GiB — the `about` endpoint
+    /// reports `limit` as 16,106,127,360 bytes for free accounts — and its UI
+    /// formats usage in binary units too, so everything here follows suit.
+    static let freeTierBytes: Int64 = 15 * 1024 * 1024 * 1024
 
     /// The account's cap for planning purposes. Unlimited accounts (no
     /// `limit`) and paid plans above the free tier both collapse to the free

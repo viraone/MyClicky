@@ -306,8 +306,11 @@ enum DriveCleanupPlanner {
 
     private static func dayText(_ date: Date) -> String { dayFormatter.string(from: date) }
 
+    /// Binary units (1 GB = 2³⁰ bytes), matching how Google's own storage
+    /// pages display sizes — decimal made the meter read ~7% higher than
+    /// the Google One dialog for the same account.
     static func byteText(_ bytes: Int64) -> String {
-        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .binary)
     }
 
     static func friendlyType(_ mimeType: String) -> String {
