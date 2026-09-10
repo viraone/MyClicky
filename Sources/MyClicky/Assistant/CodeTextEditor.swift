@@ -75,11 +75,9 @@ struct CodeTextEditor: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.parent = self
         guard let textView = context.coordinator.textView else { return }
-        var textChanged = false
         if textView.string != text {
             // Programmatic change (file switched, Apply pressed): replace the
             // text but keep the caret somewhere sensible.
-            textChanged = true
             let selected = textView.selectedRange()
             textView.string = text
             let end = (text as NSString).length
@@ -106,16 +104,22 @@ struct CodeTextEditor: NSViewRepresentable {
                 range = NSUnionRange(range, next); extra -= 1
             }
             let onDidJump = onDidJump
-            let jump = {
-                textView.layoutManager?.ensureLayout(forCharacterRange: NSRange(location: 0, length: NSMaxRange(range)))
-                textView.setSelectedRange(range)
-                textView.scrollRangeToVisible(range)
-                textView.window?.makeFirstResponder(textView)
+            // A freshly shown editor has no size yet, and fresh text hasn't
+            // been laid out — scrolling then lands at the top. Wait until
+            // the view is real (a few frames at most), then go.
+            func attempt(_ remaining: Int) {
+                let ready = textView.visibleRect.height > 0 && textView.frame.width > 0
+                if ready || remaining == 0 {
+                    textView.layoutManager?.ensureLayout(forCharacterRange: NSRange(location: 0, length: NSMaxRange(range)))
+                    textView.setSelectedRange(range)
+                    textView.scrollRangeToVisible(range)
+                    textView.window?.makeFirstResponder(textView)
+                    onDidJump?()
+                } else {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { attempt(remaining - 1) }
+                }
             }
-            // Fresh text hasn't been laid out yet — scrolling now lands at
-            // the top of a long file. Let the layout pass finish first.
-            if textChanged { DispatchQueue.main.async(execute: jump) } else { jump() }
-            DispatchQueue.main.async { onDidJump?() }
+            DispatchQueue.main.async { attempt(40) }
         }
     }
 
