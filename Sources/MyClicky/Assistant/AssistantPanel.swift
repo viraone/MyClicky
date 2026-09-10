@@ -179,6 +179,73 @@ enum PanelResizeCorner: Equatable {
 /// user edited it in an external app like Preview — rides on the clipboard.
 enum CaptureClipboardChoice { case original, edited }
 
+/// The ✕ on one thumbnail of the Original/Edited pair. A dedicated view
+/// (rather than a plain button) so it can brighten on hover.
+private struct CaptureVersionCloseButton: View {
+    let which: CaptureClipboardChoice
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "xmark")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 18, height: 18)
+                .background(Circle().fill(Color.black.opacity(hovering ? 0.75 : 0.55)))
+                .overlay(Circle().strokeBorder(Color.white.opacity(0.25), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .padding(6)
+        .help(which == .original
+              ? "Drop the original — keep the edited version"
+              : "Drop the edited version — back to the original")
+        .onHover { hovering = $0 }
+    }
+}
+
+/// One small thumbnail in the Capture tab's tray strip: the picture (its
+/// edited version if there is one), a cyan ring when it's the one in the
+/// big preview, and its own ✕ that appears on hover.
+private struct CaptureTrayThumb: View {
+    let item: AssistantState.CaptureTrayItem
+    let isSelected: Bool
+    let onSelect: () -> Void
+    let onRemove: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Image(nsImage: item.edited ?? item.image)
+            .resizable()
+            .aspectRatio(contentMode: item.kind == .file ? .fit : .fill)
+            .frame(width: 64, height: 64)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(isSelected ? Color.cyan.opacity(0.85) : Color.white.opacity(0.2),
+                              lineWidth: isSelected ? 2 : 1))
+            .opacity(isSelected || hovering ? 1 : 0.7)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onSelect)
+            .overlay(alignment: .topTrailing) {
+                if hovering || isSelected {
+                    Button(action: onRemove) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 14, height: 14)
+                            .background(Circle().fill(Color.black.opacity(0.7)))
+                            .overlay(Circle().strokeBorder(Color.white.opacity(0.25), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(3)
+                    .help("Remove \(item.url.lastPathComponent) from the tray")
+                }
+            }
+            .help(item.url.lastPathComponent)
+            .onHover { hovering = $0 }
+    }
+}
+
 @MainActor
 final class AssistantState: ObservableObject {
     @Published var status: AssistantStatus = .idle {
@@ -532,6 +599,24 @@ final class AssistantState: ObservableObject {
     /// file URL rather than pixels.
     enum AttachmentKind { case capture, image, file }
     @Published var attachmentKind: AttachmentKind = .capture
+    /// Everything added to the Capture tab that hasn't been ✕'d yet, oldest
+    /// first. Exactly one is "current" — the one the big preview, the
+    /// Original/Edited pair, the file watcher, and the clipboard all refer
+    /// to (`captureImage` & friends). The rest wait in a strip of thumbnails
+    /// beneath it; clicking one swaps it in. Each item remembers its own
+    /// edited version and clipboard choice so switching back loses nothing.
+    struct CaptureTrayItem: Identifiable, Equatable {
+        let id = UUID()
+        var image: NSImage
+        let url: URL
+        let kind: AttachmentKind
+        var edited: NSImage?
+        var choice: CaptureClipboardChoice = .edited
+        static func == (a: CaptureTrayItem, b: CaptureTrayItem) -> Bool { a.id == b.id }
+    }
+    static let maxCaptureTray = 10
+    @Published var captureTray: [CaptureTrayItem] = []
+    @Published var captureTraySelection: UUID?
     /// Pictures the user dropped, pasted, or picked into the Ask tab so a
     /// question can be about them ("what's wrong in the second one?"). They
     /// ride along with every Ask until removed — captures stay on their own
@@ -601,6 +686,13 @@ final class AssistantState: ObservableObject {
     /// Dismisses the capture preview (the file on disk is untouched) and
     /// stops watching it for external edits.
     var onDismissCapture: (() -> Void)?
+    /// Drops just one version (original or edited) from the pair, keeping
+    /// the other and the file watcher running.
+    var onDiscardCaptureVersion: ((CaptureClipboardChoice) -> Void)?
+    /// Tray strip: make another added image the current one, or drop one
+    /// (current or not) without touching the others.
+    var onSelectCaptureItem: ((UUID) -> Void)?
+    var onRemoveCaptureItem: ((UUID) -> Void)?
     /// Opens the macOS file picker so a file or folder from this Mac can be
     /// dropped into the capture preview (the + menu on Capture + Dictate).
     var onAttachFile: (() -> Void)?
@@ -1743,6 +1835,7 @@ struct AssistantPanelView: View {
                                 onOpen: nil,
                                 onSelect: { selectClipboardChoice(.original) }
                             )
+                            .overlay(alignment: .topTrailing) { captureVersionCloseButton(.original) }
                             capturePreviewThumbnail(
                                 image: edited, title: "Edited", fileName: state.captureURL?.lastPathComponent,
                                 isSelected: state.clipboardChoice == .edited,
@@ -1750,6 +1843,7 @@ struct AssistantPanelView: View {
                                 onOpen: { if let url = state.captureURL { NSWorkspace.shared.open(url) } },
                                 onSelect: { selectClipboardChoice(.edited) }
                             )
+                            .overlay(alignment: .topTrailing) { captureVersionCloseButton(.edited) }
                         }
                     } else if state.attachmentKind == .file {
                         // Not an image: the Finder icon at a sane size, with
@@ -1795,21 +1889,29 @@ struct AssistantPanelView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .overlay(alignment: .topTrailing) {
-                    // Dismisses the preview only — the file already
-                    // saved to disk (VIRADETH_RESUME) is untouched.
-                    Button {
-                        state.onDismissCapture?()
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(.white)
-                            .frame(width: 18, height: 18)
-                            .background(Circle().fill(Color.black.opacity(0.55)))
-                            .overlay(Circle().strokeBorder(Color.white.opacity(0.25), lineWidth: 1))
+                    // The Original/Edited pair gets a ✕ on each thumbnail
+                    // instead (see captureVersionCloseButton) — a group-level
+                    // one there would dismiss both at once.
+                    if state.editedCaptureImage == nil {
+                        // Dismisses the preview only — the file already
+                        // saved to disk (VIRADETH_RESUME) is untouched.
+                        Button {
+                            state.onDismissCapture?()
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(.white)
+                                .frame(width: 18, height: 18)
+                                .background(Circle().fill(Color.black.opacity(0.55)))
+                                .overlay(Circle().strokeBorder(Color.white.opacity(0.25), lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                        .padding(6)
+                        .help("Dismiss preview (file is still saved)")
                     }
-                    .buttonStyle(.plain)
-                    .padding(6)
-                    .help("Dismiss preview (file is still saved)")
+                }
+                if state.captureTray.count > 1 {
+                    captureTrayStrip
                 }
                 HStack(spacing: 6) {
                     Image(systemName: "checkmark.circle.fill")
@@ -1882,6 +1984,44 @@ struct AssistantPanelView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    /// Per-thumbnail ✕ for the Original/Edited pair, dropping just that one
+    /// version. Broken out of `captureColumn` (rather than inlined) because
+    /// this file's big view bodies otherwise hit "unable to type-check in
+    /// reasonable time".
+    private func captureVersionCloseButton(_ which: CaptureClipboardChoice) -> some View {
+        CaptureVersionCloseButton(which: which) {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                state.onDiscardCaptureVersion?(which)
+            }
+        }
+    }
+
+    /// Every image added to the tab, as a row of small thumbnails under the
+    /// preview once there's more than one. The current one is ringed in
+    /// cyan; clicking another swaps it into the preview (and onto the
+    /// clipboard); each has its own ✕. Newest on the right.
+    private var captureTrayStrip: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(state.captureTray) { item in
+                    CaptureTrayThumb(
+                        item: item,
+                        isSelected: item.id == state.captureTraySelection,
+                        onSelect: {
+                            withAnimation(.easeInOut(duration: 0.18)) { state.onSelectCaptureItem?(item.id) }
+                        },
+                        onRemove: {
+                            withAnimation(.easeInOut(duration: 0.18)) { state.onRemoveCaptureItem?(item.id) }
+                        }
+                    )
+                }
+            }
+            .padding(.horizontal, 4)
+            .padding(.vertical, 4)
+        }
+        .frame(height: 72)
+    }
+
     /// Selects which version (original vs. edited) rides the clipboard, and
     /// re-copies immediately so the choice takes effect right away.
     private func selectClipboardChoice(_ choice: CaptureClipboardChoice) {
@@ -1891,16 +2031,21 @@ struct AssistantPanelView: View {
 
     private var captureStatusText: String {
         let name = state.captureURL?.lastPathComponent ?? "Saved"
+        let tray = state.captureTray
+        var position = ""
+        if tray.count > 1, let index = tray.firstIndex(where: { $0.id == state.captureTraySelection }) {
+            position = " · \(index + 1) of \(tray.count)"
+        }
         switch state.attachmentKind {
-        case .image: return "\(name) — added from this Mac, on your clipboard, click to open"
-        case .file: return "\(name) — added from this Mac, copied as a file, click to open"
+        case .image: return "\(name) — added from this Mac, on your clipboard, click to open\(position)"
+        case .file: return "\(name) — added from this Mac, copied as a file, click to open\(position)"
         case .capture: break
         }
         guard state.editedCaptureImage != nil else {
-            return "\(name) — on your clipboard, click to open"
+            return "\(name) — on your clipboard, click to open\(position)"
         }
         let which = state.clipboardChoice == .edited ? "Edited version" : "Original"
-        return "\(which) on your clipboard — click the Edited thumbnail to reopen in Preview"
+        return "\(which) on your clipboard — click the Edited thumbnail to reopen in Preview\(position)"
     }
 
     // Claude-style: big input field on top, mic status at top-right.
