@@ -129,7 +129,10 @@ snapshot. Code blocks in answers have **Copy** and **Apply to <file>**
 buttons; when Claude gives a "current code" block followed by a
 "replacement" block, Apply swaps the first for the second in the file
 you're viewing (or rewrites the file when the block is a whole-file
-rewrite), and copies it to the clipboard when it can't find a place.
+rewrite), and copies it to the clipboard when it can't find a place. Cards
+that change code show a red/green diff of what Apply will do, with a
+`+N −M` count next to the button (toggle back to the raw replacement with
+the `diff`/`code` link); ⌘Z undoes an Apply in one step once it's landed.
 Each block's header also says where it goes — `app.js:412`, worked out
 locally from the fence's file name and the "current code" block, no Claude
 call — and clicking that opens the file at those lines. **Apply** targets
