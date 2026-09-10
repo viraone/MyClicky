@@ -721,6 +721,7 @@ final class AssistantController {
                 panel.state.status = .answering
                 panel.state.codeUsage = answer.usage
                 panel.state.logCode(.answer, answer.text)
+                panel.state.codeViewerExpanded = false  // show the answer, not just the preview
                 if let usage = answer.usage {
                     panel.state.codeSpentUSD += usage.costUSD
                     refreshLiveCost(force: true)

@@ -342,14 +342,16 @@ final class AssistantState: ObservableObject {
     /// What the last question cost — shown so the cache saving is visible.
     @Published var codeUsage: AnthropicService.Usage?
     /// The project card is expanded into its file list.
-    @Published var codeShowingFiles = false
+    @Published var codeShowingFiles = false {
+        didSet { if codeShowingFiles { codeViewerExpanded = false } }
+    }
     /// Path of the file open in the preview, nil for the whole project.
     @Published var codeFocusedFile: String? {
         didSet {
             if codeFocusedFile != nil { codeShowingFiles = false }
             // A freshly opened file is there to be read; the caret only
             // folds the one you're on.
-            if codeFocusedFile != nil, codeFocusedFile != oldValue { codeViewerCollapsed = false; closeCodeFind() }
+            if codeFocusedFile != nil, codeFocusedFile != oldValue { codeViewerCollapsed = false; codeViewerExpanded = false; closeCodeFind() }
             codeDraft = codeFocusedFile.flatMap { codeCurrentText(of: $0) } ?? ""
         }
     }
@@ -514,7 +516,11 @@ final class AssistantState: ObservableObject {
         }.sorted { $0.path < $1.path }
     }
     /// The file preview is folded down to its header row.
-    @Published var codeViewerCollapsed = false
+    @Published var codeViewerCollapsed = false {
+        didSet { if codeViewerCollapsed { codeViewerExpanded = false } }
+    }
+    /// The file preview fills the tab (log hidden) instead of the usual split.
+    @Published var codeViewerExpanded = false
     /// Pictures (screenshots, mockups, error dialogs) that ride along with
     /// every code question until removed. Listed by name only.
     @Published var codeImages: [AskAttachment] = []
@@ -1113,6 +1119,12 @@ final class AssistantPanelController {
             self.state.terminal.clearScreen()
             return true
         }
+        panel.onToggleCodeExpand = { [weak self] in
+            guard let self, self.state.tab == .code, self.state.codeFocusedFile != nil,
+                  !self.state.codeViewerCollapsed else { return false }
+            self.state.codeViewerExpanded.toggle()
+            return true
+        }
         // Track which display the panel lives on, including hand drags, so
         // the phone's screen switch can follow reality.
         NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification, object: panel, queue: .main) { [weak self] _ in
@@ -1195,6 +1207,9 @@ final class KeyablePanel: NSPanel {
     var onFind: (() -> Bool)?
     /// ⌘K. Return true when a terminal took it as "clear".
     var onClear: (() -> Bool)?
+    /// ⇧⌘↩ on the Code tab. Return true when the file preview took it as
+    /// "expand/restore".
+    var onToggleCodeExpand: (() -> Bool)?
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -1206,6 +1221,9 @@ final class KeyablePanel: NSPanel {
             return true
         }
         if flags == [.command], key == "k", onClear?() == true {
+            return true
+        }
+        if flags == [.command, .shift], key == "\r", onToggleCodeExpand?() == true {
             return true
         }
         if super.performKeyEquivalent(with: event) { return true }
@@ -1244,6 +1262,7 @@ struct AssistantPanelView: View {
     @FocusState private var findFocused: Bool
     @State private var breathing = false
     @State private var resizeHoverCorner: PanelResizeCorner?
+    @State private var codeViewerExpandHovering = false
 
     var body: some View {
         Group {
@@ -1488,14 +1507,17 @@ struct AssistantPanelView: View {
                     if !state.codeImages.isEmpty { codeImagesRow }
                     codeProjectCard
                     if state.codeRunPhase != .idle || !state.codeBuildErrors.isEmpty { codeRunStrip }
+                    let viewerExpanded = state.codeViewerExpanded && !state.codeViewerCollapsed && state.codeFocusedFile != nil
                     if state.codeShowingFiles, let project = state.codeProject {
                         codeFileList(project)
                     } else if let path = state.codeFocusedFile, let file = state.codeProject?.file(at: path) {
                         codeFileViewer(file)
+                            .frame(maxHeight: viewerExpanded ? .infinity : nil)
                     }
                     // With a file or the list up and nothing asked yet, the
-                    // empty log's hint would steal half the height.
-                    if !state.codeLog.isEmpty || (!state.codeShowingFiles && state.codeFocusedFile == nil) {
+                    // empty log's hint would steal half the height. Expanded,
+                    // the preview alone fills the tab and the log is hidden.
+                    if !viewerExpanded, !state.codeLog.isEmpty || (!state.codeShowingFiles && state.codeFocusedFile == nil) {
                         codeLogView
                     }
                 case .terminal:
@@ -2679,7 +2701,35 @@ struct AssistantPanelView: View {
         }
         .frame(maxWidth: .infinity)
         .background(codeCardBackground)
+        .overlay(alignment: .bottom) {
+            if !state.codeViewerCollapsed { codeViewerExpandToggle }
+        }
         .id(file.path)
+    }
+
+    /// Slim pill on the bottom edge of the file preview: click to fill the
+    /// tab with the code preview (the log hidden), click again to restore
+    /// the usual split.
+    private var codeViewerExpandToggle: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.18)) { state.codeViewerExpanded.toggle() }
+        } label: {
+            Image(systemName: state.codeViewerExpanded ? "chevron.up" : "chevron.down")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(state.accent)
+                .frame(width: 44, height: 14)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(state.accent.opacity(0.18))
+                        .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .strokeBorder(state.accent.opacity(0.6), lineWidth: 1))
+                )
+        }
+        .buttonStyle(.plain)
+        .opacity(codeViewerExpandHovering ? 1 : 0.55)
+        .onHover { codeViewerExpandHovering = $0 }
+        .offset(y: 8)
+        .help(state.codeViewerExpanded ? "Restore the answer log" : "Expand the code preview")
     }
 
     /// Compact find bar for the file preview: a short field, `3 of 12`,
