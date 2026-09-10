@@ -2674,24 +2674,36 @@ struct AssistantPanelView: View {
                 .foregroundStyle(.white.opacity(0.35))
             switch entry.kind {
             case .question:
-                Text("❯")
-                    .font(.system(size: 14, weight: .heavy, design: .monospaced))
-                    .foregroundStyle(AssistantPhase.working.color)
-                Text(entry.text)
-                    .font(.system(size: 14.5, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.white)
+                // Yours: purple tint with a purple rail.
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text("❯")
+                        .font(.system(size: 14, weight: .heavy, design: .monospaced))
+                        .foregroundStyle(AssistantPhase.working.color)
+                    Text(entry.text)
+                        .font(.system(size: 14.5, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white)
+                }
+                .padding(.vertical, 8)
+                .padding(.horizontal, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(speakerCard(AssistantPhase.working.color, fill: 0.12))
             case .answer:
+                // Peeky's: cool grey with the DONE-green rail.
                 VStack(alignment: .trailing, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Circle().fill(AssistantPhase.done.color).frame(width: 6, height: 6)
+                        Text("peeky")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundStyle(AssistantPhase.done.color.opacity(0.9))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     codeAnswerView(entry.text)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     copyAnswerButton(entry)
                 }
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.white.opacity(0.04))
-                )
+                .background(speakerCard(AssistantPhase.done.color, fill: 0.06, tint: .white))
             case .status:
                 Text(entry.text)
                     .font(.system(size: 13.5, design: .monospaced))
@@ -2707,6 +2719,20 @@ struct AssistantPanelView: View {
         .fixedSize(horizontal: false, vertical: true)
         .textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Speech card: soft fill with a coloured rail down the left edge so
+    /// you can tell who's talking at a glance.
+    private func speakerCard(_ rail: Color, fill: Double, tint: Color? = nil) -> some View {
+        RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill((tint ?? rail).opacity(fill))
+            .overlay(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(rail.opacity(0.85))
+                    .frame(width: 3)
+                    .padding(.vertical, 6)
+                    .padding(.leading, 3)
+            }
     }
 
     /// Copies the whole answer (prose and code, as Claude wrote it). Shows a
