@@ -287,11 +287,22 @@ enum CodeAnswerSegment: Equatable {
             if !joined.isEmpty { segments.append(.prose(joined)) }
             prose = []
         }
+        func close(_ open: [String]) {
+            var lines = open
+            // Some answers put the path on the block's first line instead of
+            // the fence. It's a label, not code — lift it into the tag.
+            if let first = lines.first?.trimmingCharacters(in: .whitespaces),
+               lines.count > 1, looksLikePath(first) {
+                if file == nil { file = first }
+                lines.removeFirst()
+            }
+            segments.append(.code(language: language, code: lines.joined(separator: "\n"), file: file))
+        }
         for line in text.components(separatedBy: "\n") {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.hasPrefix("```") {
                 if let open = code {
-                    segments.append(.code(language: language, code: open.joined(separator: "\n"), file: file))
+                    close(open)
                     code = nil
                 } else {
                     flushProse()
@@ -311,9 +322,21 @@ enum CodeAnswerSegment: Equatable {
                 prose.append(line)
             }
         }
-        if let open = code { segments.append(.code(language: language, code: open.joined(separator: "\n"), file: file)) }
+        if let open = code { close(open) }
         flushProse()
         return segments
+    }
+
+    /// `data/open-mics.json`, `App.swift`, `src/app.js:` — one token with an
+    /// extension and nothing code-like in it.
+    static func looksLikePath(_ s: String) -> Bool {
+        var t = s
+        if t.hasSuffix(":") { t.removeLast() }
+        if t.hasPrefix("//") || t.hasPrefix("#") { t = t.drop { $0 == "/" || $0 == "#" || $0 == " " }.description }
+        guard !t.isEmpty, !t.contains(" "), t.contains(".") else { return false }
+        let ext = (t as NSString).pathExtension
+        guard (1...6).contains(ext.count), ext.allSatisfy(\.isLetter) else { return false }
+        return t.allSatisfy { $0.isLetter || $0.isNumber || "._-/".contains($0) }
     }
 }
 

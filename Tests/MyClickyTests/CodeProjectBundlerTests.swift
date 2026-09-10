@@ -212,6 +212,15 @@ final class CodeBlockLocatorTests: XCTestCase {
         XCTAssertEqual(segs[1], .code(language: "py", code: "print(1)", file: "src/x.py"))
     }
 
+    func testPathOnFirstLineOfBlockBecomesTheTag() {
+        let segs = CodeAnswerSegment.parse("```json\ndata/open-mics.json\n  {\n    \"id\": \"x\"\n```")
+        XCTAssertEqual(segs, [.code(language: "json", code: "  {\n    \"id\": \"x\"", file: "data/open-mics.json")])
+        // Real code that happens to have a dot stays put.
+        XCTAssertEqual(CodeAnswerSegment.parse("```js\nfoo.bar()\nbaz()\n```"),
+                       [.code(language: "js", code: "foo.bar()\nbaz()", file: nil)])
+        XCTAssertEqual(CodeAnswerSegment.parse("```\nREADME.md\n```"), [.code(language: "", code: "README.md", file: nil)])
+    }
+
     func testLocatesFindBlockInTaggedFile() {
         let find = "function initializeApp() {\n  render();\n}"
         let loc = CodeBlockLocator.locate(code: "function initializeApp() {\n  boot();\n}", find: find, tagged: "app.js",
