@@ -2759,7 +2759,7 @@ struct AssistantPanelView: View {
                     let previous: String? = index > 0 ? {
                         if case .code(_, let earlier, _) = segments[index - 1] { return earlier }
                         if index > 1, case .code(_, let earlier, _) = segments[index - 2],
-                           case .prose(let between) = segments[index - 1], between.count < 80 { return earlier }
+                           case .prose = segments[index - 1] { return earlier }
                         return nil
                     }() : nil
                     codeBlockCard(language: language, code: code, previous: previous, tagged: tagged)
@@ -2768,7 +2768,12 @@ struct AssistantPanelView: View {
         }
     }
 
-    private func codeBlockCard(language: String, code: String, previous: String?, tagged: String?) -> some View {
+    private func codeBlockCard(language: String, code: String, previous candidate: String?, tagged: String?) -> some View {
+        // The block before this one is the "find" half of a change only if
+        // it's actually in the file — otherwise it's an unrelated snippet.
+        let previous: String? = candidate.flatMap { earlier in
+            state.codePaths.contains { state.codeBlockIsAlreadyInFile(earlier, path: $0) } ? earlier : nil
+        }
         let location = state.codeLocate(code: code, find: previous, tagged: tagged)
         let target: String? = location?.path ?? state.codeFocusedFile
         return VStack(alignment: .leading, spacing: 0) {
