@@ -301,6 +301,31 @@ final class AssistantController {
         panel.state.attachmentKind = .capture
     }
 
+    /// Drops just one version from the Original/Edited pair (the ✕ on each
+    /// thumbnail), keeping the other on screen and on the clipboard. The
+    /// file watcher stays running either way, so another ⌘S in Preview can
+    /// bring the edited version back.
+    private func discardCaptureVersion(_ which: CaptureClipboardChoice) {
+        switch which {
+        case .edited:
+            guard panel.state.editedCaptureImage != nil else { return }
+            panel.state.editedCaptureImage = nil
+            panel.state.clipboardChoice = .original
+            copyPairToClipboard()
+            hud.report("Back to the original", ok: true)
+        case .original:
+            guard panel.state.editedCaptureImage != nil else { return }
+            panel.state.captureImage = panel.state.editedCaptureImage
+            panel.state.editedCaptureImage = nil
+            panel.state.clipboardChoice = .original
+            copyPairToClipboard()
+            hud.report("Kept the edited version", ok: true)
+        }
+        if panel.state.captureImage == nil {
+            dismissCapture()
+        }
+    }
+
     // MARK: - Peeky Code (questions about a dropped project)
 
     /// The Code tab's + menu and drop-zone button: pick a folder, or files.
@@ -706,6 +731,7 @@ final class AssistantController {
         panel.state.onStop = { [weak self] in self?.stop() }
         panel.state.onCopyAgain = { [weak self] in self?.copyPairToClipboard() }
         panel.state.onDismissCapture = { [weak self] in self?.dismissCapture() }
+        panel.state.onDiscardCaptureVersion = { [weak self] which in self?.discardCaptureVersion(which) }
         panel.state.onAttachFile = { [weak self] in self?.attachFileFromMac() }
         panel.state.onAttachToAsk = { [weak self] in self?.attachImagesToAsk() }
         panel.state.askHistory = AskHistoryStore.load()
