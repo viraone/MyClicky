@@ -1408,13 +1408,6 @@ struct AssistantPanelView: View {
                 tabBar
                 if state.micLive { recBadge }
                 Spacer()
-                if let hint = headerHint {
-                    Text(hint)
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.6))
-                        .lineLimit(1)
-                        .transition(.opacity)
-                }
                 sizeSwitch
                 headerButton("arrow.down.right.and.arrow.up.left", help: "Minimize to corner") {
                     state.onMinimize?()
@@ -1429,6 +1422,26 @@ struct AssistantPanelView: View {
                     state.onDismiss?()
                 }
             }
+            // The hovered button's description floats just under the header
+            // row as an overlay, so showing it never changes the header's
+            // own size (a layout-affecting hint fed a constraints loop).
+            .overlay(alignment: .topTrailing) {
+                if let hint = headerHint {
+                    Text(hint)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .lineLimit(1)
+                        .fixedSize()
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(RoundedRectangle(cornerRadius: 6).fill(Color(red: 0.12, green: 0.12, blue: 0.14)))
+                        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Color.white.opacity(0.15), lineWidth: 1))
+                        .offset(y: 34)
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
+                }
+            }
+            .zIndex(1)
             // Thin rule under the tabs, as a terminal draws under its tab row.
             Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
             phaseStrip
