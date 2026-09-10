@@ -1236,6 +1236,9 @@ final class KeyablePanel: NSPanel {
 struct AssistantPanelView: View {
     @ObservedObject var state: AssistantState
     @State private var typedQuestion = ""
+    /// What the hovered header button does, shown in the header itself —
+    /// system tooltips never appear over a non-activating panel.
+    @State private var headerHint: String?
     @State private var copiedAnswerID: UUID?
     @FocusState private var fieldFocused: Bool
     @FocusState private var findFocused: Bool
@@ -1362,6 +1365,11 @@ struct AssistantPanelView: View {
                 }
                 .buttonStyle(.plain)
                 .help(size.label)
+                .onHover { inside in
+                    withAnimation(.easeInOut(duration: 0.12)) {
+                        if inside { headerHint = size.label } else if headerHint == size.label { headerHint = nil }
+                    }
+                }
             }
         }
         .padding(2)
@@ -1400,6 +1408,13 @@ struct AssistantPanelView: View {
                 tabBar
                 if state.micLive { recBadge }
                 Spacer()
+                if let hint = headerHint {
+                    Text(hint)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.6))
+                        .lineLimit(1)
+                        .transition(.opacity)
+                }
                 sizeSwitch
                 headerButton("arrow.down.right.and.arrow.up.left", help: "Minimize to corner") {
                     state.onMinimize?()
@@ -3792,15 +3807,21 @@ struct AssistantPanelView: View {
     }
 
     private func headerButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        let hovering = headerHint == help
+        return Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: 11, weight: .bold))
-                .foregroundStyle(.white.opacity(0.55))
+                .foregroundStyle(.white.opacity(hovering ? 0.95 : 0.55))
                 .frame(width: 22, height: 22)
-                .background(Circle().fill(Color.white.opacity(0.07)))
+                .background(Circle().fill(Color.white.opacity(hovering ? 0.16 : 0.07)))
         }
         .buttonStyle(.plain)
         .help(help)
+        .onHover { inside in
+            withAnimation(.easeInOut(duration: 0.12)) {
+                if inside { headerHint = help } else if headerHint == help { headerHint = nil }
+            }
+        }
     }
 
     /// Drag-to-resize grip in one corner of the panel. Diagonal-arrow icon
