@@ -14,6 +14,7 @@ struct CodeTextEditor: NSViewRepresentable {
     var language: SyntaxHighlighter.Language = .other
     /// Scroll to and select this 1-based line once, then call `onDidJump`.
     var jumpToLine: Int?
+    var jumpLineCount = 1
     var onDidJump: (() -> Void)?
     var font: NSFont = .monospacedSystemFont(ofSize: 12.5, weight: .regular)
 
@@ -96,11 +97,29 @@ struct CodeTextEditor: NSViewRepresentable {
                 let r = ns.lineRange(for: NSRange(location: index, length: 0))
                 index = NSMaxRange(r); current += 1
             }
-            let range = ns.lineRange(for: NSRange(location: min(index, max(ns.length - 1, 0)), length: 0))
-            textView.setSelectedRange(range)
-            textView.scrollRangeToVisible(range)
-            textView.window?.makeFirstResponder(textView)
-            DispatchQueue.main.async { onDidJump?() }
+            var range = ns.lineRange(for: NSRange(location: min(index, max(ns.length - 1, 0)), length: 0))
+            var extra = jumpLineCount - 1
+            while extra > 0, NSMaxRange(range) < ns.length {
+                let next = ns.lineRange(for: NSRange(location: NSMaxRange(range), length: 0))
+                range = NSUnionRange(range, next); extra -= 1
+            }
+            let onDidJump = onDidJump
+            // A freshly shown editor has no size yet, and fresh text hasn't
+            // been laid out — scrolling then lands at the top. Wait until
+            // the view is real (a few frames at most), then go.
+            func attempt(_ remaining: Int) {
+                let ready = textView.visibleRect.height > 0 && textView.frame.width > 0
+                if ready || remaining == 0 {
+                    textView.layoutManager?.ensureLayout(forCharacterRange: NSRange(location: 0, length: NSMaxRange(range)))
+                    textView.setSelectedRange(range)
+                    textView.scrollRangeToVisible(range)
+                    textView.window?.makeFirstResponder(textView)
+                    onDidJump?()
+                } else {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { attempt(remaining - 1) }
+                }
+            }
+            DispatchQueue.main.async { attempt(40) }
         }
     }
 

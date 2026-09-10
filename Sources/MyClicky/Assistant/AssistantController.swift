@@ -449,18 +449,30 @@ final class AssistantController {
         }
     }
 
-    private func applyCodeBlock(_ code: String, replacing find: String?) {
-        guard let path = panel.state.codeFocusedFile,
-              let current = panel.state.codeCurrentText(of: path) else { return }
+    private func applyCodeBlock(_ code: String, replacing find: String?, path: String) {
+        guard let current = panel.state.codeLiveText(of: path) else { return }
         let name = (path as NSString).lastPathComponent
-        let (updated, outcome) = CodeBlockApplier.apply(code, replacing: find, in: panel.state.codeDraftDirty ? panel.state.codeDraft : current)
-        switch outcome {
-        case .replaced(let lines):
+        let (updated, outcome) = CodeBlockApplier.apply(code, replacing: find, in: current)
+        // Land in the changed file, on the changed lines.
+        func show(line: Int?) {
+            if panel.state.codeFocusedFile != path {
+                panel.state.codeFocusedFile = path
+                panel.state.codeShowingFiles = false
+            }
             panel.state.codeDraft = updated
+            panel.state.codeViewerCollapsed = false
+            if let line {
+                panel.state.codeJumpToLine = line
+                panel.state.codeJumpLineCount = max(1, code.trimmingCharacters(in: .newlines).components(separatedBy: "\n").count)
+            }
+        }
+        switch outcome {
+        case .replaced(let lines, let atLine):
+            show(line: atLine)
             saveCodeFile(path: path, text: updated)
             panel.state.logCode(.status, "Replaced \(lines) line\(lines == 1 ? "" : "s") in \(name) — saved.")
         case .rewroteFile:
-            panel.state.codeDraft = updated
+            show(line: 1)
             saveCodeFile(path: path, text: updated)
             panel.state.logCode(.status, "Rewrote \(name) with that block — saved.")
         case .notFound:
@@ -726,7 +738,7 @@ final class AssistantController {
             self.panel.state.terminal.view.window?.makeFirstResponder(self.panel.state.terminal.view)
         }
         panel.state.onSaveCodeFile = { [weak self] path, text in self?.saveCodeFile(path: path, text: text) }
-        panel.state.onApplyCodeBlock = { [weak self] code, find in self?.applyCodeBlock(code, replacing: find) }
+        panel.state.onApplyCodeBlock = { [weak self] code, find, path in self?.applyCodeBlock(code, replacing: find, path: path) }
         panel.state.onAttachCodeProject = { [weak self] in self?.pickCodeProject() }
         panel.state.onReloadCodeProject = { [weak self] in self?.reloadCodeProject() }
         panel.state.onRemoveCodeProject = { [weak self] in self?.removeCodeProject() }

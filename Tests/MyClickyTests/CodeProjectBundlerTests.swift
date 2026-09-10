@@ -121,11 +121,11 @@ final class CodeProjectBundlerTests: XCTestCase {
     func testApplierReplacesFindBlock() {
         let file = "a\nb\nc\nd\n"
         let (out, outcome) = CodeBlockApplier.apply("B\nC", replacing: "b\nc", in: file)
-        XCTAssertEqual(outcome, .replaced(lines: 2))
+        XCTAssertEqual(outcome, .replaced(lines: 2, atLine: 2))
         XCTAssertEqual(out, "a\nB\nC\nd\n")
         // Trailing whitespace in the file shouldn't break the match.
         let (out2, outcome2) = CodeBlockApplier.apply("X", replacing: "b\nc", in: "a\nb  \nc\nd\n")
-        XCTAssertEqual(outcome2, .replaced(lines: 2))
+        XCTAssertEqual(outcome2, .replaced(lines: 2, atLine: 2))
         XCTAssertEqual(out2, "a\nX\nd\n")
     }
 
@@ -186,5 +186,66 @@ final class XcodeRunnerParseTests: XCTestCase {
         XCTAssertEqual(errs[1].message, "linker command failed with exit code 1")
         XCTAssertTrue(errs[2].isWarning)
         XCTAssertEqual(errs[2].file, "App/Model.swift")
+    }
+}
+
+final class CodeBlockLocatorTests: XCTestCase {
+    private let files: [String: String] = [
+        "app.js": """
+        const timeSignupStart = 19;
+
+        function getSeattleScheduleMode(now) {
+          return now.getHours() >= timeSignupStart ? 'lineup' : 'signup';
+        }
+
+        function initializeApp() {
+          render();
+        }
+        """,
+        "css/style.css": ".tag-new { color: red; }\n",
+    ]
+    private var paths: [String] { Array(files.keys).sorted() }
+
+    func testFenceCarriesFilePath() {
+        let segs = CodeAnswerSegment.parse("```js app.js\nfoo()\n```\n```src/x.py\nprint(1)\n```")
+        XCTAssertEqual(segs[0], .code(language: "js", code: "foo()", file: "app.js"))
+        XCTAssertEqual(segs[1], .code(language: "py", code: "print(1)", file: "src/x.py"))
+    }
+
+    func testPathOnFirstLineOfBlockBecomesTheTag() {
+        let segs = CodeAnswerSegment.parse("```json\ndata/open-mics.json\n  {\n    \"id\": \"x\"\n```")
+        XCTAssertEqual(segs, [.code(language: "json", code: "  {\n    \"id\": \"x\"", file: "data/open-mics.json")])
+        // Real code that happens to have a dot stays put.
+        XCTAssertEqual(CodeAnswerSegment.parse("```js\nfoo.bar()\nbaz()\n```"),
+                       [.code(language: "js", code: "foo.bar()\nbaz()", file: nil)])
+        XCTAssertEqual(CodeAnswerSegment.parse("```\nREADME.md\n```"), [.code(language: "", code: "README.md", file: nil)])
+    }
+
+    func testLocatesFindBlockInTaggedFile() {
+        let find = "function initializeApp() {\n  render();\n}"
+        let loc = CodeBlockLocator.locate(code: "function initializeApp() {\n  boot();\n}", find: find, tagged: "app.js",
+                                          focused: "css/style.css", paths: paths) { self.files[$0] }
+        XCTAssertEqual(loc, .init(path: "app.js", line: 7, lineCount: 3))
+    }
+
+    func testFallsBackToDefinedName() {
+        let loc = CodeBlockLocator.locate(code: "function getSeattleScheduleMode(now) {\n  return 'x';\n}", find: nil, tagged: nil,
+                                          focused: nil, paths: paths) { self.files[$0] }
+        XCTAssertEqual(loc?.path, "app.js")
+        XCTAssertEqual(loc?.line, 3)
+    }
+
+    func testResolvesBySuffixAndLeaf() {
+        XCTAssertEqual(CodeBlockLocator.resolve("style.css", in: paths), "css/style.css")
+        XCTAssertEqual(CodeBlockLocator.resolve("./app.js", in: paths), "app.js")
+        XCTAssertNil(CodeBlockLocator.resolve("nope.js", in: paths))
+    }
+
+    func testIdentifierFindsDefinitionOverUse() {
+        let loc = CodeBlockLocator.locate(identifier: "timeSignupStart", focused: nil, paths: paths) { self.files[$0] }
+        XCTAssertEqual(loc?.line, 1)
+        let fn = CodeBlockLocator.locate(identifier: "initializeApp()", focused: nil, paths: paths) { self.files[$0] }
+        XCTAssertEqual(fn?.line, 7)
+        XCTAssertNil(CodeBlockLocator.locate(identifier: "nothingHere", focused: nil, paths: paths) { self.files[$0] })
     }
 }

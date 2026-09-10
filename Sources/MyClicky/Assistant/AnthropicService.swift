@@ -368,7 +368,11 @@ struct AnthropicService {
     for that: for an edit to existing code, give two fenced blocks in a row \
     — first the current code copied verbatim from the file (enough lines to \
     be unique), then the replacement. For a new file or a full rewrite, give \
-    the whole file in one block. Name the file just before the blocks.
+    the whole file in one block. Put the file's path after the language on \
+    every fence — ```js app.js — so the panel can open that spot. The path \
+    goes ONLY on the fence line, never as a line inside the block: the block \
+    must contain nothing but code that belongs in the file. When you \
+    mention a function, variable, or file in prose, wrap the name in backticks.
 
     Format for a monospaced terminal-style panel: plain text, short \
     paragraphs, code in fenced blocks with the language named. No tables, \
