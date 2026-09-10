@@ -321,26 +321,25 @@ struct NumpadView: View {
                 Image(systemName: icon)
                     .font(.system(size: 20, weight: .bold))
                     .frame(width: 40, height: 40)
-                    .foregroundStyle(selected ? Color.white : accent)
+                    .foregroundStyle(.white)
                     .background(
                         Circle()
-                            .fill(selected
-                                  ? AnyShapeStyle(LinearGradient(colors: [accent.lighter(0.2), accent.darker(0.1)],
-                                                                 startPoint: .top, endPoint: .bottom))
-                                  : AnyShapeStyle(accent.opacity(0.14)))
-                            .overlay(Circle().strokeBorder(selected ? .white.opacity(0.6) : accent.opacity(0.35),
-                                                           lineWidth: 1))
+                            .fill(LinearGradient(
+                                colors: selected ? [accent.lighter(0.25), accent]
+                                    : [accent.lighter(0.15), accent.darker(0.05)],
+                                startPoint: .top, endPoint: .bottom))
+                            .overlay(Circle().strokeBorder(.white.opacity(selected ? 0.75 : 0.22),
+                                                           lineWidth: selected ? 2 : 1))
                             .shadow(color: selected ? accent.opacity(0.6) : .clear, radius: 8, y: 2)
                     )
+                    .scaleEffect(selected ? 1.08 : 1)
                 Text(title)
-                    .font(.system(size: 9, design: .monospaced).weight(.black))
-                    .kerning(0.5)
+                    .font(.system(size: 10, design: .rounded).weight(.heavy))
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
-                    .foregroundStyle(selected ? Snes.text : Snes.text.opacity(0.6))
+                    .foregroundStyle(selected ? accent.darker(0.15) : Snes.text)
             }
             .padding(.horizontal, 2)
-            .scaleEffect(selected ? 1.0 : 0.94)
             .animation(.spring(response: 0.25, dampingFraction: 0.7), value: selected)
         }
         .buttonStyle(.plain)
@@ -1626,15 +1625,19 @@ struct NumpadView: View {
         GeometryReader { geo in
             let gap: CGFloat = 12
             let topInset: CGFloat = 12
-            // Reserve the switch, banner and photo row before sizing the squares.
-            // On compact heights the grid narrows symmetrically to avoid clipping.
+            // Reserve enough square width for the unchanged hero labels and
+            // horizontal photo captions, shrinking the chrome on compact heights.
             let rowH = (geo.size.height - topInset - gap * 6) / 7.8
-            let switchH = max(64, rowH * 1.55)
-            let bannerH = max(64, rowH)
+            let columnW = (geo.size.width - gap) / 2
+            let minimumPhotoH: CGFloat = 56
+            let chromeBudget = max(100, geo.size.height - topInset - gap * 4
+                                   - minimumPhotoH - min(120, columnW) * 2)
+            let switchH = min(max(64, rowH * 1.55), max(64, chromeBudget - max(64, rowH)))
+            let bannerH = min(max(64, rowH), max(36, chromeBudget - switchH))
             let available = geo.size.height - topInset - gap * 4 - switchH - bannerH
-            let heroW = max(0, min((geo.size.width - gap) / 2, (available - 64) / 2))
+            let heroW = max(0, min(columnW, (available - minimumPhotoH) / 2))
             let heroH = heroW
-            let photoH = max(64, available - heroH * 2)
+            let photoH = max(minimumPhotoH, available - heroH * 2)
             VStack(spacing: gap) {
                 ScreenSwitch(count: client.screenCount, current: client.currentScreen) { n in
                     client.screen(n)
@@ -1729,6 +1732,19 @@ struct NumpadView: View {
                             .lineLimit(1)
                     }
                     .padding(.horizontal, 14)
+                } else if !hero, let label {
+                    HStack(spacing: 10) {
+                        Image(systemName: icon ?? "")
+                            .font(.system(size: 20, weight: .semibold))
+                        Text(label)
+                            .font(.system(size: 14, weight: .heavy, design: .rounded))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                    .padding(.horizontal, 14)
+                    .contentTransition(.opacity)
+                    .animation(.easeInOut(duration: 0.2), value: label)
                 } else {
                     ZStack(alignment: .topLeading) {
                         Image(systemName: icon ?? "")
