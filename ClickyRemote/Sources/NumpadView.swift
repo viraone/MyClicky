@@ -583,13 +583,13 @@ struct NumpadView: View {
                     .font(.system(.title, design: .rounded).weight(.bold))
                     .dynamicTypeSize(.large ... .accessibility4)
                     .foregroundStyle(.white)
-                (run ? Text("Are you sure you want to run this in \(Text(recipient).bold())?")
+                (run ? Text("Are you sure you want to run this in \(Text(recipient).fontWeight(.heavy).foregroundColor(.white))?")
                      : recipient.isEmpty ? Text("Are you sure you want to send this message?")
-                     : Text("Are you sure you want to send this message to \(Text(recipient).bold())?"))
-                    .font(.system(.body, design: .rounded))
+                     : Text("Are you sure you want to send this message to \(Text(recipient).fontWeight(.heavy).foregroundColor(.white))?"))
+                    .font(.system(.body, design: .rounded).weight(.medium))
                     .dynamicTypeSize(.large ... .accessibility4)
                     .multilineTextAlignment(.center)
-                    .foregroundStyle(.white.opacity(0.75))
+                    .foregroundStyle(.white.opacity(0.9))
                     .fixedSize(horizontal: false, vertical: true)
             }
             .accessibilityElement(children: .combine)
@@ -641,8 +641,8 @@ struct NumpadView: View {
 
     private func previewQuote(_ preview: String) -> some View {
         Text(preview)
-            .font(.system(.callout, design: .monospaced))
-            .foregroundStyle(.white.opacity(0.85))
+            .font(.system(.callout, design: .monospaced).weight(.semibold))
+            .foregroundStyle(.white)
             .lineLimit(6)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(14)
