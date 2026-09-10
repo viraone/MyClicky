@@ -252,10 +252,10 @@ struct NumpadView: View {
         // pad is up until it's answered.
         .overlay {
             if let confirm = client.pendingConfirm {
+                // Edge to edge: nothing of the pad underneath should show.
                 confirmView(confirm)
-                    .padding(12)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.black.opacity(0.35))
+                    .background(Color.black)
                     .clipShape(RoundedRectangle(cornerRadius: 20))
                     .transition(.scale(scale: 0.94).combined(with: .opacity))
             } else if let choice = client.pendingChoice {
@@ -540,9 +540,10 @@ struct NumpadView: View {
             }
         }
         .padding(22)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(
             // Alpine sunset behind the card, dimmed enough to read white on.
-            RoundedRectangle(cornerRadius: 28)
+            RoundedRectangle(cornerRadius: 20)
                 .fill(Color(red: 0.07, green: 0.07, blue: 0.09))
                 .overlay(
                     Image(uiImage: Self.confirmBackdrop ?? UIImage())
@@ -553,8 +554,8 @@ struct NumpadView: View {
                                            startPoint: .top, endPoint: .bottom)
                         )
                 )
-                .clipShape(RoundedRectangle(cornerRadius: 28))
-                .overlay(RoundedRectangle(cornerRadius: 28).strokeBorder(.white.opacity(0.18), lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: 20))
+                .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.white.opacity(0.18), lineWidth: 1))
                 .shadow(color: .black.opacity(0.45), radius: 30, y: 12)
         )
     }
