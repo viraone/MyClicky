@@ -17,6 +17,13 @@ enum KeychainService {
         read(account: "anthropic-workspace")
     }
 
+    /// Optional: an Admin API key (`sk-ant-admin01-…`) that lets Peeky read
+    /// the organization's real spend. Store with
+    /// `security add-generic-password -s MyClicky -a anthropic-admin -w KEY`.
+    static func anthropicAdminKey() -> String? {
+        read(account: "anthropic-admin")
+    }
+
     /// Per-process cache. Every read goes through SecItemCopyMatching, which
     /// blocks the calling thread while any keychain prompt is up — and the
     /// unread watchers, planner and services all read on the main thread.

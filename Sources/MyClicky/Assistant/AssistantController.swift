@@ -294,8 +294,341 @@ final class AssistantController {
         panel.state.editedCaptureImage = nil
         panel.state.attachmentKind = .capture
     }
+
+    // MARK: - Peeky Code (questions about a dropped project)
+
+    /// The Code tab's + menu and drop-zone button: pick a folder, or files.
+    private func pickCodeProject() {
+        let open = NSOpenPanel()
+        open.title = "Choose a project"
+        open.message = "Pick a project folder (or a few source files). Peeky reads the code and answers questions about it."
+        open.prompt = "Open"
+        open.canChooseFiles = true
+        open.canChooseDirectories = true
+        open.allowsMultipleSelection = true
+        open.level = .floating
+        open.directoryURL = panel.state.codeProject?.root.deletingLastPathComponent()
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")
+        NSApp.activate(ignoringOtherApps: true)
+        open.begin { [weak self] response in
+            guard response == .OK, let self else { return }
+            self.loadCodeProject(urls: open.urls, via: "picker")
+        }
+    }
+
+    /// Reads the dropped folder off the main thread and swaps it in. A new
+    /// project starts a fresh conversation; the old one was about other code.
+    private func loadCodeProject(urls: [URL], via: String) {
+        guard !urls.isEmpty else { return }
+        let previousRoot = panel.state.codeProject?.root
+        panel.state.tab = .code
+        panel.state.codeLoading = true
+        panel.state.errorText = nil
+        Task {
+            let project = await Task.detached(priority: .userInitiated) {
+                CodeProjectBundler.bundle(urls: urls)
+            }.value
+            panel.state.codeLoading = false
+            guard let project, !project.files.isEmpty else {
+                hud.report("No code found there — Peeky reads source and text files, not images or binaries.", ok: false)
+                return
+            }
+            if project.root != previousRoot {
+                panel.state.codeLog = []
+                panel.state.codeUsage = nil
+                panel.state.codeFocusedFile = nil
+                panel.state.codeShowingFiles = false
+            } else if let focused = panel.state.codeFocusedFile, project.file(at: focused) == nil {
+                panel.state.codeFocusedFile = nil
+            }
+            panel.state.codeEdits = [:]
+            panel.state.codeLastSaved = nil
+            if panel.state.codeProject?.root != project.root { panel.state.codeCollapsedFolders = [] }
+            panel.state.codeProject = project
+            if let focused = panel.state.codeFocusedFile {
+                panel.state.codeDraft = project.file(at: focused)?.text ?? ""
+            }
+            var line = "Loaded \(project.name) — \(project.summaryLine)."
+            if !project.skippedFolders.isEmpty {
+                line += " Skipped \(project.skippedFolders.joined(separator: ", "))."
+            }
+            if project.truncated {
+                line += " Too big to send whole: \(project.skippedFiles.count) files left out — drop a subfolder for those."
+            }
+            panel.state.logCode(.status, line)
+            refreshLiveCost()
+            ActivityLog.recordAction("code-project", ["via": via, "files": "\(project.files.count)",
+                                                      "tokens": "\(project.estimatedTokens)",
+                                                      "truncated": project.truncated ? "1" : "0"])
+        }
+    }
+
+    /// Re-reads the same folder after the user edited files in their editor.
+    /// The bundle bytes change, so the next question re-primes the cache.
+    private func reloadCodeProject() {
+        guard let project = panel.state.codeProject else { return }
+        loadCodeProject(urls: [project.root], via: "reload")
+    }
+
+    private func removeCodeProject() {
+        panel.state.codeProject = nil
+        panel.state.codeUsage = nil
+        panel.state.codeLog = []
+        panel.state.codeFocusedFile = nil
+        panel.state.codeShowingFiles = false
+        panel.state.codeEdits = [:]
+        panel.state.codeLastSaved = nil
+        ActivityLog.recordAction("code-project-remove", [:])
+    }
+
+    // MARK: Peeky Code — run in Simulator
+
+    private let xcodeRunner = XcodeRunner()
+
+    /// ▶ Run: xcodebuild + simctl, output mirrored to the Terminal tab,
+    /// problems parsed into clickable rows. No Claude call anywhere.
+    private func runCodeInSimulator() {
+        guard let project = panel.state.codeProject,
+              let container = XcodeRunner.container(in: project.root),
+              !panel.state.codeRunning else { return }
+        panel.state.codeBuildErrors = []
+        // Make sure edits in the preview are on disk before the compiler reads them.
+        if panel.state.codeDraftDirty, let path = panel.state.codeFocusedFile {
+            saveCodeFile(path: path, text: panel.state.codeDraft)
+        }
+        ActivityLog.recordAction("code-run", ["project": project.name])
+        let term = panel.state.terminal
+        term.start(in: project.root)
+        term.view.feed(text: "\r\n\u{1b}[2m── Peeky ▶ Run: \(container.lastPathComponent) ──\u{1b}[0m\r\n")
+        Task { @MainActor in
+            await xcodeRunner.run(root: project.root, container: container,
+                                  onPhase: { [weak self] phase in
+                                      guard let self, self.panel.state.codeRunPhase != .cancelled else { return }
+                                      self.panel.state.codeRunPhase = phase
+                                      switch phase {
+                                      case .succeeded(let device, let seconds):
+                                          self.panel.state.logCode(.status, "Build succeeded — running on \(device) (\(seconds) s).")
+                                      case .failed(let errors, _):
+                                          self.panel.state.logCode(.error, "Build failed with \(errors) error\(errors == 1 ? "" : "s") — click one above to ask Peeky.")
+                                      default: break
+                                      }
+                                  },
+                                  onErrors: { [weak self] errors in self?.panel.state.codeBuildErrors = errors },
+                                  onOutput: { line in term.view.feed(text: line + "\r\n") })
+        }
+    }
+
+    // MARK: Peeky Code — editing
+
+    /// Writes an edit to disk. The project snapshot Claude has cached is
+    /// left alone; the new text is remembered in `codeEdits` and sent with
+    /// the next question as a small addendum. Refuses to overwrite a file
+    /// something else changed since Peeky last read it.
+    private func saveCodeFile(path: String, text: String) {
+        guard let project = panel.state.codeProject,
+              let known = panel.state.codeCurrentText(of: path) else { return }
+        let url = project.root.appendingPathComponent(path)
+        if let onDisk = try? String(contentsOf: url, encoding: .utf8), onDisk != known {
+            hud.report("\(url.lastPathComponent) changed on disk since Peeky read it — press ↻ to reload before editing.", ok: false)
+            panel.state.codeDraft = known
+            return
+        }
+        do {
+            try text.write(to: url, atomically: true, encoding: .utf8)
+            panel.state.codeEdits[path] = text
+            panel.state.codeLastSaved = Date()
+            ActivityLog.recordAction("code-save", ["path": path, "chars": "\(text.count)"])
+        } catch {
+            hud.report("Couldn't save \(url.lastPathComponent): \(error.localizedDescription)", ok: false)
+        }
+    }
+
+    private func applyCodeBlock(_ code: String, replacing find: String?) {
+        guard let path = panel.state.codeFocusedFile,
+              let current = panel.state.codeCurrentText(of: path) else { return }
+        let name = (path as NSString).lastPathComponent
+        let (updated, outcome) = CodeBlockApplier.apply(code, replacing: find, in: panel.state.codeDraftDirty ? panel.state.codeDraft : current)
+        switch outcome {
+        case .replaced(let lines):
+            panel.state.codeDraft = updated
+            saveCodeFile(path: path, text: updated)
+            panel.state.logCode(.status, "Replaced \(lines) line\(lines == 1 ? "" : "s") in \(name) — saved.")
+        case .rewroteFile:
+            panel.state.codeDraft = updated
+            saveCodeFile(path: path, text: updated)
+            panel.state.logCode(.status, "Rewrote \(name) with that block — saved.")
+        case .notFound:
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(code, forType: .string)
+            hud.report("Couldn't find where that goes in \(name) — copied it instead; paste it where it belongs.", ok: false)
+        }
+        ActivityLog.recordAction("code-apply", ["path": path, "outcome": "\(outcome)"])
+    }
+
+    private var lastCostFetch: Date = .distantPast
+
+    /// Pulls the real spend if an Admin key is in Keychain. Free to call,
+    /// but throttled; `force` skips the throttle after a question so the
+    /// pill moves with use. The usage report lags a few minutes, so a
+    /// forced refresh also schedules a follow-up.
+    private func refreshLiveCost(force: Bool = false) {
+        guard let adminKey = KeychainService.anthropicAdminKey(), !adminKey.isEmpty else { return }
+        guard force || Date().timeIntervalSince(lastCostFetch) > 60 else { return }
+        lastCostFetch = Date()
+        Task { [weak self] in
+            do {
+                let cost = try await AnthropicService.fetchLiveCost(adminKey: adminKey)
+                self?.panel.state.codeLiveCost = cost
+            } catch {
+                log.notice("live cost fetch failed: \(error.localizedDescription)")
+            }
+        }
+        if force {
+            // The usage report needs a little while to see the call.
+            for delay in [30, 150] {
+                Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(delay))
+                    self?.lastCostFetch = .distantPast
+                    self?.refreshLiveCost()
+                }
+            }
+        }
+    }
+
+    /// Dropped on the Code tab: image files become question attachments,
+    /// anything else is the project.
+    private func dropIntoCode(urls: [URL]) {
+        let images = urls.filter { url in
+            !((try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false)
+                && (UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) ?? false)
+        }
+        if !images.isEmpty { addCodeImages(urls: images, via: "drop") }
+        let rest = urls.filter { !images.contains($0) }
+        if !rest.isEmpty { loadCodeProject(urls: rest, via: "drop") }
+    }
+
+    private func attachImagesToCode() {
+        let open = NSOpenPanel()
+        open.title = "Images for your code question"
+        open.message = "Screenshots, mockups, error dialogs — up to \(AssistantState.maxCodeImages), sent with every question until removed."
+        open.prompt = "Attach"
+        open.canChooseFiles = true
+        open.canChooseDirectories = false
+        open.allowsMultipleSelection = true
+        open.allowedContentTypes = [.image]
+        open.level = .floating
+        NSApp.activate(ignoringOtherApps: true)
+        open.begin { [weak self] response in
+            guard response == .OK, let self else { return }
+            self.addCodeImages(urls: open.urls, via: "picker")
+        }
+    }
+
+    private func addCodeImages(urls: [URL], via: String) {
+        let images = urls.compactMap { url -> (NSImage, String)? in
+            guard let image = NSImage(contentsOf: url) else { return nil }
+            return (image, url.lastPathComponent)
+        }
+        addCodeImages(images, via: via)
+    }
+
+    /// ⌘V on the Code tab with a picture on the clipboard — the usual case
+    /// is a Peeky Capture taken a moment ago.
+    private func pasteCodeImage() {
+        guard let images = NSPasteboard.general.readObjects(forClasses: [NSImage.self], options: nil) as? [NSImage],
+              !images.isEmpty else { return }
+        let stamp = Self.pasteClock.string(from: Date())
+        let named = images.enumerated().map { ($0.element, images.count == 1 ? "\(stamp).png" : "\(stamp)-\($0.offset + 1).png") }
+        addCodeImages(named, via: "paste")
+    }
+
+    private static let pasteClock: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH.mm.ss"
+        return f
+    }()
+
+    private func addCodeImages(_ images: [(NSImage, String)], via: String) {
+        let room = AssistantState.maxCodeImages - panel.state.codeImages.count
+        guard room > 0 else {
+            hud.report("That's \(AssistantState.maxCodeImages) images — remove one to add another.", ok: false)
+            return
+        }
+        var added = 0
+        for (image, name) in images.prefix(room) where image.isValid && image.size.width > 0 {
+            panel.state.codeImages.append(AssistantState.AskAttachment(image: image, name: name))
+            added += 1
+        }
+        if added > 0 {
+            panel.state.logCode(.status, "Attached \(added) image\(added == 1 ? "" : "s") — Peeky sees them with each question.")
+        }
+        ActivityLog.recordAction("code-attach-image", ["via": via, "added": "\(added)"])
+    }
+
+    private func handleCodeQuestion(_ question: String) {
+        let question = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !question.isEmpty, !busy else { return }
+        guard let project = panel.state.codeProject else {
+            panel.state.logCode(.error, "Drop a project folder first — then ask away.")
+            return
+        }
+        guard let apiKey = KeychainService.anthropicAPIKey() else {
+            panel.state.logCode(.error, "No Anthropic API key found in Keychain.\n\nRun this once in Terminal:\n\(KeychainService.setupCommand)")
+            return
+        }
+        ActivityLog.recordAction("code-ask", ["text": question, "files": "\(project.files.count)"])
+        let history = panel.state.codeHistory
+        let focusedFile = panel.state.codeFocusedFile
+        let changedFiles = panel.state.codeChangedFiles
+        let images = panel.state.codeImages.compactMap { item in
+            Self.jpegData(item.image, maxDimension: 1400).map { (name: item.name, jpeg: $0) }
+        }
+        panel.state.logCode(.question, question)
+        busy = true
+        synthesizer.stopSpeaking(at: .immediate)
+        panel.state.status = .thinking
+        panel.state.errorText = nil
+
+        requestID += 1
+        let id = requestID
+        currentTask = Task {
+            defer {
+                if id == requestID {
+                    busy = false
+                    currentTask = nil
+                    if talkSession { afterTalkSegment() }
+                }
+            }
+            do {
+                let claude = AnthropicService(apiKey: apiKey)
+                let answer = try await claude.askAboutCode(question: question, project: project,
+                                                           focusedFile: focusedFile, images: images,
+                                                           changedFiles: changedFiles,
+                                                           history: history) { [weak self] status in
+                    guard let self, id == self.requestID else { return }
+                    self.panel.state.logCode(.status, status)
+                }
+                try Task.checkCancellation()
+                guard id == requestID else { return }
+                panel.state.status = .answering
+                panel.state.codeUsage = answer.usage
+                panel.state.logCode(.answer, answer.text)
+                if let usage = answer.usage {
+                    panel.state.codeSpentUSD += usage.costUSD
+                    refreshLiveCost(force: true)
+                    ActivityLog.recordAction("code-answer", ["cache_read": "\(usage.cacheRead)",
+                                                             "cache_write": "\(usage.cacheWrite)",
+                                                             "input": "\(usage.input)", "output": "\(usage.output)"])
+                }
+            } catch {
+                guard id == requestID, !Task.isCancelled else { return }
+                panel.state.status = .idle
+                panel.state.logCode(.error, error.localizedDescription)
+            }
+        }
+    }
     /// What the current listening session will do with what it hears.
-    private enum RecordKind { case ask, dictate, talk }
+    private enum RecordKind { case ask, dictate, talk, code }
     private var recordKind: RecordKind = .ask
     /// The app a Talk command should act on, captured when recording starts —
     /// Peeky's own panel is non-activating, so this stays the real target.
@@ -318,6 +651,9 @@ final class AssistantController {
     /// answer lands, the panel is brought to the full Ask card even if
     /// something shrank it meanwhile.
     private var phoneAskInFlight = false
+    /// The Mac panel is on Peeky Code with a project loaded — the phone's ASK
+    /// is a question about that code, not about the screen.
+    private var codeTabPinned: Bool { panel.state.tab == .code && panel.state.codeProject != nil }
     /// Words already run as segments this session, in transcript order.
     private var talkDispatched: [String] = []
     /// Everything the last Talk session ran, kept after it ends: the phone
@@ -368,6 +704,27 @@ final class AssistantController {
             ActivityLog.recordAction("ask-history-clear", [:])
         }
         panel.state.onDropIntoAsk = { [weak self] urls in self?.addAskAttachments(urls: urls, via: "drop") }
+        panel.state.onDropIntoCode = { [weak self] urls in self?.dropIntoCode(urls: urls) }
+        panel.state.onAttachCodeImages = { [weak self] in self?.attachImagesToCode() }
+        panel.state.onPasteCodeImage = { [weak self] in self?.pasteCodeImage() }
+        panel.state.onRunCode = { [weak self] in self?.runCodeInSimulator() }
+        panel.state.onCancelRun = { [weak self] in
+            self?.xcodeRunner.cancel()
+            self?.panel.state.codeRunPhase = .cancelled
+        }
+        panel.state.onRestartTerminal = { [weak self] in
+            guard let self else { return }
+            // Same folder and still running → no-op, so onAppear is safe.
+            self.panel.state.terminal.start(in: self.panel.state.codeProject?.root)
+            self.panel.state.objectWillChange.send()
+            self.panel.state.terminal.view.window?.makeFirstResponder(self.panel.state.terminal.view)
+        }
+        panel.state.onSaveCodeFile = { [weak self] path, text in self?.saveCodeFile(path: path, text: text) }
+        panel.state.onApplyCodeBlock = { [weak self] code, find in self?.applyCodeBlock(code, replacing: find) }
+        panel.state.onAttachCodeProject = { [weak self] in self?.pickCodeProject() }
+        panel.state.onReloadCodeProject = { [weak self] in self?.reloadCodeProject() }
+        panel.state.onRemoveCodeProject = { [weak self] in self?.removeCodeProject() }
+        panel.state.onAskCode = { [weak self] text in self?.handleCodeQuestion(text) }
         panel.state.onPasteIntoAsk = { [weak self] in self?.pasteIntoAsk() }
         captureFileWatcher.onChange = { [weak self] image in self?.handleCaptureEdited(image) }
         panel.state.onReadAloud = { [weak self] in self?.replayAnswer() }
@@ -393,7 +750,7 @@ final class AssistantController {
             guard let self else { return }
             // A finished TALK leaves `talkStreaming` set (holding its green
             // "Done."); that must not pin the phone's next ASK to the Talk tab.
-            if !self.busy, !self.talkStreaming || self.streamQuestionsOnly { self.panel.state.tab = .ask }
+            if !self.busy, !self.talkStreaming || self.streamQuestionsOnly, !self.codeTabPinned { self.panel.state.tab = .ask }
             self.showPanel()
         }
         remote.onListen = { [weak self] in
@@ -406,6 +763,13 @@ final class AssistantController {
             if self.panel.state.tab == .talk {
                 if self.busy || self.talkStreaming { self.abandonWork() }
                 self.panel.state.tab = .ask
+            }
+            // On Peeky Code with a project up, the question is about the code:
+            // same pause-to-answer streaming as Ask, routed to the code flow.
+            if self.codeTabPinned {
+                self.showPanel(listening: true, full: true)
+                self.beginTalkStreaming(questionsOnly: true)
+                return
             }
             let asking = self.panel.state.tab == .ask
             if asking { self.phoneAskInFlight = true }
@@ -438,10 +802,10 @@ final class AssistantController {
             if self.panel.isVisible && !self.panel.state.collapsed {
                 self.panel.minimize()
             } else if self.panel.isVisible {
-                if !self.talkStreaming && !self.busy { self.panel.state.tab = .ask }
+                if !self.talkStreaming && !self.busy && !self.codeTabPinned { self.panel.state.tab = .ask }
                 self.panel.expand()
             } else {
-                if !self.talkStreaming && !self.busy { self.panel.state.tab = .ask }
+                if !self.talkStreaming && !self.busy && !self.codeTabPinned { self.panel.state.tab = .ask }
                 self.showPanel()
             }
         }
@@ -450,6 +814,10 @@ final class AssistantController {
             self.showPanel()
             switch name {
             case "DICTATE", "CAPTURE", "CAPTURE_DICTATE": self.panel.state.tab = .captureDictate
+            case "CODE": self.panel.state.tab = .code
+            // The phone's ASK key sends TAB ASK before it listens. With a
+            // project open on Peeky Code, that ask is about the code — stay.
+            case "ASK" where self.codeTabPinned: break
             default: self.panel.state.tab = .ask
             }
         }
@@ -615,10 +983,21 @@ final class AssistantController {
         remote.onAsk = { [weak self] question in
             guard let self else { return }
             // ASK from the phone always reads on the Ask tab, full size — the
-            // only exception is the Mac deliberately parked on Capture + Dictate.
+            // exceptions are the Mac deliberately parked on Capture + Dictate,
+            // or on Peeky Code with a project loaded (the question is about it).
             // A Talk still running would make handleQuestion drop the question
             // on its busy guard; the user's ASK wins.
             if self.busy, !self.streamQuestionsOnly { self.abandonWork() }
+            if self.codeTabPinned {
+                self.showPanel(full: true)
+                self.panel.state.transcript = question
+                if self.talkStreaming, self.streamQuestionsOnly {
+                    self.finishTalkStreaming(final: question)
+                } else {
+                    self.handleCodeQuestion(question)
+                }
+                return
+            }
             if self.panel.state.tab != .captureDictate { self.panel.state.tab = .ask }
             self.phoneAskInFlight = true
             self.showPanel(full: true)
@@ -858,6 +1237,7 @@ final class AssistantController {
         case .ask: .ask
         case .dictate: .captureDictate
         case .talk: .talk
+        case .code: .code
         }
         panel.state.status = .listening
         panel.state.transcript = ""
@@ -868,7 +1248,7 @@ final class AssistantController {
         speech.onPartial = { [weak self] text in
             self?.applyPartial(text)
         }
-        if kind == .talk || kind == .ask { beginTalkStreaming(questionsOnly: kind == .ask) }
+        if kind == .talk || kind == .ask || kind == .code { beginTalkStreaming(questionsOnly: kind != .talk) }
 
         Task {
             guard await SpeechService.requestPermissions() else {
@@ -890,7 +1270,7 @@ final class AssistantController {
         recordKind = .ask
         Task {
             let heard = await speech.finish()
-            if (kind == .talk || kind == .ask), talkStreaming {
+            if (kind == .talk || kind == .ask || kind == .code), talkStreaming {
                 if !heard.isEmpty { panel.state.transcript = heard }
                 finishTalkStreaming(final: heard)
                 return
@@ -913,6 +1293,7 @@ final class AssistantController {
             case .dictate: finishDictation(heard)
             case .ask: handleQuestion(heard)
             case .talk: handleDo(heard, targetApp: target)
+            case .code: handleCodeQuestion(heard)
             }
         }
     }
@@ -1122,7 +1503,7 @@ final class AssistantController {
             talkTargetApp = front
         }
         if streamQuestionsOnly {
-            handleQuestion(segment)
+            if codeTabPinned { handleCodeQuestion(segment) } else { handleQuestion(segment) }
         } else {
             handleDo(segment, targetApp: talkTargetApp)
         }
@@ -1155,10 +1536,15 @@ final class AssistantController {
     /// finishes the recording (no hold required) — a question on the Ask tab,
     /// a dictation on Capture + Dictate, a command to carry out on Talk.
     private func toggleRecording() {
+        guard panel.state.tab != .terminal else {
+            hud.report("The Terminal tab has no mic — switch to Peeky Ask or Peeky Code to talk.", ok: false)
+            return
+        }
         let kind: RecordKind = switch panel.state.tab {
         case .ask: .ask
         case .captureDictate: .dictate
         case .talk: .talk
+        case .code, .terminal: .code
         }
         if panel.state.status == .listening || talkStreaming {
             if recordKind == kind {
@@ -1808,7 +2194,9 @@ final class AssistantController {
             panel.state.transcript = ""
         } else if panel.state.status == .thinking {
             panel.state.status = .idle
-            if panel.state.answer.isEmpty || panel.state.answer.hasSuffix("…") {
+            if panel.state.tab == .code {
+                panel.state.logCode(.status, "Stopped.")
+            } else if panel.state.answer.isEmpty || panel.state.answer.hasSuffix("…") {
                 panel.state.answer = "Stopped."
                 panel.state.logTalk(.status, "Stopped.")
             }

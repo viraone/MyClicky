@@ -55,17 +55,20 @@ enum AssistantPhase: Equatable {
     }
 }
 
-/// The three card shapes. `half` is a narrow column — half the tall card's
+/// The four card shapes. `half` is a narrow column — half the tall card's
 /// width at its full height — for parking Peeky down one side of the
-/// screen next to what's being worked on. Tabs go icon-only to fit.
+/// screen next to what's being worked on. Tabs go icon-only to fit. `full`
+/// is the normal width run the whole height of the screen, for reading
+/// code and a long answer at once.
 enum PanelSize: Int, CaseIterable, Comparable {
-    case half, normal, tall
+    case half, normal, tall, full
     static func < (a: PanelSize, b: PanelSize) -> Bool { a.rawValue < b.rawValue }
     var symbol: String {
         switch self {
         case .half: return "rectangle.lefthalf.inset.filled"
         case .normal: return "rectangle.inset.filled"
         case .tall: return "rectangle.portrait.inset.filled"
+        case .full: return "rectangle.expand.vertical"
         }
     }
     var label: String {
@@ -73,6 +76,7 @@ enum PanelSize: Int, CaseIterable, Comparable {
         case .half: return "Half width — a tall column down one side"
         case .normal: return "Normal"
         case .tall: return "Tall — room for a long answer"
+        case .full: return "Full height — top to bottom of the screen"
         }
     }
 }
@@ -80,20 +84,32 @@ enum PanelSize: Int, CaseIterable, Comparable {
 enum AssistantTab: String, CaseIterable {
     /// Listed first so it's the leftmost tab: asking is what the panel is
     /// for most of the time.
-    case ask = "Ask / Question"
+    case ask = "Peeky Ask"
     /// Region captures and dictation share one tab; both land on the clipboard together.
-    case captureDictate = "Capture + Dictate"
+    case captureDictate = "Peeky Capture"
     /// Voice/typed commands Peeky *acts on* (e.g. "create a calendar event
     /// at 2pm"), same plan-and-do flow as the phone's TALK button.
-    case talk = "Talk / Request"
+    case talk = "Peeky Actions"
+    /// A dropped project folder Claude can answer questions about. The
+    /// project text is prompt-cached, so follow-ups cost a fraction of the
+    /// first question.
+    case code = "Peeky Code"
+    /// A real shell, started in the Peeky Code project's folder. Local
+    /// only — never talks to Claude.
+    case terminal = "Terminal"
 
     var icon: String {
         switch self {
         case .ask: "bubble.left.and.text.bubble.right"
         case .captureDictate: "camera.on.rectangle"
         case .talk: "bolt.fill"
+        case .code: "chevron.left.forwardslash.chevron.right"
+        case .terminal: "terminal"
         }
     }
+
+    /// Tabs with a mic: everything but the terminal.
+    var takesVoice: Bool { self != .terminal }
 
     /// One-word name for the half-width column's tab bar.
     var shortName: String {
@@ -101,8 +117,19 @@ enum AssistantTab: String, CaseIterable {
         case .ask: "Ask"
         case .captureDictate: "Capture"
         case .talk: "Talk"
+        case .code: "Code"
+        case .terminal: "Term"
         }
     }
+}
+
+/// One line of the Peeky Code tab's conversation.
+struct CodeLogEntry: Identifiable, Equatable {
+    enum Kind { case question, answer, status, error }
+    let id = UUID()
+    let time = Date()
+    let kind: Kind
+    let text: String
 }
 
 /// One line of the Talk tab's terminal-style log.
@@ -234,6 +261,172 @@ final class AssistantState: ObservableObject {
         copiedPreview = nil
     }
 
+    // MARK: Peeky Code
+
+    /// The project dropped on the Code tab, nil until one is.
+    @Published var codeProject: CodeProject?
+    /// True while a dropped folder is being read off disk.
+    @Published var codeLoading = false
+    /// Questions and answers about the project, oldest first.
+    @Published var codeLog: [CodeLogEntry] = []
+    /// What the last question cost — shown so the cache saving is visible.
+    @Published var codeUsage: AnthropicService.Usage?
+    /// The project card is expanded into its file list.
+    @Published var codeShowingFiles = false
+    /// Path of the file open in the preview, nil for the whole project.
+    @Published var codeFocusedFile: String? {
+        didSet {
+            if codeFocusedFile != nil { codeShowingFiles = false }
+            // A freshly opened file is there to be read; the caret only
+            // folds the one you're on.
+            if codeFocusedFile != nil, codeFocusedFile != oldValue { codeViewerCollapsed = false; closeCodeFind() }
+            codeDraft = codeFocusedFile.flatMap { codeCurrentText(of: $0) } ?? ""
+        }
+    }
+    /// Files Peeky has saved since the project was read, by path. The
+    /// project snapshot (and so the cached block Claude sees) stays as
+    /// loaded; these ride along with a question as a small addendum, which
+    /// costs pennies where re-bundling would be a full-price cache write.
+    @Published var codeEdits: [String: String] = [:]
+    /// The focused file's text as it stands in the editor.
+    @Published var codeDraft = "" {
+        didSet {
+            guard let path = codeFocusedFile, codeDraft != codeCurrentText(of: path) else {
+                codeSaveTask?.cancel(); return
+            }
+            // Autosave a beat after typing stops.
+            codeSaveTask?.cancel()
+            codeSaveTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard let self, !Task.isCancelled, self.codeFocusedFile == path else { return }
+                self.onSaveCodeFile?(path, self.codeDraft)
+            }
+        }
+    }
+    private var codeSaveTask: Task<Void, Never>?
+    /// When the focused file was last written to disk, for the header.
+    @Published var codeLastSaved: Date?
+
+    /// Folders in the file list the user has folded shut. Reset on load.
+    @Published var codeCollapsedFolders: Set<String> = []
+
+    // MARK: Run in Simulator
+    /// The Xcode project/workspace inside the loaded folder, if any — shows ▶ Run.
+    var codeXcodeContainer: URL? { codeProject.flatMap { XcodeRunner.container(in: $0.root) } }
+    @Published var codeRunPhase: XcodeRunner.Phase = .idle
+    @Published var codeBuildErrors: [XcodeRunner.BuildError] = []
+    /// Set by an error row; the editor scrolls there once the file is open.
+    @Published var codeJumpToLine: Int?
+    /// Text the bottom question box should adopt (an error row filled it in).
+    @Published var codePrefillQuestion: String?
+    var onRunCode: (() -> Void)?
+    var onCancelRun: (() -> Void)?
+    var codeRunning: Bool {
+        switch codeRunPhase { case .building, .installing: return true; default: return false }
+    }
+
+    // MARK: Code find bar
+    @Published var codeFindVisible = false
+    @Published var codeFindQuery = "" { didSet { if codeFindQuery != oldValue { codeFindIndex = 0 } } }
+    /// Which match is current, 0-based into `codeFindMatches`.
+    @Published var codeFindIndex = 0
+    /// Bumped to ask the find field to take keyboard focus.
+    @Published var codeFindFocusRequest = 0
+
+    /// Every place the query appears in the draft (case-insensitive).
+    var codeFindMatches: [NSRange] {
+        guard codeFindVisible, !codeFindQuery.isEmpty else { return [] }
+        let text = codeDraft as NSString
+        var out: [NSRange] = []
+        var from = 0
+        while from < text.length {
+            let r = text.range(of: codeFindQuery, options: [.caseInsensitive], range: NSRange(location: from, length: text.length - from))
+            if r.location == NSNotFound { break }
+            out.append(r)
+            from = r.location + max(r.length, 1)
+        }
+        return out
+    }
+    func codeFindStep(_ delta: Int) {
+        let count = codeFindMatches.count
+        guard count > 0 else { return }
+        codeFindIndex = ((codeFindIndex + delta) % count + count) % count
+    }
+    func closeCodeFind() {
+        codeFindVisible = false
+        codeFindQuery = ""
+    }
+
+    // MARK: Terminal
+    /// The shell behind the Terminal tab. Lives as long as the panel does,
+    /// so switching tabs doesn't lose your session.
+    let terminal = TerminalSession()
+    var onRestartTerminal: (() -> Void)?
+
+    /// The file as it currently is on disk (after any Peeky saves).
+    func codeCurrentText(of path: String) -> String? {
+        codeEdits[path] ?? codeProject?.file(at: path)?.text
+    }
+    var codeDraftDirty: Bool {
+        guard let path = codeFocusedFile, let current = codeCurrentText(of: path) else { return false }
+        return codeDraft != current
+    }
+    /// An answer's code block that's just quoting the open file as it is.
+    func codeBlockIsAlreadyInFile(_ code: String) -> Bool {
+        guard codeFocusedFile != nil else { return false }
+        return CodeBlockApplier.alreadyContains(code, in: codeDraft)
+    }
+    /// Edited files whose text differs from the snapshot Claude has cached.
+    var codeChangedFiles: [(path: String, text: String)] {
+        codeEdits.compactMap { path, text in
+            guard let original = codeProject?.file(at: path)?.text, original != text else { return nil }
+            return (path, text)
+        }.sorted { $0.path < $1.path }
+    }
+    /// The file preview is folded down to its header row.
+    @Published var codeViewerCollapsed = false
+    /// Pictures (screenshots, mockups, error dialogs) that ride along with
+    /// every code question until removed. Listed by name only.
+    @Published var codeImages: [AskAttachment] = []
+    static let maxCodeImages = 5
+    /// Estimated dollars spent on code questions since install, from the
+    /// token counts each answer reports. Persisted so it survives relaunch.
+    @Published var codeSpentUSD: Double = UserDefaults.standard.double(forKey: codeSpentKey) {
+        didSet { UserDefaults.standard.set(codeSpentUSD, forKey: Self.codeSpentKey) }
+    }
+    static let codeSpentKey = "peeky.code.spentUSD"
+    /// Real month-to-date spend from the Admin API, nil without an admin key
+    /// or before the first fetch. When present it replaces the estimate.
+    @Published var codeLiveCost: AnthropicService.LiveCost?
+
+    func logCode(_ kind: CodeLogEntry.Kind, _ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        codeLog.append(CodeLogEntry(kind: kind, text: trimmed))
+    }
+
+    /// The Q&A pairs sent back with the next question so it can build on
+    /// them. Status and error lines aren't part of the conversation.
+    var codeHistory: [(question: String, answer: String)] {
+        var pairs: [(String, String)] = []
+        var pendingQuestion: String?
+        for entry in codeLog {
+            switch entry.kind {
+            case .question: pendingQuestion = entry.text
+            case .answer:
+                if let q = pendingQuestion { pairs.append((q, entry.text)); pendingQuestion = nil }
+            case .status, .error: continue
+            }
+        }
+        return pairs
+    }
+
+    func clearCodeLog() {
+        codeLog = []
+        codeUsage = nil
+        errorText = nil
+    }
+
     /// Back to listening after a segment ran mid-recording, already in the
     /// paused (amber) state rather than flashing "recording".
     func resumeListeningPaused() {
@@ -357,6 +550,20 @@ final class AssistantState: ObservableObject {
     /// Files dropped on, or pasted into, the Ask tab.
     var onDropIntoAsk: (([URL]) -> Void)?
     var onPasteIntoAsk: (() -> Void)?
+    /// Peeky Code: a folder or files dropped or picked for the project,
+    /// re-reading it from disk after edits, letting it go, and asking.
+    var onDropIntoCode: (([URL]) -> Void)?
+    var onAttachCodeProject: (() -> Void)?
+    var onAttachCodeImages: (() -> Void)?
+    var onPasteCodeImage: (() -> Void)?
+    /// Write `text` to the project file at `path` (relative to the root).
+    var onSaveCodeFile: ((String, String) -> Void)?
+    /// Put a code block from an answer into the focused file. `find` is the
+    /// block that preceded it in the answer, if any — the code to replace.
+    var onApplyCodeBlock: ((_ code: String, _ find: String?) -> Void)?
+    var onReloadCodeProject: (() -> Void)?
+    var onRemoveCodeProject: (() -> Void)?
+    var onAskCode: ((String) -> Void)?
     /// Reads the current answer aloud on demand, regardless of `textOnlyMode`.
     var onReadAloud: (() -> Void)?
     /// Mic button: starts recording (a question on the Ask tab, a dictation
@@ -415,7 +622,7 @@ final class AssistantPanelController {
         let visible = screen.visibleFrame
         let size: NSSize
         if !panel.isVisible || wasSmall {
-            size = savedFrame?.size ?? Self.frameSize(for: state.size)
+            size = savedFrame?.size ?? Self.frameSize(for: state.size, on: screen)
         } else {
             size = panel.frame.size
         }
@@ -459,14 +666,17 @@ final class AssistantPanelController {
     private static let tallSize = NSSize(width: 960 + glowMargin * 2, height: 520 + glowMargin * 2)
     /// Half the tall card's width, at its full height.
     private static let halfSize = NSSize(width: 480 + glowMargin * 2, height: 520 + glowMargin * 2)
-    private static func frameSize(for size: PanelSize) -> NSSize {
+    private static func frameSize(for size: PanelSize, on screen: NSScreen?) -> NSSize {
         switch size {
         case .half: return halfSize
         case .normal: return expandedSize
         case .tall: return tallSize
+        case .full:
+            // As tall as the screen allows, never shorter than Tall.
+            let visible = (screen ?? NSScreen.main)?.visibleFrame.height ?? tallSize.height
+            return NSSize(width: expandedSize.width, height: max(tallSize.height, visible - 16))
         }
     }
-    private static func height(for size: PanelSize) -> CGFloat { frameSize(for: size).height }
     private static let collapsedSize = NSSize(width: 56, height: 56)
     private static let stripSize = NSSize(width: 420 + glowMargin * 2, height: 52 + glowMargin * 2)
     private static let minPanelSize = NSSize(width: 480 + glowMargin * 2, height: 160 + glowMargin * 2)
@@ -561,7 +771,7 @@ final class AssistantPanelController {
         state.size = size
         let screen = panel.screen ?? NSScreen.main
         let visible = screen?.visibleFrame ?? .zero
-        let target = Self.frameSize(for: size)
+        let target = Self.frameSize(for: size, on: screen)
         let height = target.height
         // Width only changes when entering or leaving the half column; the
         // other two keep whatever width the user dragged out. The right edge
@@ -589,8 +799,11 @@ final class AssistantPanelController {
             let f = panel.frame
             if f.width < (Self.halfSize.width + Self.expandedSize.width) / 2 {
                 state.size = .half
+            } else if f.height > (Self.expandedSize.height + Self.tallSize.height) / 2 {
+                let full = Self.frameSize(for: .full, on: panel.screen).height
+                state.size = f.height > (Self.tallSize.height + full) / 2 ? .full : .tall
             } else {
-                state.size = f.height > (Self.expandedSize.height + Self.tallSize.height) / 2 ? .tall : .normal
+                state.size = .normal
             }
             return
         }
@@ -685,6 +898,28 @@ final class AssistantPanelController {
             self.state.onStop?()
             return true
         }
+        panel.onPaste = { [weak self] in
+            guard let self, self.state.tab == .code else { return false }
+            let board = NSPasteboard.general
+            // Text on the clipboard means a normal paste into a field; only
+            // a bare image (a Capture, a screenshot) becomes an attachment.
+            guard board.string(forType: .string) == nil,
+                  board.canReadObject(forClasses: [NSImage.self], options: nil) else { return false }
+            self.state.onPasteCodeImage?()
+            return true
+        }
+        panel.onFind = { [weak self] in
+            guard let self, self.state.tab == .code, self.state.codeFocusedFile != nil else { return false }
+            self.state.codeViewerCollapsed = false
+            self.state.codeFindVisible = true
+            self.state.codeFindFocusRequest += 1
+            return true
+        }
+        panel.onClear = { [weak self] in
+            guard let self, self.state.tab == .terminal else { return false }
+            self.state.terminal.clearScreen()
+            return true
+        }
         // Track which display the panel lives on, including hand drags, so
         // the phone's screen switch can follow reality.
         NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification, object: panel, queue: .main) { [weak self] _ in
@@ -760,6 +995,44 @@ private final class KeyablePanel: NSPanel {
     override var canBecomeKey: Bool { true }
     /// Return true to consume Esc (e.g. to stop an in-flight answer) instead of closing.
     var onCancel: (() -> Bool)?
+    /// ⌘V anywhere in the panel. Return true to consume it (an image was
+    /// taken off the clipboard); false lets the focused field paste text.
+    var onPaste: (() -> Bool)?
+    /// ⌘F anywhere in the panel. Return true when a find bar took it.
+    var onFind: (() -> Bool)?
+    /// ⌘K. Return true when a terminal took it as "clear".
+    var onClear: (() -> Bool)?
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        if flags == [.command], key == "v", onPaste?() == true {
+            return true
+        }
+        if flags == [.command], key == "f", onFind?() == true {
+            return true
+        }
+        if flags == [.command], key == "k", onClear?() == true {
+            return true
+        }
+        if super.performKeyEquivalent(with: event) { return true }
+        // Peeky is a non-activating panel with no menu bar of its own, so
+        // the Edit-menu shortcuts never arrive on their own. Send the
+        // standard actions to whatever text field has focus.
+        let action: Selector? = switch (key, flags) {
+        case ("v", [.command]): #selector(NSText.paste(_:))
+        case ("c", [.command]): #selector(NSText.copy(_:))
+        case ("x", [.command]): #selector(NSText.cut(_:))
+        case ("a", [.command]): #selector(NSText.selectAll(_:))
+        case ("z", [.command]): Selector(("undo:"))
+        case ("z", [.command, .shift]): Selector(("redo:"))
+        default: nil
+        }
+        if let action, let responder = firstResponder, responder.responds(to: action) {
+            return NSApp.sendAction(action, to: responder, from: self)
+        }
+        return false
+    }
 
     override func cancelOperation(_ sender: Any?) {
         if onCancel?() == true { return }
@@ -770,7 +1043,9 @@ private final class KeyablePanel: NSPanel {
 struct AssistantPanelView: View {
     @ObservedObject var state: AssistantState
     @State private var typedQuestion = ""
+    @State private var copiedAnswerID: UUID?
     @FocusState private var fieldFocused: Bool
+    @FocusState private var findFocused: Bool
     @State private var breathing = false
     @State private var resizeHoverCorner: PanelResizeCorner?
 
@@ -964,10 +1239,26 @@ struct AssistantPanelView: View {
                     talkLogView
                 case .captureDictate:
                     captureDictateTab
+                case .code:
+                    if !state.codeImages.isEmpty { codeImagesRow }
+                    codeProjectCard
+                    if state.codeRunPhase != .idle || !state.codeBuildErrors.isEmpty { codeRunStrip }
+                    if state.codeShowingFiles, let project = state.codeProject {
+                        codeFileList(project)
+                    } else if let path = state.codeFocusedFile, let file = state.codeProject?.file(at: path) {
+                        codeFileViewer(file)
+                    }
+                    // With a file or the list up and nothing asked yet, the
+                    // empty log's hint would steal half the height.
+                    if !state.codeLog.isEmpty || (!state.codeShowingFiles && state.codeFocusedFile == nil) {
+                        codeLogView
+                    }
+                case .terminal:
+                    terminalTab
                 }
             }
             .onDrop(of: [.fileURL, .image], isTargeted: nil) { providers in
-                guard state.tab == .ask else { return false }
+                guard state.tab == .ask || state.tab == .code else { return false }
                 return handleAskDrop(providers)
             }
             .onPasteCommand(of: [.image, .fileURL, .png, .tiff]) { _ in
@@ -1066,6 +1357,8 @@ struct AssistantPanelView: View {
                                 .font(.system(size: 12, weight: .semibold))
                             Text(tab.rawValue)
                                 .font(.system(size: 14, weight: state.tab == tab ? .semibold : .regular, design: .monospaced))
+                                .lineLimit(1)
+                                .fixedSize()
                         }
                         .help(tab.rawValue)
                         .foregroundStyle(state.tab == tab ? .white : Color.white.opacity(0.5))
@@ -1148,6 +1441,8 @@ struct AssistantPanelView: View {
                 .foregroundStyle(phase.color)
             Text(phase == .done && state.chaining
                  ? "still listening — ask your next question, or press STOP"
+                 : phase == .paused && (state.tab == .ask || state.tab == .code)
+                 ? "pause and Peeky answers — keep asking, or press STOP"
                  : phase.hint)
                 .font(.system(size: 13.5, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.7))
@@ -1648,6 +1943,809 @@ struct AssistantPanelView: View {
 
     @State private var expandedCopies: Set<UUID> = []
 
+    // MARK: Peeky Code
+
+    /// The dropped project, or a drop zone inviting one. With a project:
+    /// its name, size in files and tokens, and — after the first question —
+    /// whether the last one was served from the prompt cache.
+    @ViewBuilder
+    private var codeProjectCard: some View {
+        if state.codeLoading {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Reading the project…")
+                    .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(codeCardBackground)
+        } else if let project = state.codeProject {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 8) {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            if state.codeFocusedFile != nil {
+                                state.codeFocusedFile = nil
+                                state.codeShowingFiles = true
+                            } else {
+                                state.codeShowingFiles.toggle()
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundStyle(.white.opacity(0.5))
+                                .rotationEffect(.degrees(state.codeShowingFiles ? 90 : 0))
+                            Image(systemName: "folder.fill")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(Color(red: 0.35, green: 0.78, blue: 0.98))
+                            Text(project.name)
+                                .font(.system(size: 14.5, weight: .bold, design: .monospaced))
+                                .foregroundStyle(.white)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            if let path = state.codeFocusedFile {
+                                // Breadcrumb: StageTimePNW › App › CustomTabBar.swift
+                                ForEach(Array(path.split(separator: "/").enumerated()), id: \.offset) { index, part in
+                                    Text("›")
+                                        .foregroundStyle(.white.opacity(0.35))
+                                    Text(String(part))
+                                        .fontWeight(index == path.split(separator: "/").count - 1 ? .bold : .medium)
+                                        .foregroundStyle(.white.opacity(index == path.split(separator: "/").count - 1 ? 1 : 0.7))
+                                        .lineLimit(1)
+                                }
+                                .font(.system(size: 13.5, design: .monospaced))
+                            } else {
+                                Text(project.summaryLine)
+                                    .font(.system(size: 13, weight: .medium, design: .monospaced))
+                                    .foregroundStyle(.white.opacity(0.55))
+                                    .lineLimit(1)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(state.codeFocusedFile != nil ? "Back to the file list"
+                          : state.codeShowingFiles ? "Hide the file list" : "Show every file in the project")
+                    Spacer(minLength: 0)
+                    if let path = state.codeFocusedFile {
+                        if state.codeXcodeContainer != nil { codeRunButton }
+                        codeCardButton("arrow.up.forward.app", help: "Open this file in your editor") {
+                            NSWorkspace.shared.open(project.root.appendingPathComponent(path))
+                        }
+                        codeCardButton("xmark", help: "Close the file — back to the whole project") {
+                            withAnimation(.easeInOut(duration: 0.18)) { state.codeFocusedFile = nil }
+                        }
+                    } else {
+                        if state.codeXcodeContainer != nil { codeRunButton }
+                        codeCardButton("arrow.clockwise", help: "Re-read the project from disk (after editing files)") {
+                            state.onReloadCodeProject?()
+                        }
+                        codeCardButton("xmark", help: "Remove the project") {
+                            state.onRemoveCodeProject?()
+                        }
+                    }
+                }
+                .help(project.root.path)
+                HStack(spacing: 6) {
+                    if let usage = state.codeUsage {
+                        Image(systemName: usage.hitCache ? "bolt.fill" : "bolt.slash")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(usage.hitCache ? AssistantPhase.done.color : .white.opacity(0.4))
+                        Text(codeUsageLine(usage))
+                    } else if project.truncated {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.orange)
+                        Text("Too big to send whole — \(project.skippedFiles.count) files left out")
+                    } else {
+                        Text(codeSkippedLine(project))
+                    }
+                    Spacer(minLength: 12)
+                    if let live = state.codeLiveCost {
+                        codeCostPill(live.sinceUSD >= 0.005
+                                     ? "Cost: \(codeCostString(live.settledUSD)) + \(codeCostString(live.sinceUSD)) today"
+                                     : "Cost: \(codeCostString(live.settledUSD)) this month",
+                                     help: "Spend on Peeky's API key this month: what Anthropic has billed for closed days, plus today's tokens at list prices (the bill catches up at midnight UTC).")
+                    } else if state.codeSpentUSD > 0 {
+                        codeCostPill("Cost: \(codeCostString(state.codeSpentUSD))",
+                                     help: "Estimated from the tokens each answer reported, at Sonnet list prices (cache reads at a tenth). Running total since install. Add an Admin key to Keychain (account anthropic-admin) for the real figure.")
+                    }
+                }
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.5))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(codeCardBackground)
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Image(systemName: "folder.badge.plus")
+                        .font(.system(size: 16, weight: .semibold))
+                    Text("Drop a project folder here")
+                        .font(.system(size: 15, weight: .bold, design: .monospaced))
+                }
+                .foregroundStyle(.white.opacity(0.85))
+                Text("Swift, Python, HTML/CSS, JavaScript, Java… Peeky reads the whole thing and answers questions about it. The project is prompt-cached, so follow-up questions cost about a tenth of the first.")
+                    .font(.system(size: 12.5, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .fixedSize(horizontal: false, vertical: true)
+                Button {
+                    state.onAttachCodeProject?()
+                } label: {
+                    Text("choose folder…")
+                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.8))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(Color.white.opacity(0.08)))
+                        .overlay(Capsule().strokeBorder(Color.white.opacity(0.16), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [6, 5]))
+                    .foregroundStyle(Color.white.opacity(0.18))
+            )
+        }
+    }
+
+    /// ▶ on the project card: build and launch in the Simulator. Turns
+    /// into ■ while a build is running.
+    private var codeRunButton: some View {
+        Button {
+            if state.codeRunning { state.onCancelRun?() } else { state.onRunCode?() }
+        } label: {
+            HStack(spacing: 5) {
+                if state.codeRunning {
+                    ProgressView().controlSize(.mini)
+                    Image(systemName: "stop.fill").font(.system(size: 9, weight: .bold))
+                } else {
+                    Image(systemName: "play.fill").font(.system(size: 10, weight: .bold))
+                    Text("Run")
+                }
+            }
+            .font(.system(size: 12, weight: .bold, design: .monospaced))
+            .foregroundStyle(state.codeRunning ? .white.opacity(0.8) : AssistantPhase.done.color)
+            .padding(.horizontal, 9)
+            .frame(height: 24)
+            .background(Capsule().fill((state.codeRunning ? Color.white : AssistantPhase.done.color).opacity(0.12)))
+            .overlay(Capsule().strokeBorder((state.codeRunning ? Color.white : AssistantPhase.done.color).opacity(0.3), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .help(state.codeRunning ? "Stop the build" : "Build and run in the iOS Simulator (xcodebuild + simctl, on this Mac — free)")
+    }
+
+    /// One line of build status, and the compiler's problems as clickable rows.
+    private var codeRunStrip: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                switch state.codeRunPhase {
+                case .idle:
+                    EmptyView()
+                case .building(let started):
+                    ProgressView().controlSize(.small)
+                    TimelineView(.periodic(from: started, by: 1)) { ctx in
+                        Text("Building… \(Int(ctx.date.timeIntervalSince(started))) s")
+                    }
+                    .foregroundStyle(.white.opacity(0.7))
+                case .installing:
+                    ProgressView().controlSize(.small)
+                    Text("Built — installing on the Simulator…").foregroundStyle(.white.opacity(0.7))
+                case .succeeded(let device, let seconds):
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(AssistantPhase.done.color)
+                    Text("Build succeeded · launched on \(device) · \(seconds) s").foregroundStyle(AssistantPhase.done.color)
+                case .failed(let errors, let seconds):
+                    Image(systemName: "xmark.octagon.fill").foregroundStyle(.red)
+                    Text("Build failed · \(errors) error\(errors == 1 ? "" : "s") · \(seconds) s — click one to ask Peeky").foregroundStyle(.red.opacity(0.9))
+                case .cancelled:
+                    Image(systemName: "stop.circle").foregroundStyle(.white.opacity(0.5))
+                    Text("Build stopped").foregroundStyle(.white.opacity(0.5))
+                }
+                Spacer(minLength: 0)
+                if !state.codeRunning {
+                    Button {
+                        state.codeRunPhase = .idle
+                        state.codeBuildErrors = []
+                    } label: {
+                        Image(systemName: "xmark").font(.system(size: 10, weight: .bold)).foregroundStyle(.white.opacity(0.5))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Hide")
+                }
+            }
+            .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
+            if !state.codeBuildErrors.isEmpty {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(state.codeBuildErrors.prefix(30)) { err in codeErrorRow(err) }
+                    }
+                }
+                .frame(maxHeight: 132)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(codeCardBackground)
+    }
+
+    private func codeErrorRow(_ err: XcodeRunner.BuildError) -> some View {
+        Button {
+            guard !err.isWarning || true else { return }
+            if !err.file.isEmpty, state.codeProject?.file(at: err.file) != nil {
+                state.codeFocusedFile = err.file
+                state.codeJumpToLine = err.line
+            }
+            let place = err.file.isEmpty ? "" : " at \((err.file as NSString).lastPathComponent):\(err.line)"
+            state.codePrefillQuestion = "Build \(err.isWarning ? "warning" : "error")\(place): \(err.message). Fix it."
+        } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: err.isWarning ? "exclamationmark.triangle.fill" : "xmark.circle.fill")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(err.isWarning ? .orange : .red)
+                if !err.file.isEmpty {
+                    Text("\((err.file as NSString).lastPathComponent):\(err.line)")
+                        .fontWeight(.bold)
+                        .foregroundStyle(.white.opacity(0.85))
+                }
+                Text(err.message)
+                    .foregroundStyle(.white.opacity(0.7))
+                    .lineLimit(2)
+                Spacer(minLength: 0)
+            }
+            .font(.system(size: 12, design: .monospaced))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(err.file.isEmpty ? "Ask Peeky about this" : "Open \(err.file) at line \(err.line) and ask Peeky to fix it")
+    }
+
+    private var codeCardBackground: some View {
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(Color.white.opacity(0.04))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.06), lineWidth: 1)
+            )
+    }
+
+    /// Every file in the project, grouped under its folder — Finder's list
+    /// view. Click one to open it in the preview.
+    private func codeFileList(_ project: CodeProject) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 1) {
+                ForEach(project.filesByFolder, id: \.folder) { group in
+                    let collapsed = state.codeCollapsedFolders.contains(group.folder)
+                    if !group.folder.isEmpty {
+                        Button {
+                            if collapsed { state.codeCollapsedFolders.remove(group.folder) }
+                            else { state.codeCollapsedFolders.insert(group.folder) }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .rotationEffect(.degrees(collapsed ? 0 : 90))
+                                    .frame(width: 10)
+                                Image(systemName: collapsed ? "folder" : "folder.fill")
+                                    .font(.system(size: 11, weight: .semibold))
+                                Text(group.folder + "/")
+                                Spacer(minLength: 0)
+                                if collapsed {
+                                    Text("\(group.files.count) file\(group.files.count == 1 ? "" : "s")")
+                                        .fontWeight(.regular)
+                                        .foregroundStyle(.white.opacity(0.35))
+                                }
+                            }
+                            .font(.system(size: 12.5, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.55))
+                            .padding(.top, 8)
+                            .padding(.bottom, 2)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help(collapsed ? "Show files" : "Hide files")
+                    }
+                    if !collapsed {
+                        ForEach(group.files, id: \.path) { file in
+                            codeFileRow(file, indented: !group.folder.isEmpty)
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(codeCardBackground)
+    }
+
+    private func codeFileRow(_ file: CodeProject.File, indented: Bool) -> some View {
+        let lines = file.text.reduce(into: 0) { if $1 == "\n" { $0 += 1 } }
+        return Button {
+            withAnimation(.easeInOut(duration: 0.18)) { state.codeFocusedFile = file.path }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "doc.text")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.45))
+                Text((file.path as NSString).lastPathComponent)
+                    .font(.system(size: 13.5, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Text("\(lines) lines")
+                    .font(.system(size: 11.5, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.35))
+            }
+            .padding(.leading, indented ? 18 : 0)
+            .padding(.vertical, 4)
+            .padding(.horizontal, 6)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Open \(file.path)")
+    }
+
+    /// One file, the way the capture preview shows one image — and
+    /// editable: type, and a second later it's saved to disk, where VS Code
+    /// or any other editor with the file open picks it up.
+    private func codeFileViewer(_ file: CodeProject.File) -> some View {
+        let lineCount = state.codeDraft.reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.18)) { state.codeViewerCollapsed.toggle() }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.5))
+                            .rotationEffect(.degrees(state.codeViewerCollapsed ? 0 : 90))
+                        Text((file.path as NSString).lastPathComponent)
+                            .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.8))
+                        Text("\(lineCount) lines")
+                            .font(.system(size: 12, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.4))
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(state.codeViewerCollapsed ? "Show the file" : "Collapse the file preview")
+                Spacer(minLength: 0)
+                if state.codeDraftDirty {
+                    Text("saving…")
+                        .font(.system(size: 11.5, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.orange.opacity(0.9))
+                } else if let saved = state.codeLastSaved, state.codeEdits[file.path] != nil {
+                    Text("saved \(Self.logClock.string(from: saved)) · VS Code sees it")
+                        .font(.system(size: 11.5, weight: .medium, design: .monospaced))
+                        .foregroundStyle(AssistantPhase.done.color.opacity(0.9))
+                } else {
+                    Text("edit here — saves to disk · ⌘F find")
+                        .font(.system(size: 11.5, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.3))
+                        .onTapGesture { state.codeFindVisible = true; state.codeFindFocusRequest += 1 }
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            if !state.codeViewerCollapsed {
+                if state.codeFindVisible { codeFindBar }
+                CodeTextEditor(text: $state.codeDraft,
+                               highlights: state.codeFindMatches,
+                               current: state.codeFindMatches.isEmpty ? nil : state.codeFindMatches[min(state.codeFindIndex, state.codeFindMatches.count - 1)],
+                               onFind: { state.codeFindVisible = true; state.codeFindFocusRequest += 1 },
+                               onEscape: { state.closeCodeFind() },
+                               language: SyntaxHighlighter.language(for: file.path),
+                               jumpToLine: state.codeJumpToLine,
+                               onDidJump: { state.codeJumpToLine = nil })
+                    .padding(.horizontal, 6)
+                    .padding(.bottom, 6)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .background(codeCardBackground)
+        .id(file.path)
+    }
+
+    /// Compact find bar for the file preview: a short field, `3 of 12`,
+    /// ↑/↓ (or ↩/⇧↩) step through matches, Esc closes.
+    private var codeFindBar: some View {
+        let matches = state.codeFindMatches
+        return HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(.white.opacity(0.5))
+            TextField("Find", text: $state.codeFindQuery)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12.5, design: .monospaced))
+                .foregroundStyle(.white)
+                .focused($findFocused)
+                .frame(width: 220)
+                .onKeyPress(.downArrow) { state.codeFindStep(1); return .handled }
+                .onKeyPress(.upArrow) { state.codeFindStep(-1); return .handled }
+                .onKeyPress(.return, phases: .down) { press in
+                    state.codeFindStep(press.modifiers.contains(.shift) ? -1 : 1); return .handled
+                }
+                .onKeyPress(.escape) { state.closeCodeFind(); return .handled }
+            Text(state.codeFindQuery.isEmpty ? "" : matches.isEmpty ? "no matches" : "\(state.codeFindIndex + 1) of \(matches.count)")
+                .font(.system(size: 11.5, weight: .medium, design: .monospaced))
+                .foregroundStyle(matches.isEmpty && !state.codeFindQuery.isEmpty ? .orange.opacity(0.9) : .white.opacity(0.5))
+                .frame(minWidth: 70, alignment: .leading)
+            Button { state.codeFindStep(-1) } label: { Image(systemName: "chevron.up") }
+                .disabled(matches.count < 2)
+                .help("Previous match (↑)")
+            Button { state.codeFindStep(1) } label: { Image(systemName: "chevron.down") }
+                .disabled(matches.count < 2)
+                .help("Next match (↓)")
+            Spacer(minLength: 0)
+            Button { state.closeCodeFind() } label: {
+                Text("Done")
+                    .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+            }
+            .help("Close find (Esc)")
+        }
+        .buttonStyle(.plain)
+        .font(.system(size: 11, weight: .bold))
+        .foregroundStyle(.white.opacity(0.7))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .background(Color.white.opacity(0.05))
+        .onAppear { findFocused = true }
+        .onChange(of: state.codeFindFocusRequest) { _ in findFocused = true }
+    }
+
+    /// Pictures attached to the code question, by name only — the code is
+    /// the main thing on this tab, so no thumbnails.
+    private var codeImagesRow: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "photo")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(.white.opacity(0.5))
+            ForEach(state.codeImages) { item in
+                HStack(spacing: 4) {
+                    Text(item.name)
+                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.85))
+                        .lineLimit(1)
+                        .fixedSize()
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            state.codeImages.removeAll { $0.id == item.id }
+                        }
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.6))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Remove this image")
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(Color.white.opacity(0.08)))
+            }
+            Spacer(minLength: 0)
+            Text("sent with every question")
+                .font(.system(size: 11.5, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.35))
+        }
+        .padding(.horizontal, 4)
+    }
+
+    private func codeCostString(_ usd: Double) -> String {
+        usd < 0.01 ? String(format: "$%.3f", usd) : String(format: "$%.2f", usd)
+    }
+
+    private func codeCostPill(_ text: String, help: String) -> some View {
+        Text(text)
+            .font(.system(size: 12, weight: .bold, design: .monospaced))
+            .foregroundStyle(.white.opacity(0.75))
+            .fixedSize()
+            .padding(.horizontal, 8)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(Color.white.opacity(0.08)))
+            .help(help)
+    }
+
+    private func codeCardButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(.white.opacity(0.65))
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(Color.white.opacity(0.08)))
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+
+    private func codeUsageLine(_ usage: AnthropicService.Usage) -> String {
+        if usage.hitCache {
+            return "last question: \(CodeProject.compact(usage.cacheRead)) tokens from cache (≈10% price) · \(CodeProject.compact(usage.input)) fresh"
+        }
+        if usage.cacheWrite > 0 {
+            return "last question: \(CodeProject.compact(usage.cacheWrite)) tokens cached for the next ~5 min · follow-ups are cheap"
+        }
+        return "last question: \(CodeProject.compact(usage.input)) tokens (project too small to cache)"
+    }
+
+    private func codeSkippedLine(_ project: CodeProject) -> String {
+        var parts: [String] = []
+        if !project.skippedFolders.isEmpty {
+            parts.append("skipped " + project.skippedFolders.prefix(4).joined(separator: ", ")
+                         + (project.skippedFolders.count > 4 ? "…" : ""))
+        }
+        if !project.skippedFiles.isEmpty {
+            parts.append("\(project.skippedFiles.count) non-text or oversized file\(project.skippedFiles.count == 1 ? "" : "s") left out")
+        }
+        return parts.isEmpty ? "every file included — ask away" : parts.joined(separator: " · ")
+    }
+
+    // MARK: Terminal tab
+
+    private var terminalTab: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "terminal")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.5))
+                Text(state.terminal.startedIn.map { $0.path.replacingOccurrences(of: NSHomeDirectory(), with: "~") } ?? "shell")
+                    .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.8))
+                    .lineLimit(1)
+                    .truncationMode(.head)
+                Spacer(minLength: 0)
+                Text(state.terminal.running ? "local shell · free — nothing here goes to Claude" : "shell exited")
+                    .font(.system(size: 11.5, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.3))
+                Button {
+                    state.onRestartTerminal?()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.6))
+                }
+                .buttonStyle(.plain)
+                .help(state.codeProject == nil ? "Restart the shell" : "Restart the shell in \(state.codeProject!.name)")
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 7)
+            TerminalPane(session: state.terminal)
+                .padding(.horizontal, 6)
+                .padding(.bottom, 6)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(codeCardBackground)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 8)
+        .onAppear { state.onRestartTerminal?() }
+    }
+
+    private var codeLogView: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if state.codeLog.isEmpty {
+                Text(state.codeProject == nil
+                     ? "Questions about the project and Peeky's answers show up here. ⌘K clears."
+                     : "Try: “what does this app do?” · “find the bug in the tab bar” · “add a dark mode toggle”")
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .padding(.top, 2)
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(state.codeLog) { entry in
+                                codeLogLine(entry).id(entry.id)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 2)
+                        // Room for the "clear ⌘K" pill in the corner.
+                        .padding(.trailing, 90)
+                    }
+                    .onChange(of: state.codeLog.count) { _ in
+                        if let last = state.codeLog.last { proxy.scrollTo(last.id, anchor: .top) }
+                    }
+                    .onAppear {
+                        if let last = state.codeLog.last { proxy.scrollTo(last.id, anchor: .top) }
+                    }
+                }
+                .overlay(alignment: .topTrailing) {
+                    Button {
+                        state.clearCodeLog()
+                    } label: {
+                        Text("clear ⌘K")
+                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.45))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(Capsule().fill(Color.white.opacity(0.07)))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Clear the conversation (⌘K) — the project stays")
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(
+            Button("") { state.clearCodeLog() }
+                .keyboardShortcut("k", modifiers: .command)
+                .opacity(0)
+                .frame(width: 0, height: 0)
+        )
+    }
+
+    private func codeLogLine(_ entry: CodeLogEntry) -> some View {
+        let stamp = Self.logClock.string(from: entry.time)
+        return HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(stamp)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.35))
+            switch entry.kind {
+            case .question:
+                Text("❯")
+                    .font(.system(size: 14, weight: .heavy, design: .monospaced))
+                    .foregroundStyle(AssistantPhase.working.color)
+                Text(entry.text)
+                    .font(.system(size: 14.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white)
+            case .answer:
+                VStack(alignment: .trailing, spacing: 4) {
+                    codeAnswerView(entry.text)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    copyAnswerButton(entry)
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.white.opacity(0.04))
+                )
+            case .status:
+                Text(entry.text)
+                    .font(.system(size: 13.5, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.6))
+                    .padding(.leading, 18)
+            case .error:
+                Text(entry.text)
+                    .font(.system(size: 14, design: .monospaced))
+                    .foregroundStyle(.orange)
+                    .padding(.leading, 18)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Copies the whole answer (prose and code, as Claude wrote it). Shows a
+    /// ✓ for a moment so you know it landed.
+    private func copyAnswerButton(_ entry: CodeLogEntry) -> some View {
+        let copied = copiedAnswerID == entry.id
+        return Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(entry.text, forType: .string)
+            copiedAnswerID = entry.id
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                if copiedAnswerID == entry.id { copiedAnswerID = nil }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 11, weight: .semibold))
+                if copied { Text("Copied").font(.system(size: 11, weight: .semibold, design: .monospaced)) }
+            }
+            .foregroundStyle(copied ? AssistantPhase.done.color : .white.opacity(0.45))
+            .frame(height: 20)
+            .padding(.horizontal, 5)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Copy Peeky's whole answer")
+    }
+
+    /// An answer with its fenced code blocks pulled out into cards, each
+    /// with Copy and — when a file is open — Apply, which puts the code into
+    /// that file (replacing the block that preceded it in the answer, when
+    /// the answer gave one).
+    private func codeAnswerView(_ text: String) -> some View {
+        let segments = CodeAnswerSegment.parse(text)
+        return VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(segments.enumerated()), id: \.offset) { index, segment in
+                switch segment {
+                case .prose(let prose):
+                    Text(prose)
+                        .font(.system(size: 14, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.92))
+                        .lineSpacing(3)
+                        .textSelection(.enabled)
+                case .code(let language, let code):
+                    let previous: String? = index > 0 ? {
+                        if case .code(_, let earlier) = segments[index - 1] { return earlier }
+                        if index > 1, case .code(_, let earlier) = segments[index - 2],
+                           case .prose(let between) = segments[index - 1], between.count < 80 { return earlier }
+                        return nil
+                    }() : nil
+                    VStack(alignment: .leading, spacing: 0) {
+                        HStack(spacing: 8) {
+                            Text(language.isEmpty ? "code" : language)
+                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.4))
+                            Spacer(minLength: 0)
+                            Button {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(code, forType: .string)
+                            } label: {
+                                Label("Copy", systemImage: "doc.on.doc")
+                            }
+                            .buttonStyle(.plain)
+                            .help("Copy this code")
+                            if let path = state.codeFocusedFile {
+                                if state.codeBlockIsAlreadyInFile(code) {
+                                    // A quote of what's there now — the
+                                    // "find" half of a change, or just a
+                                    // pointer to where something lives.
+                                    Label("already in \((path as NSString).lastPathComponent)", systemImage: "checkmark")
+                                        .foregroundStyle(.white.opacity(0.4))
+                                        .help("This is what the file says now — nothing to apply")
+                                } else {
+                                    Button {
+                                        state.onApplyCodeBlock?(code, previous)
+                                    } label: {
+                                        Label("Apply to \((path as NSString).lastPathComponent)", systemImage: "arrow.down.doc")
+                                    }
+                                    .buttonStyle(.plain)
+                                    .foregroundStyle(AssistantPhase.done.color)
+                                    .help(previous == nil
+                                          ? "Put this code into the open file"
+                                          : "Replace the code shown before it with this, in the open file")
+                                }
+                            }
+                        }
+                        .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Color.white.opacity(0.05))
+                        Text(code)
+                            .font(.system(size: 13, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.92))
+                            .lineSpacing(2)
+                            .textSelection(.enabled)
+                            .padding(10)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.black.opacity(0.35))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                    )
+                }
+            }
+        }
+    }
+
     /// A copied passage inline in the log, like `cat` output under the command
     /// that produced it: a one-line summary, the first few lines dimmed, and
     /// a toggle for the rest.
@@ -1747,6 +2845,9 @@ struct AssistantPanelView: View {
     private var inputPlaceholder: String {
         switch state.tab {
         case .talk: ""
+        case .terminal: "Type a command…"
+        case .code: state.codeProject == nil ? "Drop a project folder here, then ask…"
+            : "Ask about \(state.codeFocusedFile.map { ($0 as NSString).lastPathComponent } ?? state.codeProject?.name ?? "your code")…"
         default: "Ask Peeky anything…"
         }
     }
@@ -1766,6 +2867,8 @@ struct AssistantPanelView: View {
         case .ask: "Ask by voice"
         case .talk: "Say what you want Peeky to do"
         case .captureDictate: "Start dictation"
+        case .code: "Ask about your code by voice"
+        case .terminal: "Switch to a tab with a mic"
         }
         return Button {
             state.onToggleRecording?()
@@ -1815,9 +2918,70 @@ struct AssistantPanelView: View {
 
     private var bottomBar: some View {
         HStack(spacing: 10) {
-            if state.tab == .captureDictate || state.tab == .ask {
+            if state.tab == .captureDictate || state.tab == .ask || state.tab == .code {
                 addMenu
             }
+            if state.tab == .code || state.tab == .terminal {
+                bottomInputField
+            } else {
+                promptReadout
+            }
+            coachButton
+            if state.tab == .ask {
+                readAloudToggle
+            }
+            micIndicator
+            // While recording (either tab) the mic itself is the stop
+            // control, so the red Stop button (which would discard the
+            // recording) is redundant.
+            if state.status == .listening {
+                EmptyView()
+            } else if state.canStop {
+                stopButton
+            } else {
+                sendButton
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: state.canStop)
+    }
+
+    /// The Code tab's question box, down by the send button where a chat
+    /// box is expected. It grows with what's in it — paste forty lines of
+    /// code and you see them (⌥↩ adds a line; ↩ sends).
+    private var bottomInputField: some View {
+        ZStack(alignment: .topLeading) {
+            if typedQuestion.isEmpty {
+                Text(inputPlaceholder)
+                    .font(.system(size: 14, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.45))
+                    .lineLimit(1)
+                    .allowsHitTesting(false)
+                    .padding(.leading, 2)
+            }
+            TextField("", text: $typedQuestion, axis: .vertical)
+                .textFieldStyle(.plain)
+                .lineLimit(1...8)
+                .onChange(of: state.codePrefillQuestion) { text in
+                    guard let text else { return }
+                    typedQuestion = text
+                    fieldFocused = true
+                    state.codePrefillQuestion = nil
+                }
+                .font(.system(size: 14, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white)
+                .focused($fieldFocused)
+                .onSubmit(submit)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.06)))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .strokeBorder(Color.white.opacity(fieldFocused ? 0.22 : 0.10), lineWidth: 1))
+    }
+
+    private var promptReadout: some View {
+        Group {
             // Shell-prompt readout: `peeky on talk ❯` — the segments coloured
             // as a prompt colours them, the chevron in the phase colour.
             // Each word is pinned to one line so a narrow panel never breaks
@@ -1869,23 +3033,7 @@ struct AssistantPanelView: View {
                     .fixedSize()
             }
             }
-            coachButton
-            if state.tab == .ask {
-                readAloudToggle
-            }
-            micIndicator
-            // While recording (either tab) the mic itself is the stop
-            // control, so the red Stop button (which would discard the
-            // recording) is redundant.
-            if state.status == .listening {
-                EmptyView()
-            } else if state.canStop {
-                stopButton
-            } else {
-                sendButton
-            }
         }
-        .animation(.easeInOut(duration: 0.2), value: state.canStop)
     }
 
     /// Codex-style "+" at the foot of Capture + Dictate: a small menu whose
@@ -1907,7 +3055,8 @@ struct AssistantPanelView: View {
         }
         .buttonStyle(.plain)
         .help(state.tab == .ask ? "Attach images for your question (or drop / paste them here)"
-                                : "Add a file or folder from this Mac to the preview")
+              : state.tab == .code ? "Pick a project folder or files (or drop them here)"
+                                   : "Add a file or folder from this Mac to the preview")
     }
 
     private func showAddMenu() {
@@ -1934,6 +3083,29 @@ struct AssistantPanelView: View {
             paste.target = pasteAction
             actions.append(pasteAction)
             menu.addItem(paste)
+        } else if state.tab == .code {
+            let folder = NSMenuItem(title: state.codeProject == nil ? "Project folder or files…" : "Replace project…",
+                                    action: #selector(MenuAction.fire), keyEquivalent: "")
+            folder.image = NSImage(systemSymbolName: "folder.badge.plus", accessibilityDescription: nil)
+            let pick = MenuAction { state.onAttachCodeProject?() }
+            folder.target = pick
+            actions.append(pick)
+            menu.addItem(folder)
+            let images = NSMenuItem(title: "Images for the question…", action: #selector(MenuAction.fire), keyEquivalent: "")
+            images.image = NSImage(systemSymbolName: "photo.on.rectangle", accessibilityDescription: nil)
+            images.isEnabled = state.codeImages.count < AssistantState.maxCodeImages
+            let imagesAction = MenuAction { state.onAttachCodeImages?() }
+            images.target = imagesAction
+            actions.append(imagesAction)
+            menu.addItem(images)
+            if state.codeProject != nil {
+                let reload = NSMenuItem(title: "Re-read from disk", action: #selector(MenuAction.fire), keyEquivalent: "")
+                reload.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: nil)
+                let reloadAction = MenuAction { state.onReloadCodeProject?() }
+                reload.target = reloadAction
+                actions.append(reloadAction)
+                menu.addItem(reload)
+            }
         } else {
             let files = NSMenuItem(title: "Files and folders", action: #selector(MenuAction.fire), keyEquivalent: "")
             files.image = NSImage(systemSymbolName: "paperclip", accessibilityDescription: nil)
@@ -2156,7 +3328,8 @@ struct AssistantPanelView: View {
             }
         }
         group.notify(queue: .main) { [state] in
-            if !urls.isEmpty { state.onDropIntoAsk?(urls) }
+            guard !urls.isEmpty else { return }
+            if state.tab == .code { state.onDropIntoCode?(urls) } else { state.onDropIntoAsk?(urls) }
         }
         return true
     }
@@ -2588,6 +3761,8 @@ struct AssistantPanelView: View {
         typedQuestion = ""
         switch state.tab {
         case .talk: state.onDo?(text)
+        case .code: state.onAskCode?(text)
+        case .terminal: state.terminal.view.send(txt: text + "\n")
         default: state.onSubmit?(text)
         }
     }
@@ -2598,6 +3773,8 @@ struct AssistantPanelView: View {
         case .captureDictate: "capture"
         case .ask: "ask"
         case .talk: "talk"
+        case .code: "code"
+        case .terminal: "terminal"
         }
     }
 }

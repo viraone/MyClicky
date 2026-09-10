@@ -92,7 +92,69 @@ On first use, allow **Screen Recording** in System Settings for MyClicky.
 ## Dictate (hold Option–Command–V)
 
 Speak → text is cleaned up by Claude and copied to the clipboard. Shown in the
-panel's **Dictate** tab. The panel has three tabs: Ask, Dictate, Capture.
+panel's **Dictate** tab. The panel has four tabs: Ask, Capture + Dictate, Talk,
+Peeky Code.
+
+## Peeky Code (questions about a project)
+
+Drop a project folder — Swift, Python, HTML/CSS, JavaScript, Java, anything
+text — onto the **Peeky Code** tab (or use **+ → Project folder or files…**).
+Peeky reads every source file, skipping `.git`, build output, `node_modules`,
+`*.xcassets`, `*.xcodeproj`, lock files, binaries and anything over 200 KB,
+and shows the size (`23 files · ≈38K tokens`). Then ask: "what does this app
+do?", "find the bug in the tab bar", "add a dark-mode toggle". Answers name
+real files and show the exact code to change. Follow-ups build on the
+conversation (⌘K clears it; the project stays).
+
+The whole project rides along with every question as one `cache_control:
+ephemeral` block, so Anthropic serves it from its prompt cache for ~5 minutes
+(refreshed on each use) at a tenth of the input price. The project card
+shows the effect after each question — `38K tokens from cache (≈10% price)`.
+Editing files? **+ → Re-read from disk** picks up the changes (one full-price
+question re-primes the cache). Projects over ~170K tokens are cut off with a
+warning; drop a subfolder instead. `.env`, keys and certificates are never
+bundled.
+
+Click the project card to browse its files and click one to preview it
+(the caret on the preview folds it away); questions are then about that
+file. The preview is editable: type and it saves to disk about a second
+later, so an editor open on the same folder (VS Code, Xcode) picks the change
+up on its own. **⌘F** opens a find bar (⌘G / ⇧⌘G next and previous match,
+⌥⌘F find-and-replace, Esc closes it), like VS Code's. Edits don't touch the cached project block — the changed
+file goes along with the next question as a short addendum (pennies) rather
+than re-priming the cache; ↻ re-reads everything when you want a fresh
+snapshot. Code blocks in answers have **Copy** and **Apply to <file>**
+buttons; when Claude gives a "current code" block followed by a
+"replacement" block, Apply swaps the first for the second in the file
+you're viewing (or rewrites the file when the block is a whole-file
+rewrite), and copies it to the clipboard when it can't find a place.
+
+**▶ Run** appears on the project card when the folder holds an
+`.xcodeproj` or `.xcworkspace`. It runs `xcodebuild` for the iOS Simulator
+(a booted iPhone if there is one, else the newest plain iPhone), then
+`simctl` boot / install / launch — Xcode's ⌘R without Xcode, all local and
+free. The full output streams into the Terminal tab; under the card you see
+just "Building… 23 s" → "✓ Build succeeded · launched on iPhone 17", or the
+compiler's errors as rows. Click a row: the file opens at that line and
+the question box is pre-filled with "Build error at File.swift:42: … Fix
+it." — you press ↩ (that's the only Claude call), **Apply**, ▶ **Run**
+again.
+### Terminal
+
+The **Terminal** tab is a real shell (your login shell, via SwiftTerm)
+running inside Peeky, started in the folder you dropped on Peeky Code — so
+after Peeky applies a change, `git diff`, `git commit`, `git push` or
+`npm start` are one tab away, without leaving the panel. ↻ restarts it in
+the current project. It's entirely local: nothing typed there goes to
+Claude, and it costs nothing to use.
+
+**+ → Images for the question…** (or drop image files, or just **⌘V** a
+picture off the clipboard — take a Peeky Capture, switch to the Code tab,
+paste) attaches
+screenshots or mockups by name — they go with every question until removed.
+The card's **Cost** pill is a running estimate of what code questions have
+spent, from the token counts each answer reports at Sonnet list prices;
+the Claude console has the actual bill.
 
 ## Peeky Remote (iOS app)
 

@@ -225,6 +225,229 @@ struct AnthropicService {
         return cleaned
     }
 
+    // MARK: Peeky Code
+
+    /// What one code question cost, as reported by the API. The cache
+    /// numbers are the point: `cacheRead` tokens were billed at a tenth of
+    /// the normal rate, `cacheWrite` at 1.25×, `input` at full price.
+    struct Usage: Sendable, Equatable {
+        let input: Int
+        let cacheRead: Int
+        let cacheWrite: Int
+        let output: Int
+
+        /// True when the project came out of the cache rather than being
+        /// read fresh — the cheap path.
+        var hitCache: Bool { cacheRead > 0 }
+
+        /// Sonnet list prices per million tokens: input $3, cache write
+        /// $3.75, cache read $0.30, output $15. An estimate — the console's
+        /// number is the bill.
+        var costUSD: Double {
+            (Double(input) * 3 + Double(cacheWrite) * 3.75 + Double(cacheRead) * 0.30 + Double(output) * 15) / 1_000_000
+        }
+
+        static func parse(_ data: Data) -> Usage? {
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let usage = json["usage"] as? [String: Any] else { return nil }
+            return Usage(input: usage["input_tokens"] as? Int ?? 0,
+                         cacheRead: usage["cache_read_input_tokens"] as? Int ?? 0,
+                         cacheWrite: usage["cache_creation_input_tokens"] as? Int ?? 0,
+                         output: usage["output_tokens"] as? Int ?? 0)
+        }
+    }
+
+    struct CodeAnswer: Sendable {
+        let text: String
+        let usage: Usage?
+    }
+
+    /// What the Admin API knows about spend: dollars settled by the daily
+    /// cost report, plus a priced estimate of the tokens used since that
+    /// report's last closed day (near-real-time, from the usage report).
+    struct LiveCost: Sendable, Equatable {
+        let settledUSD: Double
+        let sinceUSD: Double
+        var totalUSD: Double { settledUSD + sinceUSD }
+    }
+
+    /// Month-to-date spend for the organization's default workspace — where
+    /// an org-scoped key like Peeky's bills. Needs an Admin key; free to
+    /// call. The cost report only closes a day at a time, so the hours since
+    /// its last bucket are filled in from the usage report at list prices.
+    static func fetchLiveCost(adminKey: String) async throws -> LiveCost {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let monthStart = utc.date(from: utc.dateComponents([.year, .month], from: Date()))!
+        let iso = ISO8601DateFormatter()
+
+        let cost = try await adminGET(adminKey, path: "cost_report", query: [
+            "starting_at": iso.string(from: monthStart), "group_by[]": "workspace_id", "limit": "31",
+        ])
+        var cents = 0.0
+        var settledThrough = monthStart
+        for bucket in cost {
+            if let end = (bucket["ending_at"] as? String).flatMap(iso.date(from:)), end > settledThrough {
+                settledThrough = end
+            }
+            for row in bucket["results"] as? [[String: Any]] ?? [] where Self.isDefaultWorkspace(row) {
+                cents += Double(row["amount"] as? String ?? "") ?? 0
+            }
+        }
+
+        var sinceUSD = 0.0
+        if settledThrough < Date() {
+            // Only closed buckets are reported: hours up to the current
+            // hour, then minutes inside it, so a question shows within ~a
+            // minute of being answered.
+            let hourStart = utc.date(from: utc.dateComponents([.year, .month, .day, .hour], from: Date()))!
+            var buckets: [[String: Any]] = []
+            if settledThrough < hourStart {
+                buckets += try await adminGET(adminKey, path: "usage_report/messages", query: [
+                    "starting_at": iso.string(from: settledThrough), "ending_at": iso.string(from: hourStart),
+                    "bucket_width": "1h", "group_by[]": "workspace_id", "limit": "48",
+                ])
+            }
+            buckets += try await adminGET(adminKey, path: "usage_report/messages", query: [
+                "starting_at": iso.string(from: max(hourStart, settledThrough)),
+                "bucket_width": "1m", "group_by[]": "workspace_id", "limit": "60",
+            ])
+            for bucket in buckets {
+                for row in bucket["results"] as? [[String: Any]] ?? [] where Self.isDefaultWorkspace(row) {
+                    let creation = row["cache_creation"] as? [String: Any] ?? [:]
+                    let usage = Usage(input: row["uncached_input_tokens"] as? Int ?? 0,
+                                      cacheRead: row["cache_read_input_tokens"] as? Int ?? 0,
+                                      cacheWrite: (creation["ephemeral_5m_input_tokens"] as? Int ?? 0)
+                                          + (creation["ephemeral_1h_input_tokens"] as? Int ?? 0),
+                                      output: row["output_tokens"] as? Int ?? 0)
+                    sinceUSD += usage.costUSD
+                }
+            }
+        }
+        return LiveCost(settledUSD: cents / 100, sinceUSD: sinceUSD)
+    }
+
+    private static func isDefaultWorkspace(_ row: [String: Any]) -> Bool {
+        row["workspace_id"] == nil || row["workspace_id"] is NSNull
+    }
+
+    /// One page of an Admin API report as its `data` buckets.
+    private static func adminGET(_ adminKey: String, path: String, query: [String: String]) async throws -> [[String: Any]] {
+        var components = URLComponents(string: "https://api.anthropic.com/v1/organizations/\(path)")!
+        components.queryItems = query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
+        var request = URLRequest(url: components.url!)
+        request.setValue(adminKey, forHTTPHeaderField: "x-api-key")
+        request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        request.timeoutInterval = 20
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let buckets = json["data"] as? [[String: Any]] else {
+            throw ServiceError.api("\(path): HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0) "
+                                   + String(decoding: data.prefix(200), as: UTF8.self))
+        }
+        return buckets
+    }
+
+    private static let codeSystemPrompt = """
+    You are Peeky Code, a senior software engineer helping the user with a \
+    project they have shared with you. The complete source of that project \
+    follows this message: a file tree, then every file under a \
+    "===== FILE: path =====" header. Treat it as the single source of truth \
+    — read the actual code before answering, quote real file names and line \
+    contents, and never guess at code you can see.
+
+    Answer the way a good colleague would in a code review or pairing \
+    session: direct, specific, and honest about trade-offs. When asked to fix \
+    or change something, show the exact code to change, with enough \
+    surrounding context to find it, and say which file it goes in. Prefer \
+    small, targeted edits over rewrites. If the question is ambiguous or the \
+    answer depends on something not in the project, say so and ask.
+
+    Changes are applied by a button next to each code block, so shape them \
+    for that: for an edit to existing code, give two fenced blocks in a row \
+    — first the current code copied verbatim from the file (enough lines to \
+    be unique), then the replacement. For a new file or a full rewrite, give \
+    the whole file in one block. Name the file just before the blocks.
+
+    Format for a monospaced terminal-style panel: plain text, short \
+    paragraphs, code in fenced blocks with the language named. No tables, \
+    no HTML, no emoji.
+    """
+
+    /// Ceiling for a code answer. Fixes come with code, and thinking shares
+    /// the budget, so this is generous.
+    private static let codeMaxTokens = 16_000
+    /// How many earlier exchanges ride along so follow-ups ("ok, fix it")
+    /// make sense. Older turns are dropped to keep the request bounded.
+    static let codeHistoryLimit = 12
+
+    /// A question about `project`, with the conversation so far. The project
+    /// text is sent as a system block flagged `cache_control: ephemeral`.
+    /// Everything up to that block — model, instructions, the project — is
+    /// identical from one question to the next, so Anthropic serves it from
+    /// cache (~5-minute window, refreshed on every use) for a tenth of the
+    /// input price. Only the conversation below it is billed in full.
+    func askAboutCode(question: String, project: CodeProject, focusedFile: String? = nil,
+                      images: [(name: String, jpeg: Data)] = [],
+                      changedFiles: [(path: String, text: String)] = [],
+                      history: [(question: String, answer: String)],
+                      onStatus: (@Sendable @MainActor (String) -> Void)? = nil) async throws -> CodeAnswer {
+        var messages: [[String: Any]] = []
+        for turn in history.suffix(Self.codeHistoryLimit) {
+            messages.append(["role": "user", "content": turn.question])
+            messages.append(["role": "assistant", "content": turn.answer])
+        }
+        // The open file, edited files and any pictures are hints on the
+        // question, never part of the cached project block — so they cost
+        // a little, not a cache miss.
+        var content: [[String: Any]] = []
+        if !changedFiles.isEmpty {
+            var note = "Since the project snapshot above was taken, the user edited these files. "
+                + "Use these versions, not the ones in the snapshot:\n\n"
+            for file in changedFiles {
+                note += "===== FILE: \(file.path) (current) =====\n\(file.text)\n\n"
+            }
+            content.append(["type": "text", "text": note])
+        }
+        if let focusedFile {
+            content.append(["type": "text", "text": "(The user has \(focusedFile) open in front of them right now. "
+                + "Their question is about that file unless they say otherwise.)"])
+        }
+        for image in images {
+            content.append(["type": "text", "text": "Image attached by the user: \(image.name)"])
+            content.append(["type": "image", "source": [
+                "type": "base64", "media_type": "image/jpeg",
+                "data": image.jpeg.base64EncodedString(),
+            ]])
+        }
+        content.append(["type": "text", "text": question])
+        messages.append(["role": "user", "content": content.count == 1 ? question : content])
+
+        let body: [String: Any] = [
+            "model": model,
+            "max_tokens": Self.codeMaxTokens,
+            "output_config": ["effort": "medium"],
+            "system": [
+                ["type": "text", "text": Self.codeSystemPrompt],
+                ["type": "text", "text": project.bundleText,
+                 "cache_control": ["type": "ephemeral"]],
+            ],
+            "messages": messages,
+        ]
+        let data = try await send(body: body, timeout: 180, onStatus: onStatus)
+        if let reason = Self.refusalReason(from: data) { throw ServiceError.refused(reason) }
+        let envelope = Self.envelope(from: data)
+        guard let text = envelope.text else {
+            throw ServiceError.noAnswerText(stopReason: envelope.stopReason ?? "unknown")
+        }
+        let usage = Usage.parse(data)
+        if let usage {
+            log.notice("code ask: input=\(usage.input) cache_read=\(usage.cacheRead) cache_write=\(usage.cacheWrite) output=\(usage.output)")
+        }
+        return CodeAnswer(text: text.trimmingCharacters(in: .whitespacesAndNewlines), usage: usage)
+    }
+
     /// Generic strict-JSON request: a caller-supplied system prompt plus user
     /// text (and an optional image), with the same rate-limit retry behavior
     /// as `ask`. Returns the raw JSON object parsed from Claude's reply, for
