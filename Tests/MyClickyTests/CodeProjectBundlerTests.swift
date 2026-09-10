@@ -312,3 +312,86 @@ final class BracketMatcherTests: XCTestCase {
         XCTAssertNil(BracketMatcher.pair(in: "plain text", caret: 3))
     }
 }
+
+final class CodeLineIndexTests: XCTestCase {
+    func testEmptyTrailingAndConsecutiveLines() {
+        XCTAssertEqual(CodeLineIndex("").starts, [0])
+        let index = CodeLineIndex("a\n\nb\n")
+        XCTAssertEqual(index.starts, [0, 2, 3, 5])
+        XCTAssertEqual((0...5).map { index.line(at: $0) }, [1, 1, 2, 3, 3, 4])
+    }
+
+    func testUTF16AndCRLFOffsets() {
+        let index = CodeLineIndex("😀\r\nsecond\n")
+        XCTAssertEqual(index.starts, [0, 4, 11])
+        XCTAssertEqual(index.line(at: 3), 1)
+        XCTAssertEqual(index.line(at: 4), 2)
+        XCTAssertEqual(index.line(at: 11), 3)
+    }
+
+    func testLongLinesDoNotIntroduceNumbers() {
+        let line = String(repeating: "https://example.com/", count: 50)
+        let index = CodeLineIndex(Array(repeating: line, count: 4000).joined(separator: "\n"))
+        XCTAssertEqual(index.starts.count, 4000)
+        XCTAssertEqual(index.line(at: index.starts[695] + 400), 696)
+        XCTAssertEqual(index.line(at: index.starts[3999]), 4000)
+    }
+}
+
+@MainActor
+final class CodeEditorLineLayoutTests: XCTestCase {
+    private func editor(_ text: String) -> (FindableTextView, NSScrollView, CodeLineNumberRuler) {
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
+        let view = FindableTextView(frame: NSRect(x: 0, y: 0, width: 250, height: 200))
+        view.font = .monospacedSystemFont(ofSize: 12.5, weight: .regular)
+        view.isVerticallyResizable = true
+        view.textContainer?.containerSize = NSSize(width: 250, height: CGFloat.greatestFiniteMagnitude)
+        view.textContainer?.widthTracksTextView = true
+        view.string = text
+        scroll.documentView = view
+        let ruler = CodeLineNumberRuler(textView: view, scrollView: scroll)
+        scroll.hasVerticalRuler = true
+        scroll.verticalRulerView = ruler
+        scroll.rulersVisible = true
+        view.layoutManager?.ensureLayout(for: view.textContainer!)
+        return (view, scroll, ruler)
+    }
+
+    func testBandCoversWrappedLineAndHidesForSelection() throws {
+        let (view, scroll, _) = editor(String(repeating: "long URL ", count: 80) + "\nend")
+        _ = scroll
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        let first = try XCTUnwrap(view.currentLineRect)
+        view.setSelectedRange(NSRange(location: 200, length: 0))
+        XCTAssertEqual(view.currentLineRect, first)
+        XCTAssertGreaterThan(first.height, 30)
+        XCTAssertEqual(first.width, view.bounds.width)
+        view.setSelectedRange(NSRange(location: 0, length: 2))
+        XCTAssertNil(view.currentLineRect)
+    }
+
+    func testEmptyAndTrailingInsertionLinesHaveBand() throws {
+        for text in ["", "one\n"] {
+            let (view, scroll, _) = editor(text)
+            _ = scroll
+            view.setSelectedRange(NSRange(location: (text as NSString).length, length: 0))
+            let band = try XCTUnwrap(view.currentLineRect)
+            XCTAssertGreaterThan(band.height, 0)
+            if !text.isEmpty { XCTAssertGreaterThan(band.minY, view.textContainerOrigin.y) }
+        }
+    }
+
+    func testTextNotificationRebuildsIndexAndWidth() {
+        let (view, scroll, ruler) = editor("one")
+        _ = scroll
+        let initialWidth = ruler.ruleThickness
+        view.string = String(repeating: "line\n", count: 100)
+        NotificationCenter.default.post(name: NSText.didChangeNotification, object: view)
+        XCTAssertEqual(ruler.lines.starts.count, 101)
+        XCTAssertGreaterThan(ruler.ruleThickness, initialWidth)
+        view.string = "replacement"
+        ruler.rebuildLines()
+        XCTAssertEqual(ruler.lines.starts, [0])
+        XCTAssertEqual(ruler.ruleThickness, initialWidth)
+    }
+}
