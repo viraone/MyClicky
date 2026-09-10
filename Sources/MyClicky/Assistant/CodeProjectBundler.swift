@@ -341,6 +341,93 @@ enum CodeAnswerSegment: Equatable {
 }
 
 /// Putting a code block from an answer into a file.
+/// A local, line-based LCS. Only trailing spaces/tabs are ignored, as in Apply.
+enum LineDiff {
+    struct Line: Equatable {
+        enum Kind { case same, removed, added }
+        let kind: Kind
+        let text: String
+    }
+
+    static func diff(_ old: String, _ new: String) -> [Line] {
+        func lines(_ text: String) -> [String] {
+            guard !text.isEmpty else { return [] }
+            var result = text.components(separatedBy: "\n")
+            if result.last == "" { result.removeLast() }
+            return result
+        }
+        func normalized(_ line: String) -> String {
+            var result = line
+            while let last = result.last, last == " " || last == "\t" { result.removeLast() }
+            return result
+        }
+        let before = lines(old), after = lines(new)
+        let a = before.map(normalized), b = after.map(normalized)
+        // Strip shared ends before allocating the table: whole-file cards usually
+        // change only a small region, even when the live file is thousands of lines.
+        var prefix = 0
+        while prefix < min(a.count, b.count), a[prefix] == b[prefix] { prefix += 1 }
+        var suffix = 0
+        while suffix < min(a.count, b.count) - prefix,
+              a[a.count - suffix - 1] == b[b.count - suffix - 1] { suffix += 1 }
+        let n = a.count - prefix - suffix, m = b.count - prefix - suffix
+        var lcs = Array(repeating: Array(repeating: 0, count: m + 1), count: n + 1)
+        for i in (0..<n).reversed() {
+            for j in (0..<m).reversed() {
+                lcs[i][j] = a[prefix + i] == b[prefix + j]
+                    ? lcs[i + 1][j + 1] + 1 : max(lcs[i + 1][j], lcs[i][j + 1])
+            }
+        }
+        var result = after.prefix(prefix).map { Line(kind: .same, text: $0) }
+        var i = 0, j = 0
+        while i < n || j < m {
+            if i < n, j < m, a[prefix + i] == b[prefix + j] {
+                result.append(Line(kind: .same, text: after[prefix + j])); i += 1; j += 1
+            } else if i < n, j == m || lcs[i + 1][j] >= lcs[i][j + 1] {
+                result.append(Line(kind: .removed, text: before[prefix + i])); i += 1
+            } else {
+                result.append(Line(kind: .added, text: after[prefix + j])); j += 1
+            }
+        }
+        result += after.suffix(suffix).map { Line(kind: .same, text: $0) }
+        return result
+    }
+
+    static func summary(_ lines: [Line]) -> (added: Int, removed: Int) {
+        (lines.filter { $0.kind == .added }.count, lines.filter { $0.kind == .removed }.count)
+    }
+
+    enum Row: Equatable {
+        case line(Line)
+        case unchanged(Int)
+    }
+
+    /// Keep two context lines next to each change. A middle run of four
+    /// lines stays intact because both changes need their two context lines.
+    static func rows(_ lines: [Line]) -> [Row] {
+        var result: [Row] = []
+        var index = 0
+        while index < lines.count {
+            guard lines[index].kind == .same else {
+                result.append(.line(lines[index])); index += 1; continue
+            }
+            let start = index
+            while index < lines.count, lines[index].kind == .same { index += 1 }
+            let count = index - start
+            let leading = start > 0 ? min(2, count) : 0
+            let trailing = index < lines.count ? min(2, count - leading) : 0
+            if count > 3, count > leading + trailing {
+                result += lines[start..<(start + leading)].map(Row.line)
+                result.append(.unchanged(count - leading - trailing))
+                result += lines[(index - trailing)..<index].map(Row.line)
+            } else {
+                result += lines[start..<index].map(Row.line)
+            }
+        }
+        return result
+    }
+}
+
 enum CodeBlockApplier {
     enum Outcome: Equatable {
         /// `find` was located and swapped for the block. `atLine` is the
