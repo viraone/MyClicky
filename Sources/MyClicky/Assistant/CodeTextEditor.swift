@@ -80,9 +80,17 @@ struct CodeTextEditor: NSViewRepresentable {
         guard let textView = context.coordinator.textView else { return }
         if textView.string != text {
             // Programmatic change (file switched, Apply pressed): replace the
-            // text but keep the caret somewhere sensible.
+            // text through the undo manager so a single ⌘Z reverts it, but
+            // keep the caret somewhere sensible.
             let selected = textView.selectedRange()
-            textView.string = text
+            let full = NSRange(location: 0, length: (textView.string as NSString).length)
+            if textView.shouldChangeText(in: full, replacementString: text) {
+                textView.undoManager?.beginUndoGrouping()
+                textView.textStorage?.replaceCharacters(in: full, with: text)
+                textView.didChangeText()
+                textView.undoManager?.setActionName("Apply")
+                textView.undoManager?.endUndoGrouping()
+            }
             (scroll.verticalRulerView as? CodeLineNumberRuler)?.rebuildLines()
             (textView as? FindableTextView)?.refreshBracketMatch()
             let end = (text as NSString).length
