@@ -62,13 +62,35 @@ struct TerminalPane: NSViewRepresentable {
         return session.view
     }
 
-    func updateNSView(_ view: LocalProcessTerminalView, context: Context) {}
+    func updateNSView(_ view: LocalProcessTerminalView, context: Context) {
+        context.coordinator.focusWhenMounted(view)
+    }
+
+    static func dismantleNSView(_ view: LocalProcessTerminalView, coordinator: Coordinator) {
+        coordinator.focusRequest?.cancel()
+    }
 
     func makeCoordinator() -> Coordinator { Coordinator(session) }
 
     final class Coordinator: NSObject, LocalProcessTerminalViewDelegate {
         let session: TerminalSession
+        private var didFocus = false
+        fileprivate var focusRequest: DispatchWorkItem?
         init(_ session: TerminalSession) { self.session = session }
+
+        func focusWhenMounted(_ view: LocalProcessTerminalView) {
+            guard !didFocus else { return }
+            focusRequest?.cancel()
+            // SwiftUI attaches the view after updateNSView. Focus once per
+            // mount so later updates don't steal focus from another field.
+            let request = DispatchWorkItem { [weak self, weak view] in
+                guard let self, let view, let window = view.window,
+                      !view.isHiddenOrHasHiddenAncestor else { return }
+                self.didFocus = window.makeFirstResponder(view)
+            }
+            focusRequest = request
+            DispatchQueue.main.async(execute: request)
+        }
 
         func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
         func setTerminalTitle(source: LocalProcessTerminalView, title: String) {}

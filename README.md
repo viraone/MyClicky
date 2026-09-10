@@ -160,7 +160,8 @@ running inside Peeky, started in the folder you dropped on Peeky Code — so
 after Peeky applies a change, `git diff`, `git commit`, `git push` or
 `npm start` are one tab away, without leaving the panel. ↻ restarts it in
 the current project. It's entirely local: nothing typed there goes to
-Claude, and it costs nothing to use.
+Claude, and it costs nothing to use. The terminal takes keyboard focus when
+selected: **⌘V** pastes, **⌘C** copies selected text, and **⌘K** clears.
 
 **+ → Images for the question…** (or drop image files, or just **⌘V** a
 picture off the clipboard — take a Peeky Capture, switch to the Code tab,
