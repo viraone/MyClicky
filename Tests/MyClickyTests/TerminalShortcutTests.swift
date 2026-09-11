@@ -119,6 +119,11 @@ final class TerminalShortcutTests: XCTestCase {
         XCTAssertEqual(steps, [1, 1, -1, 0])
     }
 
+    func testTerminalDragSelectsTextInsteadOfMovingPanel() {
+        let session = TerminalSession()
+        XCTAssertFalse(session.view.mouseDownCanMoveWindow)
+    }
+
     func testFocusOnMountDoesNotStealLaterFieldFocus() async {
         let panel = panel()
         let session = TerminalSession()
