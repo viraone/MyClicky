@@ -94,7 +94,9 @@ final class AssistantController {
         } else if kind == .capture {
             // A region grab: the mouse is where the drag ended, so that's the
             // display the capture came from. Park the preview in its top-right
-            // corner rather than wherever the panel last sat.
+            // corner rather than wherever the panel last sat. If the user
+            // deliberately tucked Peeky into its strip or dot, keep that
+            // compact layout while loading the capture in the background.
             let cursor = NSEvent.mouseLocation
             let screen = NSScreen.screens.first(where: { NSMouseInRect(cursor, $0.frame, false) }) ?? NSScreen.main
             if let screen {
@@ -103,7 +105,9 @@ final class AssistantController {
                     panel.state.status = .idle
                     panel.state.errorText = nil
                 }
-                panel.showInCorner(on: screen)
+                if !panel.state.collapsed && !panel.state.strip {
+                    panel.showInCorner(on: screen)
+                }
             }
         } else {
             showPanel()
