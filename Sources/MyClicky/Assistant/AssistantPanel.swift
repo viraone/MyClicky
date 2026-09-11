@@ -2593,7 +2593,9 @@ struct AssistantPanelView: View {
                                     .frame(width: 10)
                                 Image(systemName: collapsed ? "folder" : "folder.fill")
                                     .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(Self.codeFolderColor)
                                 Text(group.folder + "/")
+                                    .foregroundStyle(Self.codeFolderColor.opacity(0.9))
                                 Spacer(minLength: 0)
                                 if collapsed {
                                     Text("\(group.files.count) file\(group.files.count == 1 ? "" : "s")")
@@ -2602,7 +2604,6 @@ struct AssistantPanelView: View {
                                 }
                             }
                             .font(.system(size: 12.5, weight: .bold, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.55))
                             .padding(.top, 8)
                             .padding(.bottom, 2)
                             .contentShape(Rectangle())
@@ -2627,13 +2628,14 @@ struct AssistantPanelView: View {
 
     private func codeFileRow(_ file: CodeProject.File, indented: Bool) -> some View {
         let lines = file.text.reduce(into: 0) { if $1 == "\n" { $0 += 1 } }
+        let appearance = Self.codeFileAppearance(for: file.path)
         return Button {
             withAnimation(.easeInOut(duration: 0.18)) { state.codeFocusedFile = file.path }
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: "doc.text")
+                Image(systemName: appearance.icon)
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.45))
+                    .foregroundStyle(appearance.color)
                 Text((file.path as NSString).lastPathComponent)
                     .font(.system(size: 13.5, weight: .medium, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.9))
@@ -2650,6 +2652,38 @@ struct AssistantPanelView: View {
         }
         .buttonStyle(.plain)
         .help("Open \(file.path)")
+    }
+
+    private static let codeFolderColor = Color(red: 0.86, green: 0.68, blue: 0.35)
+
+    private static func codeFileAppearance(for path: String) -> (icon: String, color: Color) {
+        let name = (path as NSString).lastPathComponent.lowercased()
+        let ext = (name as NSString).pathExtension
+        switch name {
+        case "package.json":
+            return ("curlybraces", Color(red: 0.45, green: 0.76, blue: 0.42))
+        case "readme", "readme.md", "readme.markdown":
+            return ("book.closed.fill", Color(red: 0.38, green: 0.72, blue: 0.94))
+        case "dockerfile":
+            return ("shippingbox.fill", Color(red: 0.25, green: 0.65, blue: 0.95))
+        default:
+            break
+        }
+        switch ext {
+        case "swift": return ("swift", Color(red: 0.96, green: 0.43, blue: 0.24))
+        case "js", "mjs", "cjs": return ("j.square.fill", Color(red: 0.94, green: 0.80, blue: 0.25))
+        case "ts", "tsx": return ("t.square.fill", Color(red: 0.30, green: 0.64, blue: 0.91))
+        case "jsx": return ("atom", Color(red: 0.38, green: 0.78, blue: 0.91))
+        case "json": return ("curlybraces", Color(red: 0.86, green: 0.75, blue: 0.32))
+        case "html", "htm": return ("chevron.left.forwardslash.chevron.right", Color(red: 0.93, green: 0.36, blue: 0.22))
+        case "css", "scss", "sass", "less": return ("number.square.fill", Color(red: 0.40, green: 0.55, blue: 0.94))
+        case "py": return ("chevron.left.forwardslash.chevron.right", Color(red: 0.38, green: 0.66, blue: 0.84))
+        case "md", "markdown": return ("text.document.fill", Color(red: 0.38, green: 0.72, blue: 0.94))
+        case "yaml", "yml": return ("list.bullet.rectangle", Color(red: 0.78, green: 0.40, blue: 0.48))
+        case "sh", "bash", "zsh", "fish": return ("terminal.fill", Color(red: 0.43, green: 0.78, blue: 0.46))
+        case "sql": return ("cylinder.fill", Color(red: 0.85, green: 0.55, blue: 0.85))
+        default: return ("doc.text.fill", Color.white.opacity(0.55))
+        }
     }
 
     /// One file, the way the capture preview shows one image — and

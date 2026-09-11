@@ -930,6 +930,7 @@ final class AssistantController {
                 if !self.talkStreaming && !self.busy && !self.codeTabPinned { self.panel.state.tab = .ask }
                 self.showPanel()
             }
+            self.remote.broadcast(self.peekyLayoutLine())
         }
         remote.onStrip = { [weak self] in
             guard let self else { return }
@@ -938,6 +939,7 @@ final class AssistantController {
             } else {
                 self.panel.showAsStrip(on: self.panel.screen ?? self.workingScreen)
             }
+            self.remote.broadcast(self.peekyLayoutLine())
         }
         remote.onTab = { [weak self] name in
             guard let self else { return }
@@ -1186,7 +1188,8 @@ final class AssistantController {
         remote.greeting = { [weak self] in
             ["WHATSAPP_UNREAD \(self?.whatsappUnread.count ?? 0)",
              "GMAIL_UNREAD \(self?.gmailUnread.count ?? 0)",
-             self?.screensLine() ?? "SCREENS 1 1"]
+             self?.screensLine() ?? "SCREENS 1 1",
+             self?.peekyLayoutLine() ?? "PEEKY_LAYOUT HIDDEN"]
         }
         remote.onScreen = { [weak self] index in self?.switchScreen(to: index) }
         panel.onScreenChange = { [weak self] _ in
@@ -1246,6 +1249,13 @@ final class AssistantController {
     /// lever draws itself from this and nothing else.
     private func screensLine() -> String {
         "SCREENS \(NSScreen.screens.count) \(panel.currentScreenIndex ?? 0)"
+    }
+
+    private func peekyLayoutLine() -> String {
+        guard panel.isVisible else { return "PEEKY_LAYOUT HIDDEN" }
+        if panel.state.collapsed { return "PEEKY_LAYOUT COLLAPSED" }
+        if panel.state.strip { return "PEEKY_LAYOUT STRIP" }
+        return "PEEKY_LAYOUT EXPANDED"
     }
 
     /// The phone's screen lever: put Peeky's panel and the pointer on display

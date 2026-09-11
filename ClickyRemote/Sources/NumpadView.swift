@@ -1650,7 +1650,9 @@ struct NumpadView: View {
                         h: bannerH, w: bannerW, banner: true)
                     key("0", label: "PEEKY", icon: "sparkles", tint: Snes.purple, lit: true,
                         h: bannerH, w: bannerW, banner: true)
-                    key("strip", label: "COLLAPSE", icon: "chevron.left", tint: Snes.green, lit: true,
+                    key("strip", label: client.peekyLayout == "STRIP" ? "EXPAND" : "COLLAPSE",
+                        icon: client.peekyLayout == "STRIP" ? "chevron.right" : "chevron.left",
+                        tint: Snes.green, lit: true,
                         h: bannerH, w: bannerW, banner: true)
                 }
                 HStack(alignment: .top, spacing: gap) {
@@ -1737,8 +1739,11 @@ struct NumpadView: View {
                         Text(label ?? id)
                             .font(.system(size: 18, weight: .semibold, design: .rounded))
                             .lineLimit(1)
+                            .minimumScaleFactor(0.6)
+                            .allowsTightening(true)
+                            .layoutPriority(1)
                     }
-                    .padding(.horizontal, 14)
+                    .padding(.horizontal, 10)
                 } else if !hero, let label {
                     HStack(spacing: 10) {
                         Image(systemName: icon ?? "")

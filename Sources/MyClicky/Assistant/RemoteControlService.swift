@@ -69,6 +69,7 @@ import Network
 ///                    YOUTUBE COLLAPSE toggle
 ///   GMAIL_UNREAD <n>          – Gmail's unread count changed (read from its
 ///                    tab title; 0 = cleared, or no Gmail tab open right now)
+///   PEEKY_LAYOUT <state>       – HIDDEN, COLLAPSED, STRIP, or EXPANDED
 ///   CAPTURE        – start the ⌃⌥X drag-to-select region capture
 ///   ASK <question> – submit a question exactly as if typed in the panel
 ///   DICTATE <text> – treat text as finished dictation (clipboard, paired with
