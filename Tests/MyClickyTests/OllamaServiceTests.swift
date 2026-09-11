@@ -38,4 +38,26 @@ final class OllamaServiceTests: XCTestCase {
         )
         XCTAssertTrue(answer.contains("LOCAL_OK"))
     }
+
+    func testLocalMessagesRestateTheEditFormat() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("peeky-ollama-messages-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "export const answer = 42\n".write(
+            to: root.appendingPathComponent("answer.ts"), atomically: true, encoding: .utf8)
+        let project = try XCTUnwrap(CodeProjectBundler.bundle(urls: [root]))
+
+        let messages = OllamaService.messages(question: "Make it 43", project: project, focusedFile: "answer.ts",
+                                              changedFiles: [], history: [(question: "Q1", answer: "A1")])
+        XCTAssertEqual(messages.map { $0["role"] }, ["system", "user", "assistant", "user"])
+        let system = try XCTUnwrap(messages[0]["content"])
+        XCTAssertTrue(system.contains(AnthropicService.codeSystemPrompt), "same prompt Claude gets")
+        XCTAssertTrue(system.contains(OllamaService.editFormatReminder), "plus the local-model reminder")
+        XCTAssertTrue(system.contains("===== FILE: answer.ts"), "and the project itself")
+        let last = try XCTUnwrap(messages[3]["content"])
+        XCTAssertTrue(last.contains("Make it 43"))
+        XCTAssertTrue(last.contains("1 | export const answer = 42"), "focused file rides along with line numbers")
+        XCTAssertTrue(last.hasSuffix(OllamaService.questionReminder), "reminder is the last thing the model reads")
+    }
 }

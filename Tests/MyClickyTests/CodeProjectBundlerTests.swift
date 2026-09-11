@@ -185,6 +185,111 @@ final class CodeProjectBundlerTests: XCTestCase {
         XCTAssertEqual(same, file)
     }
 
+    func testApplierReplacesRedefinedFunctionWithoutAQuote() {
+        // Qwen's answer to the local-provider smoke test: the fixed function
+        // alone, no "current code" block before it.
+        let file = """
+        // Peeky Local-provider smoke test. One deliberate bug lives in this file.
+
+        export function average(numbers: number[]): number {
+          let total = 0;
+          for (let i = 0; i <= numbers.length; i++) {
+            total += numbers[i];
+          }
+          return total / numbers.length;
+        }
+
+        console.log(average([2, 4, 6])); // expected 4
+
+        """
+        let fixed = """
+        export function average(numbers: number[]): number {
+          let total = 0;
+          for (let i = 0; i < numbers.length; i++) {
+            total += numbers[i];
+          }
+          return total / numbers.length;
+        }
+        """
+        let (out, outcome) = CodeBlockApplier.apply(fixed, replacing: nil, in: file)
+        XCTAssertEqual(outcome, .replaced(lines: 7, atLine: 3))
+        XCTAssertTrue(out.contains("i < numbers.length"))
+        XCTAssertFalse(out.contains("i <= numbers.length"))
+        XCTAssertTrue(out.hasPrefix("// Peeky Local-provider smoke test"), "the header comment survives")
+        XCTAssertTrue(out.hasSuffix("console.log(average([2, 4, 6])); // expected 4\n"), "the code after the function survives")
+        // A trailing statement makes the block more than one definition — leave it alone.
+        let (same, lost) = CodeBlockApplier.apply(fixed + "\nconsole.log(1);", replacing: nil, in: file)
+        XCTAssertEqual(lost, .notFound)
+        XCTAssertEqual(same, file)
+    }
+
+    func testApplierRedefinitionReindentsAMethodAndIgnoresBracesInStrings() {
+        let file = """
+        class Greeter {
+          greet(name) {
+            return "}" + name;
+          }
+
+          shout(name) {
+            return "{" + name; // }
+          }
+        }
+
+        """
+        let block = """
+        shout(name) {
+          return name.toUpperCase() + "!";
+        }
+        """
+        let (out, outcome) = CodeBlockApplier.apply(block, replacing: nil, in: file)
+        XCTAssertEqual(outcome, .replaced(lines: 3, atLine: 6))
+        XCTAssertEqual(out, """
+        class Greeter {
+          greet(name) {
+            return "}" + name;
+          }
+
+          shout(name) {
+            return name.toUpperCase() + "!";
+          }
+        }
+
+        """)
+    }
+
+    func testApplierRedefinitionCarriesTheDocCommentAndSkipsAmbiguousNames() {
+        let file = """
+        final class Counter {
+            var n = 0
+            /// Bumps.
+            func bump() {
+                n += 1
+            }
+        }
+
+        """
+        let block = """
+        /// Bumps by two.
+        func bump() {
+            n += 2
+        }
+        """
+        let (out, outcome) = CodeBlockApplier.apply(block, replacing: nil, in: file)
+        XCTAssertEqual(outcome, .replaced(lines: 4, atLine: 3))
+        XCTAssertTrue(out.contains("    /// Bumps by two.\n    func bump() {\n        n += 2\n    }\n"))
+        XCTAssertFalse(out.contains("/// Bumps.\n"), "the block's own doc comment replaces the file's")
+
+        // Overloads: two definitions of `f`, so there's no single spot to land.
+        let overloads = "func f(_ a: Int) -> Int { a }\nfunc f(_ a: String) -> String { a }\n"
+        let (same, lost) = CodeBlockApplier.apply("func f(_ a: Int) -> Int { a + 1 }", replacing: nil, in: overloads)
+        XCTAssertEqual(lost, .notFound)
+        XCTAssertEqual(same, overloads)
+        // No body to match: `let` lines are left to the quote-and-replace path.
+        let (same2, lost2) = CodeBlockApplier.apply("let limit = 20", replacing: nil, in: "let limit = 10\nlet other = { 1 }\n")
+        XCTAssertEqual(lost2, .notFound)
+        XCTAssertEqual(same2, "let limit = 10\nlet other = { 1 }\n")
+    }
+
     func testApplierKnowsQuotesOfTheFile() {
         let file = "a\n  b  \nc\n"
         XCTAssertTrue(CodeBlockApplier.alreadyContains("  b\nc", in: file))

@@ -23,9 +23,36 @@ final class OllamaService {
         try await ensureRunning()
         try await ensureModel(model, onStatus: onStatus)
 
+        let messages = Self.messages(question: question, project: project, focusedFile: focusedFile,
+                                     changedFiles: changedFiles, history: history)
+
+        let body: [String: Any] = [
+            "model": model,
+            "stream": false,
+            "messages": messages,
+            "options": ["temperature": 0.2],
+        ]
+        let data = try await post(path: "api/chat", body: body, timeout: 600)
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let message = json["message"] as? [String: Any],
+              let text = (message["content"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty else {
+            throw OllamaError.emptyResponse
+        }
+        return text
+    }
+
+    /// The conversation as Ollama's chat API wants it: the same system
+    /// prompt and project bundle Claude gets, plus a blunt restatement of
+    /// the two-block edit format. Local models otherwise tend to answer
+    /// with only the replacement, which leaves Apply nothing to match.
+    static func messages(question: String, project: CodeProject, focusedFile: String?,
+                         changedFiles: [(path: String, text: String)],
+                         history: [(question: String, answer: String)]) -> [[String: String]] {
         var messages: [[String: String]] = [[
             "role": "system",
             "content": AnthropicService.codeSystemPrompt
+                + "\n\n" + editFormatReminder
                 + (project.guidanceText.map { "\n\n\($0)" } ?? "")
                 + "\n\n" + project.bundleText,
         ]]
@@ -50,24 +77,23 @@ final class OllamaService {
                     + Self.numbered(text) + "\n\n"
             }
         }
-        current += question
+        current += question + "\n\n" + questionReminder
         messages.append(["role": "user", "content": current])
-
-        let body: [String: Any] = [
-            "model": model,
-            "stream": false,
-            "messages": messages,
-            "options": ["temperature": 0.2],
-        ]
-        let data = try await post(path: "api/chat", body: body, timeout: 600)
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let message = json["message"] as? [String: Any],
-              let text = (message["content"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !text.isEmpty else {
-            throw OllamaError.emptyResponse
-        }
-        return text
+        return messages
     }
+
+    /// Appended to the system prompt for local models only.
+    static let editFormatReminder = """
+    Formatting rule that matters most here: when you change code that already exists, give TWO \
+    fenced code blocks back to back. Block one is the current code copied exactly from the file, \
+    unchanged, with enough lines to be unique. Block two is the replacement. Never give only the \
+    replacement. Tag each fence with the file's real language and its path, for example \
+    ```ts src/average.ts — ts for .ts files, swift for .swift files; never js for TypeScript.
+    """
+
+    /// Tacked onto the end of every question, where small models look last.
+    static let questionReminder = "(Reminder: to change existing code, first a fenced block quoting the current code "
+        + "exactly, then a second fenced block with the replacement. Tag both with language and file path.)"
 
     /// `"a\nb"` → `"1 | a\n2 | b"`, right-aligned so columns line up.
     static func numbered(_ text: String) -> String {

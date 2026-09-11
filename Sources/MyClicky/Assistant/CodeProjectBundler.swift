@@ -580,6 +580,13 @@ enum CodeBlockApplier {
                         .replaced(lines: looseNeedle.components(separatedBy: "\n").count, atLine: lineOf(looseText, range.lowerBound)))
             }
         }
+        // No "current code" quote, just one block that redefines a function,
+        // type, or method the file already has: find that definition by
+        // name, match its braces, and swap it in place.
+        if find?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true,
+           let redefined = redefine(block, in: text) {
+            return redefined
+        }
         // A whole-file rewrite: opens the way the file does and is about as long.
         let firstLine = { (s: String) in s.components(separatedBy: "\n").first { !$0.trimmingCharacters(in: .whitespaces).isEmpty } ?? "" }
         if !text.isEmpty, firstLine(block) == firstLine(text), Double(block.count) > Double(text.count) * 0.5 {
@@ -589,6 +596,117 @@ enum CodeBlockApplier {
             return (block + "\n", .rewroteFile)
         }
         return (text, .notFound)
+    }
+
+    /// The answer skipped the "current code" quote and gave one block that
+    /// redefines a single function, type, or method in the file. Only fires
+    /// when the target is unambiguous: the block is nothing but that one
+    /// definition (a doc comment or attribute above it is fine), the name is
+    /// defined exactly once in the file, and both have a `{…}` body whose
+    /// braces match. Brace-bodied languages only — Python is left alone.
+    static func redefine(_ block: String, in text: String) -> (String, Outcome)? {
+        let blockLines = block.components(separatedBy: "\n")
+        guard let blockDef = blockLines.firstIndex(where: { !isPreamble($0) && !isBlank($0) }),
+              let name = definedName(onLine: blockLines[blockDef]),
+              let blockEnd = closingBraceLine(from: blockDef, in: blockLines),
+              blockLines[(blockEnd + 1)...].allSatisfy(isBlank)
+        else { return nil }
+        let fileLines = text.components(separatedBy: "\n")
+        let definitions = CodeBlockLocator.definitionLines(of: name, in: text)
+        guard definitions.count == 1, let fileDef = definitions.first.map({ $0 - 1 }),
+              let fileEnd = closingBraceLine(from: fileDef, in: fileLines), fileEnd >= fileDef
+        else { return nil }
+        // A doc comment or attribute above the definition travels with it:
+        // when the block brings its own, the file's old one goes too.
+        var fileStart = fileDef
+        if blockDef > 0 {
+            while fileStart > 0, isPreamble(fileLines[fileStart - 1]) { fileStart -= 1 }
+        }
+        // A method the model wrote flush-left lands at the file's indentation.
+        let fileIndent = leadingWhitespace(fileLines[fileDef])
+        let blockIndent = leadingWhitespace(blockLines[blockDef])
+        let replacement = blockLines[...blockEnd].map { line -> String in
+            guard fileIndent != blockIndent, !isBlank(line) else { return line }
+            return fileIndent + (line.hasPrefix(blockIndent) ? String(line.dropFirst(blockIndent.count)) : line)
+        }
+        let updated = Array(fileLines[..<fileStart]) + replacement + Array(fileLines[(fileEnd + 1)...])
+        return (updated.joined(separator: "\n"), .replaced(lines: fileEnd - fileStart + 1, atLine: fileStart + 1))
+    }
+
+    /// What a line defines: `export function foo`, `func foo`, `class Foo`
+    /// via the locator's keyword list, or a bare method signature such as
+    /// `greet(name) {` / `async load(): Promise<void> {`.
+    private static func definedName(onLine line: String) -> String? {
+        if let name = CodeBlockLocator.definedName(in: line) { return name }
+        let method = "^[ \\t]*(?:(?:public|private|protected|static|async|override|get|set)\\s+)*([A-Za-z_$][A-Za-z0-9_$]*)\\s*\\([^)]*\\)\\s*(?:(?:->|:)[^{]*)?\\{\\s*$"
+        guard let regex = try? NSRegularExpression(pattern: method),
+              let match = regex.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)),
+              let range = Range(match.range(at: 1), in: line) else { return nil }
+        let name = String(line[range])
+        return controlKeywords.contains(name) ? nil : name
+    }
+
+    private static let controlKeywords: Set<String> = [
+        "if", "else", "for", "while", "do", "switch", "catch", "try", "return", "function", "guard", "with", "repeat",
+    ]
+
+    /// Index of the line holding the `}` that closes the `{` opening the
+    /// definition on `start` (or on the next line, Allman style). nil when
+    /// the definition has no body before a `;`, or the braces never balance.
+    /// Braces inside strings and comments don't count.
+    private static func closingBraceLine(from start: Int, in lines: [String]) -> Int? {
+        guard start < lines.count else { return nil }
+        var depth = 0, opened = false, inBlockComment = false, inMultilineString = false
+        var quote: Character?
+        for index in start..<lines.count {
+            if !opened, index > start + 1 { return nil }
+            let chars = Array(lines[index])
+            var i = 0
+            while i < chars.count {
+                let c = chars[i]
+                let next: Character? = i + 1 < chars.count ? chars[i + 1] : nil
+                let tripleQuote = c == "\"" && next == "\"" && i + 2 < chars.count && chars[i + 2] == "\""
+                if inMultilineString {
+                    if tripleQuote { inMultilineString = false; i += 2 }
+                } else if inBlockComment {
+                    if c == "*", next == "/" { inBlockComment = false; i += 1 }
+                } else if let q = quote {
+                    if c == "\\" { i += 1 } else if c == q { quote = nil }
+                } else if c == "/", next == "/" {
+                    break
+                } else if c == "/", next == "*" {
+                    inBlockComment = true; i += 1
+                } else if tripleQuote {
+                    inMultilineString = true; i += 2
+                } else if c == "\"" || c == "'" || c == "`" {
+                    quote = c
+                } else if c == "{" {
+                    depth += 1; opened = true
+                } else if c == "}" {
+                    depth -= 1
+                    if depth < 0 { return nil }
+                    if opened, depth == 0 { return index }
+                } else if c == ";", !opened {
+                    return nil
+                }
+                i += 1
+            }
+            if quote != "`" { quote = nil }  // only template literals span lines
+        }
+        return nil
+    }
+
+    private static func isPreamble(_ line: String) -> Bool {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        return ["//", "/*", "*", "#", "@"].contains { t.hasPrefix($0) }
+    }
+
+    private static func isBlank(_ line: String) -> Bool {
+        line.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    private static func leadingWhitespace(_ line: String) -> String {
+        String(line.prefix { $0 == " " || $0 == "\t" })
     }
 
     private static func trimmedNewlines(_ s: String) -> String {
@@ -732,18 +850,31 @@ enum CodeBlockLocator {
 
     private static let definers = "(?:function|func|class|struct|enum|protocol|interface|type|def|let|var|const|val|fn|static func|private func|public func|async function|export function|export const|export default function|@State private var|@Published var)"
 
-    private static func definitionLine(of name: String, in text: String) -> Int? {
+    /// Every 1-based line where `name` is defined — by a keyword
+    /// (`function foo`, `func foo`, `class Foo`…) or, failing that, as a
+    /// bare method or key at the start of a line (`foo(`, `foo:`, `foo =`).
+    static func definitionLines(of name: String, in text: String) -> [Int] {
         let escaped = NSRegularExpression.escapedPattern(for: name)
-        let pattern = "(?m)^[ \\t]*(?:export\\s+)?(?:(?:public|private|internal|static|final|override|async)\\s+)*" + definers + "\\s+" + escaped + "(?![A-Za-z0-9_$])"
-        if let range = text.range(of: pattern, options: .regularExpression) {
-            return text[..<range.lowerBound].reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
-        }
+        let keyword = "(?m)^[ \\t]*(?:export\\s+)?(?:(?:public|private|internal|static|final|override|async)\\s+)*" + definers + "\\s+" + escaped + "(?![A-Za-z0-9_$])"
         // "foo: function(" / "foo = (" / "foo(" at line start — object methods and CSS-ish keys.
-        let alt = "(?m)^[ \\t]*" + escaped + "\\s*(?:[:=]|\\()"
-        if let range = text.range(of: alt, options: .regularExpression) {
-            return text[..<range.lowerBound].reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
+        let bare = "(?m)^[ \\t]*" + escaped + "\\s*(?:[:=]|\\()"
+        for pattern in [keyword, bare] {
+            let lines = matchLines(pattern, in: text)
+            if !lines.isEmpty { return lines }
         }
-        return nil
+        return []
+    }
+
+    private static func definitionLine(of name: String, in text: String) -> Int? {
+        definitionLines(of: name, in: text).first
+    }
+
+    private static func matchLines(_ pattern: String, in text: String) -> [Int] {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let ns = text as NSString
+        return regex.matches(in: text, range: NSRange(location: 0, length: ns.length)).map { match in
+            ns.substring(to: match.range.location).reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
+        }
     }
 
     /// The first identifier a block defines, if it opens with a definition.
