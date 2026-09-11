@@ -3,6 +3,17 @@ import OSLog
 
 private let log = Logger(subsystem: "com.myclicky", category: "code-project")
 
+struct CodeProjectProfile: Sendable, Equatable {
+    let title: String
+    let instructions: String
+    let relativePath: String
+}
+
+struct CodeStackItem: Sendable, Equatable {
+    let name: String
+    let evidence: String
+}
+
 /// A folder (or handful of files) the user dropped on the Peeky Code tab,
 /// read into memory as plain text so Claude can answer questions about it.
 ///
@@ -22,6 +33,11 @@ struct CodeProject: Sendable, Equatable {
     let root: URL
     let name: String
     let files: [File]
+    /// Maintainer-authored guidance, loaded separately so it is clearly
+    /// instructions rather than project source.
+    let profile: CodeProjectProfile?
+    /// Technologies inferred from files and dependencies, with their evidence.
+    let detectedStack: [CodeStackItem]
     /// Folder names that were skipped wholesale (build output, assets…),
     /// deduplicated, for the "what did Peeky leave out" line.
     let skippedFolders: [String]
@@ -36,6 +52,31 @@ struct CodeProject: Sendable, Equatable {
     /// Rough token count. Code averages closer to 3.5 characters a token
     /// than prose's 4, and the answer is only ever shown as "≈".
     var estimatedTokens: Int { Int(Double(totalCharacters) / 3.5) }
+
+    /// Stable context that precedes the project source in the cached prompt.
+    var guidanceText: String? {
+        guard profile != nil || !detectedStack.isEmpty else { return nil }
+        var sections: [String] = []
+        if let profile {
+            sections.append("""
+            PROJECT PROFILE — maintainer-provided instructions from \(profile.relativePath):
+            \(profile.instructions)
+            """)
+        }
+        if !detectedStack.isEmpty {
+            let lines = detectedStack.map { "- \($0.name): \($0.evidence)" }.joined(separator: "\n")
+            sections.append("""
+            DETECTED STACK — derived from the current project files:
+            \(lines)
+            """)
+        }
+        sections.append("""
+        Treat the detected stack and project source as evidence of what exists today. \
+        A profile may describe intended additions; never claim those are implemented \
+        unless the project files confirm it. Ground recommendations in exact files.
+        """)
+        return sections.joined(separator: "\n\n")
+    }
 
     /// The text Claude sees: a file tree first (so it can reason about
     /// structure and ask for files by name), then every file under a header.
@@ -95,6 +136,8 @@ enum CodeProjectBundler {
     /// (generated code, a data dump, a minified bundle) — skipped.
     static let maxFileBytes = 200_000
     static let maxFiles = 500
+    static let maxProfileCharacters = 40_000
+    static let profileRelativePath = ".peeky/project-profile.md"
 
     /// Extensions that count as code or project text. Anything else is
     /// skipped so a dropped folder never drags in images, fonts, or binaries.
@@ -164,10 +207,90 @@ enum CodeProjectBundler {
                  skippedFiles: &skippedFiles, total: &total, truncated: &truncated)
         }
         files.sort { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+        let profile = loadProfile(root: root, skippedFiles: &skippedFiles)
+        let stack = detectStack(root: root, files: files)
         log.notice("bundled \(name, privacy: .public): \(files.count) files, \(total) chars, truncated=\(truncated)")
-        return CodeProject(root: root, name: name, files: files,
+        return CodeProject(root: root, name: name, files: files, profile: profile, detectedStack: stack,
                            skippedFolders: Array(Set(skippedFolders)).sorted(),
                            skippedFiles: skippedFiles, truncated: truncated)
+    }
+
+    private static func loadProfile(root: URL, skippedFiles: inout [String]) -> CodeProjectProfile? {
+        let url = root.appendingPathComponent(profileRelativePath)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        guard let data = try? Data(contentsOf: url), let text = decodeText(data) else {
+            skippedFiles.append(profileRelativePath)
+            return nil
+        }
+        let instructions = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !instructions.isEmpty, instructions.count <= maxProfileCharacters else {
+            skippedFiles.append(profileRelativePath)
+            return nil
+        }
+        let heading = instructions.split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { $0.hasPrefix("# ") }
+            .map { String($0.dropFirst(2)).trimmingCharacters(in: .whitespaces) }
+        return CodeProjectProfile(title: heading?.isEmpty == false ? heading! : "Project Profile",
+                                  instructions: instructions,
+                                  relativePath: profileRelativePath)
+    }
+
+    private static func detectStack(root: URL, files: [CodeProject.File]) -> [CodeStackItem] {
+        let byPath = Dictionary(uniqueKeysWithValues: files.map { ($0.path.lowercased(), $0.text) })
+        let paths = Set(byPath.keys)
+        var dependencies: [String: String] = [:]
+        if let package = byPath["package.json"]?.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: package) as? [String: Any] {
+            for key in ["dependencies", "devDependencies"] {
+                for (name, version) in json[key] as? [String: String] ?? [:] {
+                    dependencies[name] = version
+                }
+            }
+        }
+        var result: [CodeStackItem] = []
+        func add(_ name: String, _ evidence: String) {
+            guard !result.contains(where: { $0.name == name }) else { return }
+            result.append(CodeStackItem(name: name, evidence: evidence))
+        }
+        func dependency(_ name: String) -> String? {
+            dependencies[name].map { "\(name) \($0) in package.json" }
+        }
+
+        if let evidence = dependency("typescript") {
+            add("TypeScript", evidence)
+        } else if paths.contains("tsconfig.json") || paths.contains(where: { $0.hasSuffix(".ts") || $0.hasSuffix(".tsx") }) {
+            add("TypeScript", paths.contains("tsconfig.json") ? "tsconfig.json" : "TypeScript source files")
+        }
+        if let evidence = dependency("@playwright/test") { add("Playwright Test", evidence) }
+        if paths.contains("package.json") {
+            add("Node.js", dependency("@types/node") ?? "package.json")
+        }
+        let source = files.map(\.text).joined(separator: "\n")
+        if source.contains("APIRequestContext") || source.contains("request.newContext(")
+            || source.contains("request.get(") || source.contains("request.post(") {
+            add("REST/API testing", "Playwright APIRequestContext usage")
+        }
+        if paths.contains(where: { $0.hasSuffix(".sql") }) { add("SQL", "SQL source files") }
+        let workflows = root.appendingPathComponent(".github/workflows")
+        if FileManager.default.fileExists(atPath: workflows.path) { add("GitHub Actions", ".github/workflows") }
+        if paths.contains("dockerfile") || paths.contains(where: {
+            $0 == "compose.yml" || $0 == "compose.yaml" || $0 == "docker-compose.yml" || $0 == "docker-compose.yaml"
+        }) {
+            add("Docker", paths.contains("dockerfile") ? "Dockerfile" : "Compose configuration")
+        }
+        if let eslint = dependency("eslint") { add("ESLint", eslint) }
+        if let prettier = dependency("prettier") { add("Prettier", prettier) }
+        if let config = byPath["playwright.config.ts"] ?? byPath["playwright.config.js"] {
+            var reports: [String] = []
+            if config.contains("'html'") || config.contains("\"html\"") { reports.append("HTML") }
+            if config.contains("'junit'") || config.contains("\"junit\"") { reports.append("JUnit") }
+            if !reports.isEmpty { add("\(reports.joined(separator: " + ")) reports", "playwright.config") }
+        }
+        if let allure = dependencies.first(where: { $0.key.lowercased().contains("allure") }) {
+            add("Allure reporting", "\(allure.key) \(allure.value) in package.json")
+        }
+        return result
     }
 
     private static func walk(_ url: URL, root: URL, files: inout [CodeProject.File],

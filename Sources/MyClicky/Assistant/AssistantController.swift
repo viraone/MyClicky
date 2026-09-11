@@ -459,6 +459,12 @@ final class AssistantController {
             if project.truncated {
                 line += " Too big to send whole: \(project.skippedFiles.count) files left out — drop a subfolder for those."
             }
+            if let profile = project.profile {
+                line += " Active profile: \(profile.title)."
+            }
+            if !project.detectedStack.isEmpty {
+                line += " Detected: \(project.detectedStack.map(\.name).joined(separator: ", "))."
+            }
             panel.state.logCode(.status, line)
             refreshLiveCost()
             ActivityLog.recordAction("code-project", ["via": via, "files": "\(project.files.count)",

@@ -2412,6 +2412,27 @@ struct AssistantPanelView: View {
                 }
                 .help(project.root.path)
                 HStack(spacing: 6) {
+                    if let profile = project.profile {
+                        Button {
+                            state.codePrefillQuestion = Self.sdetReviewPrompt
+                        } label: {
+                            Label(profile.title, systemImage: "checkmark.seal.fill")
+                                .font(.system(size: 11.5, weight: .bold, design: .monospaced))
+                                .foregroundStyle(Color(red: 0.55, green: 0.78, blue: 1))
+                                .lineLimit(1)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(Color.blue.opacity(0.14)))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Active project profile: \(profile.relativePath). Click to prepare an SDET Review.")
+                    }
+                    if !project.detectedStack.isEmpty {
+                        Text(project.detectedStack.map(\.name).joined(separator: " · "))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .help(project.detectedStack.map { "\($0.name): \($0.evidence)" }.joined(separator: "\n"))
+                    }
                     if let usage = state.codeUsage {
                         Image(systemName: usage.hitCache ? "bolt.fill" : "bolt.slash")
                             .font(.system(size: 11, weight: .bold))
@@ -2909,6 +2930,18 @@ struct AssistantPanelView: View {
     private func codeCostString(_ usd: Double) -> String {
         usd < 0.01 ? String(format: "$%.3f", usd) : String(format: "$%.2f", usd)
     }
+
+    private static let sdetReviewPrompt = """
+    Perform a mid-level SDET readiness review of this project using the active \
+    project profile and only evidence present in the loaded files. Separate \
+    what is implemented from what is missing or only planned. Assess test \
+    architecture, Playwright practices, TypeScript quality, UI and API \
+    coverage, test-data and SQL strategy, CI, Docker, linting/formatting, and \
+    HTML/JUnit/Allure reporting. Cite exact file paths for every finding, rank \
+    the gaps by hiring impact, and recommend the next three concrete changes. \
+    Also explain how I should discuss the strongest existing design decisions \
+    in a mid-level SDET interview. Do not invent files, tests, or integrations.
+    """
 
     private func codeCostPill(_ text: String, help: String) -> some View {
         Text(text)

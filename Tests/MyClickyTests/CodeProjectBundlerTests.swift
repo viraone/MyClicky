@@ -60,6 +60,51 @@ final class CodeProjectBundlerTests: XCTestCase {
         let a = try XCTUnwrap(CodeProjectBundler.bundle(urls: [root]))
         let b = try XCTUnwrap(CodeProjectBundler.bundle(urls: [root]))
         XCTAssertEqual(a.bundleText, b.bundleText)
+        XCTAssertEqual(a.guidanceText, b.guidanceText)
+    }
+
+    func testLoadsProfileSeparatelyAndDetectsActualStack() throws {
+        try write(".peeky/project-profile.md", """
+        # Remote Freedom SDET
+
+        Prefer deterministic Playwright tests and explain interview tradeoffs.
+        """)
+        try write("package.json", """
+        {
+          "devDependencies": {
+            "@playwright/test": "^1.63.0",
+            "@types/node": "^22.20.2",
+            "eslint": "^10.10.0",
+            "prettier": "^3.9.6",
+            "typescript": "^6.0.3"
+          }
+        }
+        """)
+        try write("playwright.config.ts", "reporter: [['html'], ['junit']]\n")
+        try write(".github/workflows/tests.yml", "name: tests\n")
+
+        let project = try XCTUnwrap(CodeProjectBundler.bundle(urls: [root]))
+        XCTAssertEqual(project.profile?.title, "Remote Freedom SDET")
+        XCTAssertEqual(project.profile?.relativePath, ".peeky/project-profile.md")
+        XCTAssertFalse(project.files.contains { $0.path == ".peeky/project-profile.md" })
+        XCTAssertEqual(project.detectedStack.map(\.name), [
+            "TypeScript", "Playwright Test", "Node.js", "GitHub Actions",
+            "ESLint", "Prettier", "HTML + JUnit reports",
+        ])
+        XCTAssertTrue(project.guidanceText?.contains("never claim those are implemented") == true)
+    }
+
+    func testDoesNotClaimUnconfiguredAspirationalStack() throws {
+        try write(".peeky/project-profile.md", """
+        # SDET Profile
+        Add SQL, Docker, REST API testing, and Allure in future milestones.
+        """)
+
+        let project = try XCTUnwrap(CodeProjectBundler.bundle(urls: [root]))
+        XCTAssertFalse(project.detectedStack.map(\.name).contains("SQL"))
+        XCTAssertFalse(project.detectedStack.map(\.name).contains("Docker"))
+        XCTAssertFalse(project.detectedStack.map(\.name).contains("REST/API testing"))
+        XCTAssertFalse(project.detectedStack.map(\.name).contains("Allure reporting"))
     }
 
     func testLooseFilesRootAtCommonParent() throws {

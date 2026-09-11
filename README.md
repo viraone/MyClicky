@@ -138,6 +138,13 @@ question re-primes the cache). Projects over ~170K tokens are cut off with a
 warning; drop a subfolder instead. `.env`, keys and certificates are never
 bundled.
 
+A project can add `.peeky/project-profile.md` with maintainer-authored guidance
+for Peeky Code. Peeky loads it separately from source, detects the actual stack
+from project files and dependencies, and includes both ahead of the cached
+project block. The project card shows the active profile and detected tools;
+clicking the profile badge prepares a grounded **SDET Review** that separates
+implemented capabilities from planned ones and cites exact project files.
+
 Click the project card to browse its files and click one to preview it
 (the caret on the preview folds it away); questions are then about that
 file. The preview is editable: type and it saves to disk about a second
