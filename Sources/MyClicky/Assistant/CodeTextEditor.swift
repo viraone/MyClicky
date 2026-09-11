@@ -1,6 +1,11 @@
 import AppKit
 import SwiftUI
 
+struct CodeEditorDiagnosticHighlight {
+    let range: NSRange
+    let severity: Int
+}
+
 /// The editable file preview on the Peeky Code tab. Wraps `NSTextView`
 /// directly so Peeky can paint find matches and pick up ⌘F itself — a
 /// plain `TextEditor` gives no way to do either.
@@ -11,6 +16,8 @@ struct CodeTextEditor: NSViewRepresentable {
     var current: NSRange?
     var onFind: (() -> Void)?
     var onEscape: (() -> Void)?
+    var onSelectionChange: ((Int) -> Void)?
+    var diagnostics: [CodeEditorDiagnosticHighlight] = []
     var language: SyntaxHighlighter.Language = .other
     /// Scroll to and select this 1-based line once, then call `onDidJump`.
     var jumpToLine: Int?
@@ -109,6 +116,7 @@ struct CodeTextEditor: NSViewRepresentable {
         }
         context.coordinator.language = language
         applyHighlights(to: textView, coordinator: context.coordinator)
+        applyDiagnostics(to: textView, coordinator: context.coordinator)
         if let line = jumpToLine, line > 0 {
             let ns = textView.string as NSString
             var index = 0, current = 1
@@ -152,9 +160,28 @@ struct CodeTextEditor: NSViewRepresentable {
         for range in highlights where NSMaxRange(range) <= length {
             layout.addTemporaryAttribute(.backgroundColor, value: NSColor.systemYellow.withAlphaComponent(0.28), forCharacterRange: range)
         }
+
         if let current, NSMaxRange(current) <= length {
             layout.addTemporaryAttribute(.backgroundColor, value: NSColor.systemOrange.withAlphaComponent(0.75), forCharacterRange: current)
             textView.scrollRangeToVisible(current)
+        }
+    }
+
+    fileprivate func applyDiagnostics(to textView: NSTextView, coordinator: Coordinator) {
+        guard let layout = textView.layoutManager else { return }
+        let length = (textView.string as NSString).length
+        let key = diagnostics.map { "\($0.range.location):\($0.range.length):\($0.severity)" }.joined(separator: ",")
+        guard key != coordinator.diagnosticKey else { return }
+        coordinator.diagnosticKey = key
+        let full = NSRange(location: 0, length: length)
+        layout.removeTemporaryAttribute(.underlineStyle, forCharacterRange: full)
+        layout.removeTemporaryAttribute(.underlineColor, forCharacterRange: full)
+        for diagnostic in diagnostics where NSMaxRange(diagnostic.range) <= length {
+            let color = diagnostic.severity == 1 ? NSColor.systemRed : NSColor.systemOrange
+            layout.addTemporaryAttributes([
+                .underlineStyle: NSUnderlineStyle.patternDot.rawValue | NSUnderlineStyle.thick.rawValue,
+                .underlineColor: color,
+            ], forCharacterRange: diagnostic.range)
         }
     }
 
@@ -162,12 +189,18 @@ struct CodeTextEditor: NSViewRepresentable {
         var parent: CodeTextEditor
         weak var textView: NSTextView?
         var highlightKey = ""
+        var diagnosticKey = ""
         var language: SyntaxHighlighter.Language = .other
         private var recolor: DispatchWorkItem?
         init(_ parent: CodeTextEditor) { self.parent = parent }
 
         func textViewDidChangeSelection(_ notification: Notification) {
-            (notification.object as? FindableTextView)?.refreshBracketMatch()
+            guard let textView = notification.object as? FindableTextView else { return }
+            textView.refreshBracketMatch()
+            let offset = textView.selectedRange().location
+            DispatchQueue.main.async { [weak self] in
+                self?.parent.onSelectionChange?(offset)
+            }
         }
 
         func textDidChange(_ notification: Notification) {
@@ -183,6 +216,8 @@ struct CodeTextEditor: NSViewRepresentable {
                 textView.setSelectedRange(selected)
                 self.highlightKey = ""
                 self.parent.applyHighlights(to: textView, coordinator: self)
+                self.diagnosticKey = ""
+                self.parent.applyDiagnostics(to: textView, coordinator: self)
             }
             recolor = work
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)

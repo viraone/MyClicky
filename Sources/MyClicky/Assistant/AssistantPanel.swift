@@ -349,10 +349,13 @@ final class AssistantState: ObservableObject {
     @Published var codeFocusedFile: String? {
         didSet {
             if codeFocusedFile != nil { codeShowingFiles = false }
+            codeLSPHover = nil
+            codeLSPDiagnosticPreview = nil
             // A freshly opened file is there to be read; the caret only
             // folds the one you're on.
             if codeFocusedFile != nil, codeFocusedFile != oldValue { codeViewerCollapsed = false; codeViewerExpanded = false; closeCodeFind() }
             codeDraft = codeFocusedFile.flatMap { codeCurrentText(of: $0) } ?? ""
+            if let path = codeFocusedFile { onLSPFocusFile?(path, codeDraft) }
         }
     }
     /// Files Peeky has saved since the project was read, by path. The
@@ -363,6 +366,7 @@ final class AssistantState: ObservableObject {
     /// The focused file's text as it stands in the editor.
     @Published var codeDraft = "" {
         didSet {
+            if let path = codeFocusedFile { onLSPDocumentChange?(path, codeDraft) }
             guard let path = codeFocusedFile, codeDraft != codeCurrentText(of: path) else {
                 codeSaveTask?.cancel(); return
             }
@@ -380,6 +384,11 @@ final class AssistantState: ObservableObject {
     @Published var codeLastSaved: Date?
     static let defaultCodeFontSize: CGFloat = 12.5
     @Published var codeFontSize = defaultCodeFontSize
+    @Published var codeLSPStatus: CodeLSPStatus = .inactive
+    @Published var codeLSPDiagnostics: [String: [CodeLSPDiagnostic]] = [:]
+    @Published var codeLSPHover: String?
+    @Published var codeLSPDiagnosticPreview: String?
+    @Published var codeLSPCaretOffset = 0
 
     func zoomCode(by steps: Int) {
         if steps == 0 {
@@ -729,6 +738,10 @@ final class AssistantState: ObservableObject {
     var onPasteCodeImage: (() -> Void)?
     /// Write `text` to the project file at `path` (relative to the root).
     var onSaveCodeFile: ((String, String) -> Void)?
+    var onLSPFocusFile: ((String, String) -> Void)?
+    var onLSPDocumentChange: ((String, String) -> Void)?
+    var onLSPHover: ((String, Int, String) -> Void)?
+    var onLSPDefinition: ((String, Int, String) -> Void)?
     /// Put a code block from an answer into the focused file. `find` is the
     /// block that preceded it in the answer, if any — the code to replace.
     var onApplyCodeBlock: ((_ code: String, _ find: String?, _ path: String) -> Void)?
@@ -2740,6 +2753,19 @@ struct AssistantPanelView: View {
     /// or any other editor with the file open picks it up.
     private func codeFileViewer(_ file: CodeProject.File) -> some View {
         let lineCount = state.codeDraft.reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
+        let diagnostics = state.codeLSPDiagnostics[file.path] ?? []
+        let diagnosticHighlights = diagnostics.compactMap { diagnostic in
+            TypeScriptLSPClient.nsRange(diagnostic.range, in: state.codeDraft)
+                .map { CodeEditorDiagnosticHighlight(range: $0, severity: diagnostic.severity) }
+        }
+        let lspColor: Color = {
+            switch state.codeLSPStatus {
+            case .ready: return AssistantPhase.done.color
+            case .starting: return AssistantPhase.working.color
+            case .failed: return .orange
+            case .inactive: return .white.opacity(0.3)
+            }
+        }()
         return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 Button {
@@ -2792,13 +2818,95 @@ struct AssistantPanelView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
+            if TypeScriptLSPClient.supports(path: file.path) {
+                HStack(spacing: 10) {
+                    Image(systemName: state.codeLSPStatus == .ready
+                          ? "bolt.horizontal.circle.fill" : "bolt.horizontal.circle")
+                        .foregroundStyle(lspColor)
+                    Text(state.codeLSPStatus.label)
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(lspColor)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    if !diagnostics.isEmpty {
+                        Button {
+                            let first = diagnostics[0]
+                            state.codeJumpToLine = first.range.start.line + 1
+                            state.codeJumpLineCount = max(1, first.range.end.line - first.range.start.line + 1)
+                        } label: {
+                            Label("\(diagnostics.count)", systemImage: "exclamationmark.triangle.fill")
+                                .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                                .foregroundStyle(diagnostics.contains(where: { $0.severity == 1 }) ? .red : .orange)
+                        }
+                        .buttonStyle(.plain)
+                        .help(diagnostics.map(\.message).joined(separator: "\n"))
+                        .onHover { hovering in
+                            state.codeLSPDiagnosticPreview = hovering
+                                ? diagnostics.enumerated().map { "\($0.offset + 1). \($0.element.message)" }
+                                    .joined(separator: "\n")
+                                : nil
+                        }
+                    }
+                    if state.codeLSPStatus == .ready {
+                        Button {
+                            state.onLSPHover?(file.path, state.codeLSPCaretOffset, state.codeDraft)
+                        } label: {
+                            Label("Hover", systemImage: "info.bubble")
+                                .font(.system(size: 10.5, weight: .semibold))
+                                .foregroundStyle(.white.opacity(0.65))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Show type information for the symbol at the caret")
+                        Button {
+                            state.onLSPDefinition?(file.path, state.codeLSPCaretOffset, state.codeDraft)
+                        } label: {
+                            Label("Definition", systemImage: "arrow.turn.down.right")
+                                .font(.system(size: 10.5, weight: .semibold))
+                                .foregroundStyle(.white.opacity(0.65))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Go to definition")
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color.white.opacity(0.035))
+                .help(state.codeLSPStatus.detail)
+            }
             if !state.codeViewerCollapsed {
                 if state.codeFindVisible { codeFindBar }
+                if let message = state.codeLSPDiagnosticPreview ?? state.codeLSPHover, !message.isEmpty {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: state.codeLSPDiagnosticPreview == nil
+                              ? "info.circle.fill" : "exclamationmark.triangle.fill")
+                            .foregroundStyle(state.codeLSPDiagnosticPreview == nil
+                                             ? AssistantPhase.working.color : .red)
+                        Text(message)
+                            .font(.system(size: 11.5, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.82))
+                            .lineLimit(4)
+                            .textSelection(.enabled)
+                        Spacer(minLength: 0)
+                        Button {
+                            state.codeLSPHover = nil
+                            state.codeLSPDiagnosticPreview = nil
+                        } label: {
+                            Image(systemName: "xmark")
+                                .foregroundStyle(.white.opacity(0.45))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(Color.white.opacity(0.04))
+                }
                 CodeTextEditor(text: $state.codeDraft,
                                highlights: state.codeFindMatches,
                                current: state.codeFindMatches.isEmpty ? nil : state.codeFindMatches[min(state.codeFindIndex, state.codeFindMatches.count - 1)],
                                onFind: { state.codeFindVisible = true; state.codeFindFocusRequest += 1 },
                                onEscape: { state.closeCodeFind() },
+                               onSelectionChange: { state.codeLSPCaretOffset = $0; state.codeLSPHover = nil },
+                               diagnostics: diagnosticHighlights,
                                language: SyntaxHighlighter.language(for: file.path),
                                jumpToLine: state.codeJumpToLine,
                                jumpLineCount: state.codeJumpLineCount,

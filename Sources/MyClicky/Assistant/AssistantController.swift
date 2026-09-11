@@ -29,6 +29,7 @@ final class AssistantController {
     private let driveCleanup = DriveCleanupWindowController()
     private let gmailCleanup = GmailCleanupWindowController()
     private let breakCoach = BreakCoach()
+    private let typeScriptLSP = TypeScriptLSPClient()
     /// The passage a copy verb last put on the clipboard — what "that" means
     /// in "text that to Noah". Kept apart from `NSPasteboard.general` on
     /// purpose: the system clipboard is shared with every app on the Mac and
@@ -449,6 +450,9 @@ final class AssistantController {
             panel.state.codeLastSaved = nil
             if panel.state.codeProject?.root != project.root { panel.state.codeCollapsedFolders = [] }
             panel.state.codeProject = project
+            panel.state.codeLSPDiagnostics = [:]
+            panel.state.codeLSPHover = nil
+            typeScriptLSP.start(for: project)
             if let focused = panel.state.codeFocusedFile {
                 panel.state.codeDraft = project.file(at: focused)?.text ?? ""
             }
@@ -481,6 +485,7 @@ final class AssistantController {
     }
 
     private func removeCodeProject() {
+        typeScriptLSP.stop()
         panel.state.codeProject = nil
         panel.state.codeUsage = nil
         panel.state.codeLog = []
@@ -488,6 +493,8 @@ final class AssistantController {
         panel.state.codeShowingFiles = false
         panel.state.codeEdits = [:]
         panel.state.codeLastSaved = nil
+        panel.state.codeLSPDiagnostics = [:]
+        panel.state.codeLSPHover = nil
         ActivityLog.recordAction("code-project-remove", [:])
     }
 
@@ -802,6 +809,25 @@ final class AssistantController {
     private var pendingChoices: [String: CheckedContinuation<Int?, Never>] = [:]
 
     func start() {
+        typeScriptLSP.onStatus = { [weak self] status in self?.panel.state.codeLSPStatus = status }
+        typeScriptLSP.onDiagnostics = { [weak self] path, diagnostics in
+            self?.panel.state.codeLSPDiagnostics[path] = diagnostics
+        }
+        typeScriptLSP.onHover = { [weak self] text in self?.panel.state.codeLSPHover = text }
+        typeScriptLSP.onDefinition = { [weak self] location in
+            guard let self else { return }
+            guard let location else {
+                self.hud.report("No definition found for that symbol.", ok: false)
+                return
+            }
+            guard self.panel.state.codeProject?.file(at: location.path) != nil else {
+                self.hud.report("That definition is outside the files loaded into Peeky.", ok: false)
+                return
+            }
+            self.panel.state.jump(to: .init(path: location.path,
+                                            line: location.range.start.line + 1,
+                                            lineCount: max(1, location.range.end.line - location.range.start.line + 1)))
+        }
         panel.state.onSubmit = { [weak self] text in
             self?.handleQuestion(text)
         }
@@ -846,6 +872,15 @@ final class AssistantController {
             self.panel.state.terminal.view.window?.makeFirstResponder(self.panel.state.terminal.view)
         }
         panel.state.onSaveCodeFile = { [weak self] path, text in self?.saveCodeFile(path: path, text: text) }
+        panel.state.onLSPFocusFile = { [weak self] path, text in self?.typeScriptLSP.focus(path: path, text: text) }
+        panel.state.onLSPDocumentChange = { [weak self] path, text in self?.typeScriptLSP.change(path: path, text: text) }
+        panel.state.onLSPHover = { [weak self] path, offset, text in
+            self?.panel.state.codeLSPHover = nil
+            self?.typeScriptLSP.hover(path: path, characterOffset: offset, text: text)
+        }
+        panel.state.onLSPDefinition = { [weak self] path, offset, text in
+            self?.typeScriptLSP.definition(path: path, characterOffset: offset, text: text)
+        }
         panel.state.onApplyCodeBlock = { [weak self] code, find, path in self?.applyCodeBlock(code, replacing: find, path: path) }
         panel.state.onAttachCodeProject = { [weak self] in self?.pickCodeProject() }
         panel.state.onReloadCodeProject = { [weak self] in self?.reloadCodeProject() }
