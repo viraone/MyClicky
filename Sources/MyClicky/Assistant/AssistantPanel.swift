@@ -810,9 +810,13 @@ final class AssistantPanelController {
     /// chevron on the strip still restores the full card.
     func showAsStrip(on screen: NSScreen) {
         let panel = ensurePanel()
-        if state.collapsed { state.collapsed = false }
+        let wasCollapsed = state.collapsed
+        if wasCollapsed { state.collapsed = false }
         if !state.strip {
-            if panel.isVisible { savedFrame = panel.frame }
+            // `minimize()` already saved the full card frame. Do not replace
+            // it with the dot's 56×56 frame when moving dot → strip, or the
+            // strip chevron will restore a tiny square instead of the card.
+            if panel.isVisible && !wasCollapsed { savedFrame = panel.frame }
             state.strip = true
         }
         let visible = screen.visibleFrame
