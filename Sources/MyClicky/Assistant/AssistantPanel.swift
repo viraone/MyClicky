@@ -378,6 +378,16 @@ final class AssistantState: ObservableObject {
     private var codeSaveTask: Task<Void, Never>?
     /// When the focused file was last written to disk, for the header.
     @Published var codeLastSaved: Date?
+    static let defaultCodeFontSize: CGFloat = 12.5
+    @Published var codeFontSize = defaultCodeFontSize
+
+    func zoomCode(by steps: Int) {
+        if steps == 0 {
+            codeFontSize = Self.defaultCodeFontSize
+        } else {
+            codeFontSize = min(28, max(9, codeFontSize + CGFloat(steps)))
+        }
+    }
 
     /// Folders in the file list the user has folded shut. Reset on load.
     @Published var codeCollapsedFolders: Set<String> = []
@@ -1129,6 +1139,12 @@ final class AssistantPanelController {
             self.state.codeViewerExpanded.toggle()
             return true
         }
+        panel.onCodeZoom = { [weak self] steps in
+            guard let self, self.state.tab == .code, self.state.codeFocusedFile != nil,
+                  !self.state.codeViewerCollapsed else { return false }
+            self.state.zoomCode(by: steps)
+            return true
+        }
         // Track which display the panel lives on, including hand drags, so
         // the phone's screen switch can follow reality.
         NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification, object: panel, queue: .main) { [weak self] _ in
@@ -1214,6 +1230,8 @@ final class KeyablePanel: NSPanel {
     /// ⇧⌘↩ on the Code tab. Return true when the file preview took it as
     /// "expand/restore".
     var onToggleCodeExpand: (() -> Bool)?
+    /// ⌘+/⌘-/⌘0 in the Code editor. Positive/negative values zoom; zero resets.
+    var onCodeZoom: ((Int) -> Bool)?
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -1228,6 +1246,16 @@ final class KeyablePanel: NSPanel {
             return true
         }
         if flags == [.command, .shift], key == "\r", onToggleCodeExpand?() == true {
+            return true
+        }
+        let zoomFlags = flags == [.command] || flags == [.command, .shift]
+        if zoomFlags, (key == "+" || key == "="), onCodeZoom?(1) == true {
+            return true
+        }
+        if zoomFlags, key == "-", onCodeZoom?(-1) == true {
+            return true
+        }
+        if flags == [.command], key == "0", onCodeZoom?(0) == true {
             return true
         }
         if super.performKeyEquivalent(with: event) { return true }
@@ -2753,7 +2781,8 @@ struct AssistantPanelView: View {
                                language: SyntaxHighlighter.language(for: file.path),
                                jumpToLine: state.codeJumpToLine,
                                jumpLineCount: state.codeJumpLineCount,
-                               onDidJump: { state.codeJumpToLine = nil })
+                               onDidJump: { state.codeJumpToLine = nil },
+                               font: .monospacedSystemFont(ofSize: state.codeFontSize, weight: .regular))
                     .padding(.horizontal, 6)
                     .padding(.bottom, 6)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

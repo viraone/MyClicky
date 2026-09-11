@@ -18,8 +18,8 @@ final class TerminalShortcutTests: XCTestCase {
                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
     }
 
-    private func command(_ key: String) -> NSEvent {
-        NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
+    private func command(_ key: String, modifiers: NSEvent.ModifierFlags = .command) -> NSEvent {
+        NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
                         timestamp: 0, windowNumber: 0, context: nil, characters: key,
                         charactersIgnoringModifiers: key, isARepeat: false,
                         keyCode: key == "v" ? 9 : 8)!
@@ -105,6 +105,18 @@ final class TerminalShortcutTests: XCTestCase {
         XCTAssertTrue(panel.performKeyEquivalent(with: command("v")))
         XCTAssertTrue(attached)
         XCTAssertEqual(editor.string, "")
+    }
+
+    func testCodeZoomShortcutsAreConsumed() {
+        let panel = panel()
+        var steps: [Int] = []
+        panel.onCodeZoom = { steps.append($0); return true }
+
+        XCTAssertTrue(panel.performKeyEquivalent(with: command("+", modifiers: [.command, .shift])))
+        XCTAssertTrue(panel.performKeyEquivalent(with: command("=")))
+        XCTAssertTrue(panel.performKeyEquivalent(with: command("-")))
+        XCTAssertTrue(panel.performKeyEquivalent(with: command("0")))
+        XCTAssertEqual(steps, [1, 1, -1, 0])
     }
 
     func testFocusOnMountDoesNotStealLaterFieldFocus() async {

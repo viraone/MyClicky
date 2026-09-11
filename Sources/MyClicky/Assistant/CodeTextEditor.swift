@@ -78,6 +78,12 @@ struct CodeTextEditor: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.parent = self
         guard let textView = context.coordinator.textView else { return }
+        let fontChanged = textView.font != font
+        if fontChanged {
+            textView.font = font
+            textView.typingAttributes[.font] = font
+            (scroll.verticalRulerView as? CodeLineNumberRuler)?.setFontSize(font.pointSize)
+        }
         if textView.string != text {
             // Programmatic change (file switched, Apply pressed): replace the
             // text through the undo manager so a single ⌘Z reverts it, but
@@ -98,7 +104,7 @@ struct CodeTextEditor: NSViewRepresentable {
             if let storage = textView.textStorage {
                 SyntaxHighlighter.highlight(storage, language: language, font: font)
             }
-        } else if language != context.coordinator.language, let storage = textView.textStorage {
+        } else if language != context.coordinator.language || fontChanged, let storage = textView.textStorage {
             SyntaxHighlighter.highlight(storage, language: language, font: font)
         }
         context.coordinator.language = language
@@ -292,7 +298,7 @@ struct CodeLineIndex {
 final class CodeLineNumberRuler: NSRulerView {
     private weak var textView: NSTextView?
     private(set) var lines = CodeLineIndex("")
-    private let numberFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+    private var numberFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
     override var isOpaque: Bool { false }
 
     init(textView: NSTextView, scrollView: NSScrollView) {
@@ -314,6 +320,11 @@ final class CodeLineNumberRuler: NSRulerView {
     @objc private func textChanged(_ notification: Notification) {
         rebuildLines()
         textView?.needsDisplay = true
+    }
+
+    func setFontSize(_ editorSize: CGFloat) {
+        numberFont = .monospacedSystemFont(ofSize: max(8, editorSize - 1.5), weight: .regular)
+        rebuildLines()
     }
 
     func rebuildLines() {
