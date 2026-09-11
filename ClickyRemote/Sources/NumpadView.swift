@@ -101,7 +101,7 @@ struct NumpadView: View {
 
         var welcome: String {
             switch self {
-            case .remote: "Tap PEEKY to open it on your Mac (tap again to hide)"
+            case .remote: "Tap PEEKY to move it to the corner, or ON to bring it back"
             case .gmail: "Gmail mode — buttons control Gmail on your Mac"
             case .spotify: "Spotify mode — buttons control the Spotify app on your Mac"
             case .whatsapp: "WhatsApp mode — buttons control the WhatsApp app on your Mac"
@@ -1629,6 +1629,7 @@ struct NumpadView: View {
             // horizontal photo captions, shrinking the chrome on compact heights.
             let rowH = (geo.size.height - topInset - gap * 6) / 7.8
             let columnW = (geo.size.width - gap) / 2
+            let bannerW = (geo.size.width - gap * 2) / 3
             let minimumPhotoH: CGFloat = 56
             let chromeBudget = max(100, geo.size.height - topInset - gap * 4
                                    - minimumPhotoH - min(120, columnW) * 2)
@@ -1645,10 +1646,12 @@ struct NumpadView: View {
                 }
                 .frame(width: geo.size.width, height: switchH)
                 HStack(spacing: gap) {
+                    key("on", label: "ON", icon: "power", tint: Snes.blue, lit: true,
+                        h: bannerH, w: bannerW, banner: true)
                     key("0", label: "PEEKY", icon: "sparkles", tint: Snes.purple, lit: true,
-                        h: bannerH, w: columnW, banner: true)
+                        h: bannerH, w: bannerW, banner: true)
                     key("strip", label: "COLLAPSE", icon: "chevron.left", tint: Snes.green, lit: true,
-                        h: bannerH, w: columnW, banner: true)
+                        h: bannerH, w: bannerW, banner: true)
                 }
                 HStack(alignment: .top, spacing: gap) {
                     // ASK records on the phone and sends `ASK <text>`: the Mac
@@ -1883,9 +1886,11 @@ struct NumpadView: View {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         switch label {
         case "0":
-            // Toggle: the Mac shows Peeky if hidden/collapsed, collapses it if open.
             client.collapse()
             statusText = "Peeky toggled — tap PEEKY again to hide or bring it back"
+        case "on":
+            client.show()
+            statusText = "Peeky is ON and visible on your Mac"
         case "strip":
             client.toggleStrip()
             statusText = "Peeky's compact bar toggled on your Mac"
