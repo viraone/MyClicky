@@ -91,6 +91,7 @@ final class AssistantController {
         // conversation: attach it as a chip and stay on the Code tab. The
         // Capture tab still gets it, as always — it's just not brought forward.
         let stayOnCode = kind == .capture && panel.state.tab == .code && panel.state.codeProject != nil
+            && panel.state.codeAcceptsImages
         if stayOnCode {
             addCodeImages([(image, url.lastPathComponent)], via: "capture")
         } else if kind == .capture {
@@ -638,6 +639,10 @@ final class AssistantController {
     }
 
     private func attachImagesToCode() {
+        guard panel.state.codeAcceptsImages else {
+            hud.report("Images are Claude-only — switch the provider to Claude to attach one.", ok: false)
+            return
+        }
         let open = NSOpenPanel()
         open.title = "Images for your code question"
         open.message = "Screenshots, mockups, error dialogs — up to \(AssistantState.maxCodeImages), sent with every question until removed."
@@ -679,6 +684,11 @@ final class AssistantController {
     }()
 
     private func addCodeImages(_ images: [(NSImage, String)], via: String) {
+        guard panel.state.codeAcceptsImages else {
+            hud.report("Images are Claude-only — switch the provider to Claude to attach one.", ok: false)
+            ActivityLog.recordAction("code-attach-image-refused", ["via": via, "count": "\(images.count)"])
+            return
+        }
         let room = AssistantState.maxCodeImages - panel.state.codeImages.count
         guard room > 0 else {
             hud.report("That's \(AssistantState.maxCodeImages) images — remove one to add another.", ok: false)

@@ -160,7 +160,7 @@ the project in steps from 8K up to the model's limit, so a small project
 loads about 18 GB of model instead of the 45 GB a full 262K window costs. Only
 one local model is resident at a time: Peeky starts Ollama with a one-model
 limit, and picking a different model in the menu unloads the one you left.
-Attached images remain a Claude-only feature.
+Attached images remain a Claude-only feature: in Local mode the + image item is disabled, dropped or pasted images are refused with a HUD message, and Peeky Captures go to the Capture tab. Switching to Local removes any images already attached; switch back to Claude to attach again.
 
 Click the project card to browse its files and click one to preview it
 (the caret on the preview folds it away); questions are then about that
