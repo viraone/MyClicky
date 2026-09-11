@@ -10,6 +10,7 @@ import Network
 ///   LISTEN TALK    – same, on the Talk tab, streaming pause-delimited commands
 ///   STOP           – phone ended its recording with nothing to send; stop listening
 ///   COLLAPSE       – minimize the panel to its collapsed bubble
+///   STRIP          – toggle the panel's thin status-bar layout
 ///   TAB ASK        – switch the panel to the Ask tab
 ///   TAB DICTATE    – switch the panel to the Capture + Dictate tab
 ///                    (TAB CAPTURE / TAB CAPTURE_DICTATE are aliases)
@@ -97,6 +98,7 @@ final class RemoteControlService {
     /// Phone ended a recording with nothing to send; the Mac should stop too.
     var onStop: (() -> Void)?
     var onCollapse: (() -> Void)?
+    var onStrip: (() -> Void)?
     var onTab: ((String) -> Void)?
     var onGmail: ((String) -> Void)?
     var onSpotify: ((String) -> Void)?
@@ -199,6 +201,8 @@ final class RemoteControlService {
             onStop?()
         } else if line == "COLLAPSE" {
             onCollapse?()
+        } else if line == "STRIP" {
+            onStrip?()
         } else if line == "CAPTURE" {
             onCapture?()
         } else if line.hasPrefix("TAB ") {

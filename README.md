@@ -203,9 +203,10 @@ the Claude console has the actual bill.
 `ClickyRemote/` is a companion iPhone numpad app (open `ClickyRemote.xcodeproj`
 in Xcode, run on the phone with ⌘R after any change). It finds the Mac via
 Bonjour (`_clicky._tcp`) and sends newline-terminated text commands
-(`RemoteControlService`). Pad: PEEKY = show/hide the Mac panel; ASK = record
-a question on the phone and send it (answered like ⌥⌘C); DICTATE = clean-up to
-the Mac clipboard; CAPTURE = region grab; TALK = "do it" action mode.
+(`RemoteControlService`). Pad: PEEKY = show/hide the Mac panel; COLLAPSE =
+toggle its thin status bar; ASK = record a question on the phone and send it
+(answered like ⌥⌘C); DICTATE = clean-up to the Mac clipboard; CAPTURE = region
+grab; TALK = "do it" action mode.
 
 ## ClickyLogs (weekly dashboard)
 
