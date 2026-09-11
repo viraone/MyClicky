@@ -349,7 +349,7 @@ struct AnthropicService {
         return buckets
     }
 
-    private static let codeSystemPrompt = """
+    static let codeSystemPrompt = """
     You are Peeky Code, a senior software engineer helping the user with a \
     project they have shared with you. The complete source of that project \
     follows this message: a file tree, then every file under a \
@@ -428,15 +428,22 @@ struct AnthropicService {
         content.append(["type": "text", "text": question])
         messages.append(["role": "user", "content": content.count == 1 ? question : content])
 
+        var system: [[String: Any]] = [
+            ["type": "text", "text": Self.codeSystemPrompt],
+        ]
+        if let guidance = project.guidanceText {
+            system.append(["type": "text", "text": guidance])
+        }
+        system.append([
+            "type": "text",
+            "text": project.bundleText,
+            "cache_control": ["type": "ephemeral"],
+        ])
         let body: [String: Any] = [
             "model": model,
             "max_tokens": Self.codeMaxTokens,
             "output_config": ["effort": "medium"],
-            "system": [
-                ["type": "text", "text": Self.codeSystemPrompt],
-                ["type": "text", "text": project.bundleText,
-                 "cache_control": ["type": "ephemeral"]],
-            ],
+            "system": system,
             "messages": messages,
         ]
         let data = try await send(body: body, timeout: 180, onStatus: onStatus)

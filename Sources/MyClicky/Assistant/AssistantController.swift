@@ -29,6 +29,8 @@ final class AssistantController {
     private let driveCleanup = DriveCleanupWindowController()
     private let gmailCleanup = GmailCleanupWindowController()
     private let breakCoach = BreakCoach()
+    private let typeScriptLSP = TypeScriptLSPClient()
+    private let ollama = OllamaService()
     /// The passage a copy verb last put on the clipboard — what "that" means
     /// in "text that to Noah". Kept apart from `NSPasteboard.general` on
     /// purpose: the system clipboard is shared with every app on the Mac and
@@ -449,6 +451,9 @@ final class AssistantController {
             panel.state.codeLastSaved = nil
             if panel.state.codeProject?.root != project.root { panel.state.codeCollapsedFolders = [] }
             panel.state.codeProject = project
+            panel.state.codeLSPDiagnostics = [:]
+            panel.state.codeLSPHover = nil
+            typeScriptLSP.start(for: project)
             if let focused = panel.state.codeFocusedFile {
                 panel.state.codeDraft = project.file(at: focused)?.text ?? ""
             }
@@ -458,6 +463,12 @@ final class AssistantController {
             }
             if project.truncated {
                 line += " Too big to send whole: \(project.skippedFiles.count) files left out — drop a subfolder for those."
+            }
+            if let profile = project.profile {
+                line += " Active profile: \(profile.title)."
+            }
+            if !project.detectedStack.isEmpty {
+                line += " Detected: \(project.detectedStack.map(\.name).joined(separator: ", "))."
             }
             panel.state.logCode(.status, line)
             refreshLiveCost()
@@ -475,6 +486,7 @@ final class AssistantController {
     }
 
     private func removeCodeProject() {
+        typeScriptLSP.stop()
         panel.state.codeProject = nil
         panel.state.codeUsage = nil
         panel.state.codeLog = []
@@ -482,6 +494,8 @@ final class AssistantController {
         panel.state.codeShowingFiles = false
         panel.state.codeEdits = [:]
         panel.state.codeLastSaved = nil
+        panel.state.codeLSPDiagnostics = [:]
+        panel.state.codeLSPHover = nil
         ActivityLog.recordAction("code-project-remove", [:])
     }
 
@@ -688,11 +702,18 @@ final class AssistantController {
             panel.state.logCode(.error, "Drop a project folder first — then ask away.")
             return
         }
-        guard let apiKey = KeychainService.anthropicAPIKey() else {
+        let provider = panel.state.codeAIProvider
+        let apiKey = provider == .claude ? KeychainService.anthropicAPIKey() : nil
+        if provider == .claude, apiKey == nil {
             panel.state.logCode(.error, "No Anthropic API key found in Keychain.\n\nRun this once in Terminal:\n\(KeychainService.setupCommand)")
             return
         }
-        ActivityLog.recordAction("code-ask", ["text": question, "files": "\(project.files.count)"])
+        if provider == .ollama, !panel.state.codeImages.isEmpty {
+            panel.state.logCode(.error, "The selected local coding model is text-only. Remove attached images or switch to Claude.")
+            return
+        }
+        ActivityLog.recordAction("code-ask", ["text": question, "files": "\(project.files.count)",
+                                               "provider": provider.rawValue])
         let history = panel.state.codeHistory
         let focusedFile = panel.state.codeFocusedFile
         let changedFiles = panel.state.codeChangedFiles
@@ -716,31 +737,59 @@ final class AssistantController {
                 }
             }
             do {
-                let claude = AnthropicService(apiKey: apiKey)
-                let answer = try await claude.askAboutCode(question: question, project: project,
-                                                           focusedFile: focusedFile, images: images,
-                                                           changedFiles: changedFiles,
-                                                           history: history) { [weak self] status in
-                    guard let self, id == self.requestID else { return }
-                    self.panel.state.logCode(.status, status)
+                let answerText: String
+                if provider == .ollama {
+                    answerText = try await ollama.askAboutCode(
+                        question: question, project: project, focusedFile: focusedFile,
+                        changedFiles: changedFiles, history: history,
+                        model: panel.state.codeOllamaModel
+                    ) { [weak self] status in
+                        guard let self, id == self.requestID else { return }
+                        self.panel.state.logCode(.status, status)
+                    }
+                    panel.state.codeUsage = nil
+                } else {
+                    let claude = AnthropicService(apiKey: apiKey!)
+                    let answer = try await claude.askAboutCode(question: question, project: project,
+                                                               focusedFile: focusedFile, images: images,
+                                                               changedFiles: changedFiles,
+                                                               history: history) { [weak self] status in
+                        guard let self, id == self.requestID else { return }
+                        self.panel.state.logCode(.status, status)
+                    }
+                    panel.state.codeUsage = answer.usage
+                    answerText = answer.text
+                    if let usage = answer.usage {
+                        panel.state.codeSpentUSD += usage.costUSD
+                        refreshLiveCost(force: true)
+                        ActivityLog.recordAction("code-answer", ["cache_read": "\(usage.cacheRead)",
+                                                                 "cache_write": "\(usage.cacheWrite)",
+                                                                 "input": "\(usage.input)", "output": "\(usage.output)"])
+                    }
                 }
                 try Task.checkCancellation()
                 guard id == requestID else { return }
                 panel.state.status = .answering
-                panel.state.codeUsage = answer.usage
-                panel.state.logCode(.answer, answer.text)
+                panel.state.logCode(.answer, answerText)
                 panel.state.codeViewerExpanded = false  // show the answer, not just the preview
-                if let usage = answer.usage {
-                    panel.state.codeSpentUSD += usage.costUSD
-                    refreshLiveCost(force: true)
-                    ActivityLog.recordAction("code-answer", ["cache_read": "\(usage.cacheRead)",
-                                                             "cache_write": "\(usage.cacheWrite)",
-                                                             "input": "\(usage.input)", "output": "\(usage.output)"])
-                }
+                ActivityLog.recordAction("code-answer", ["provider": provider.rawValue])
             } catch {
                 guard id == requestID, !Task.isCancelled else { return }
                 panel.state.status = .idle
                 panel.state.logCode(.error, error.localizedDescription)
+            }
+        }
+    }
+
+    private func refreshOllamaModels() {
+        panel.state.codeOllamaStatus = "Connecting to Ollama…"
+        Task {
+            do {
+                let models = try await ollama.models()
+                panel.state.codeOllamaModels = models
+                panel.state.codeOllamaStatus = models.isEmpty ? "No local models installed" : "Ollama ready"
+            } catch {
+                panel.state.codeOllamaStatus = error.localizedDescription
             }
         }
     }
@@ -796,6 +845,25 @@ final class AssistantController {
     private var pendingChoices: [String: CheckedContinuation<Int?, Never>] = [:]
 
     func start() {
+        typeScriptLSP.onStatus = { [weak self] status in self?.panel.state.codeLSPStatus = status }
+        typeScriptLSP.onDiagnostics = { [weak self] path, diagnostics in
+            self?.panel.state.codeLSPDiagnostics[path] = diagnostics
+        }
+        typeScriptLSP.onHover = { [weak self] text in self?.panel.state.codeLSPHover = text }
+        typeScriptLSP.onDefinition = { [weak self] location in
+            guard let self else { return }
+            guard let location else {
+                self.hud.report("No definition found for that symbol.", ok: false)
+                return
+            }
+            guard self.panel.state.codeProject?.file(at: location.path) != nil else {
+                self.hud.report("That definition is outside the files loaded into Peeky.", ok: false)
+                return
+            }
+            self.panel.state.jump(to: .init(path: location.path,
+                                            line: location.range.start.line + 1,
+                                            lineCount: max(1, location.range.end.line - location.range.start.line + 1)))
+        }
         panel.state.onSubmit = { [weak self] text in
             self?.handleQuestion(text)
         }
@@ -840,6 +908,27 @@ final class AssistantController {
             self.panel.state.terminal.view.window?.makeFirstResponder(self.panel.state.terminal.view)
         }
         panel.state.onSaveCodeFile = { [weak self] path, text in self?.saveCodeFile(path: path, text: text) }
+        panel.state.onLSPFocusFile = { [weak self] path, text in self?.typeScriptLSP.focus(path: path, text: text) }
+        panel.state.onLSPDocumentChange = { [weak self] path, text in self?.typeScriptLSP.change(path: path, text: text) }
+        panel.state.onLSPHover = { [weak self] path, offset, text in
+            self?.panel.state.codeLSPHover = nil
+            self?.typeScriptLSP.hover(path: path, characterOffset: offset, text: text)
+        }
+        panel.state.onLSPDefinition = { [weak self] path, offset, text in
+            self?.typeScriptLSP.definition(path: path, characterOffset: offset, text: text)
+        }
+        panel.state.onCodeProviderChanged = { [weak self] provider in
+            if provider == .ollama { self?.refreshOllamaModels() }
+        }
+        panel.state.onRefreshOllamaModels = { [weak self] in self?.refreshOllamaModels() }
+        panel.state.onCodeModelChanged = { [weak self] previous, _ in
+            // Otherwise the model just left behind stays resident for its
+            // keep-alive window alongside the new one.
+            Task { [weak self] in
+                guard let self, await self.ollama.unload(previous) else { return }
+                self.panel.state.logCode(.status, "Unloaded \(previous) from memory.")
+            }
+        }
         panel.state.onApplyCodeBlock = { [weak self] code, find, path in self?.applyCodeBlock(code, replacing: find, path: path) }
         panel.state.onAttachCodeProject = { [weak self] in self?.pickCodeProject() }
         panel.state.onReloadCodeProject = { [weak self] in self?.reloadCodeProject() }
@@ -930,6 +1019,7 @@ final class AssistantController {
                 if !self.talkStreaming && !self.busy && !self.codeTabPinned { self.panel.state.tab = .ask }
                 self.showPanel()
             }
+            self.remote.broadcast(self.peekyLayoutLine())
         }
         remote.onStrip = { [weak self] in
             guard let self else { return }
@@ -938,6 +1028,7 @@ final class AssistantController {
             } else {
                 self.panel.showAsStrip(on: self.panel.screen ?? self.workingScreen)
             }
+            self.remote.broadcast(self.peekyLayoutLine())
         }
         remote.onTab = { [weak self] name in
             guard let self else { return }
@@ -1186,7 +1277,8 @@ final class AssistantController {
         remote.greeting = { [weak self] in
             ["WHATSAPP_UNREAD \(self?.whatsappUnread.count ?? 0)",
              "GMAIL_UNREAD \(self?.gmailUnread.count ?? 0)",
-             self?.screensLine() ?? "SCREENS 1 1"]
+             self?.screensLine() ?? "SCREENS 1 1",
+             self?.peekyLayoutLine() ?? "PEEKY_LAYOUT HIDDEN"]
         }
         remote.onScreen = { [weak self] index in self?.switchScreen(to: index) }
         panel.onScreenChange = { [weak self] _ in
@@ -1246,6 +1338,13 @@ final class AssistantController {
     /// lever draws itself from this and nothing else.
     private func screensLine() -> String {
         "SCREENS \(NSScreen.screens.count) \(panel.currentScreenIndex ?? 0)"
+    }
+
+    private func peekyLayoutLine() -> String {
+        guard panel.isVisible else { return "PEEKY_LAYOUT HIDDEN" }
+        if panel.state.collapsed { return "PEEKY_LAYOUT COLLAPSED" }
+        if panel.state.strip { return "PEEKY_LAYOUT STRIP" }
+        return "PEEKY_LAYOUT EXPANDED"
     }
 
     /// The phone's screen lever: put Peeky's panel and the pointer on display

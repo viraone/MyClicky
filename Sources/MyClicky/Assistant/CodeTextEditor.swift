@@ -1,6 +1,11 @@
 import AppKit
 import SwiftUI
 
+struct CodeEditorDiagnosticHighlight {
+    let range: NSRange
+    let severity: Int
+}
+
 /// The editable file preview on the Peeky Code tab. Wraps `NSTextView`
 /// directly so Peeky can paint find matches and pick up ⌘F itself — a
 /// plain `TextEditor` gives no way to do either.
@@ -11,6 +16,8 @@ struct CodeTextEditor: NSViewRepresentable {
     var current: NSRange?
     var onFind: (() -> Void)?
     var onEscape: (() -> Void)?
+    var onSelectionChange: ((Int) -> Void)?
+    var diagnostics: [CodeEditorDiagnosticHighlight] = []
     var language: SyntaxHighlighter.Language = .other
     /// Scroll to and select this 1-based line once, then call `onDidJump`.
     var jumpToLine: Int?
@@ -78,6 +85,12 @@ struct CodeTextEditor: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.parent = self
         guard let textView = context.coordinator.textView else { return }
+        let fontChanged = textView.font != font
+        if fontChanged {
+            textView.font = font
+            textView.typingAttributes[.font] = font
+            (scroll.verticalRulerView as? CodeLineNumberRuler)?.setFontSize(font.pointSize)
+        }
         if textView.string != text {
             // Programmatic change (file switched, Apply pressed): replace the
             // text through the undo manager so a single ⌘Z reverts it, but
@@ -98,11 +111,12 @@ struct CodeTextEditor: NSViewRepresentable {
             if let storage = textView.textStorage {
                 SyntaxHighlighter.highlight(storage, language: language, font: font)
             }
-        } else if language != context.coordinator.language, let storage = textView.textStorage {
+        } else if language != context.coordinator.language || fontChanged, let storage = textView.textStorage {
             SyntaxHighlighter.highlight(storage, language: language, font: font)
         }
         context.coordinator.language = language
         applyHighlights(to: textView, coordinator: context.coordinator)
+        applyDiagnostics(to: textView, coordinator: context.coordinator)
         if let line = jumpToLine, line > 0 {
             let ns = textView.string as NSString
             var index = 0, current = 1
@@ -146,9 +160,28 @@ struct CodeTextEditor: NSViewRepresentable {
         for range in highlights where NSMaxRange(range) <= length {
             layout.addTemporaryAttribute(.backgroundColor, value: NSColor.systemYellow.withAlphaComponent(0.28), forCharacterRange: range)
         }
+
         if let current, NSMaxRange(current) <= length {
             layout.addTemporaryAttribute(.backgroundColor, value: NSColor.systemOrange.withAlphaComponent(0.75), forCharacterRange: current)
             textView.scrollRangeToVisible(current)
+        }
+    }
+
+    fileprivate func applyDiagnostics(to textView: NSTextView, coordinator: Coordinator) {
+        guard let layout = textView.layoutManager else { return }
+        let length = (textView.string as NSString).length
+        let key = diagnostics.map { "\($0.range.location):\($0.range.length):\($0.severity)" }.joined(separator: ",")
+        guard key != coordinator.diagnosticKey else { return }
+        coordinator.diagnosticKey = key
+        let full = NSRange(location: 0, length: length)
+        layout.removeTemporaryAttribute(.underlineStyle, forCharacterRange: full)
+        layout.removeTemporaryAttribute(.underlineColor, forCharacterRange: full)
+        for diagnostic in diagnostics where NSMaxRange(diagnostic.range) <= length {
+            let color = diagnostic.severity == 1 ? NSColor.systemRed : NSColor.systemOrange
+            layout.addTemporaryAttributes([
+                .underlineStyle: NSUnderlineStyle.patternDot.rawValue | NSUnderlineStyle.thick.rawValue,
+                .underlineColor: color,
+            ], forCharacterRange: diagnostic.range)
         }
     }
 
@@ -156,12 +189,18 @@ struct CodeTextEditor: NSViewRepresentable {
         var parent: CodeTextEditor
         weak var textView: NSTextView?
         var highlightKey = ""
+        var diagnosticKey = ""
         var language: SyntaxHighlighter.Language = .other
         private var recolor: DispatchWorkItem?
         init(_ parent: CodeTextEditor) { self.parent = parent }
 
         func textViewDidChangeSelection(_ notification: Notification) {
-            (notification.object as? FindableTextView)?.refreshBracketMatch()
+            guard let textView = notification.object as? FindableTextView else { return }
+            textView.refreshBracketMatch()
+            let offset = textView.selectedRange().location
+            DispatchQueue.main.async { [weak self] in
+                self?.parent.onSelectionChange?(offset)
+            }
         }
 
         func textDidChange(_ notification: Notification) {
@@ -177,6 +216,8 @@ struct CodeTextEditor: NSViewRepresentable {
                 textView.setSelectedRange(selected)
                 self.highlightKey = ""
                 self.parent.applyHighlights(to: textView, coordinator: self)
+                self.diagnosticKey = ""
+                self.parent.applyDiagnostics(to: textView, coordinator: self)
             }
             recolor = work
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
@@ -292,7 +333,7 @@ struct CodeLineIndex {
 final class CodeLineNumberRuler: NSRulerView {
     private weak var textView: NSTextView?
     private(set) var lines = CodeLineIndex("")
-    private let numberFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+    private var numberFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
     override var isOpaque: Bool { false }
 
     init(textView: NSTextView, scrollView: NSScrollView) {
@@ -314,6 +355,11 @@ final class CodeLineNumberRuler: NSRulerView {
     @objc private func textChanged(_ notification: Notification) {
         rebuildLines()
         textView?.needsDisplay = true
+    }
+
+    func setFontSize(_ editorSize: CGFloat) {
+        numberFont = .monospacedSystemFont(ofSize: max(8, editorSize - 1.5), weight: .regular)
+        rebuildLines()
     }
 
     func rebuildLines() {

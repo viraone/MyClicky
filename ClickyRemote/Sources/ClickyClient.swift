@@ -28,6 +28,8 @@ final class ClickyClient: ObservableObject {
     /// 0 when its panel is hidden. Straight from the Mac's `SCREENS` line.
     @Published var screenCount = 1
     @Published var currentScreen = 0
+    /// Current Mac panel layout, acknowledged after a remote layout command.
+    @Published var peekyLayout = "HIDDEN"
 
     /// Progress of an in-flight DO command, or a READ description — shown in
     /// large text and spoken aloud by TALK mode.
@@ -165,6 +167,8 @@ final class ClickyClient: ObservableObject {
                                 self.screenCount = max(1, parts[0])
                                 self.currentScreen = parts[1]
                             }
+                        } else if line.hasPrefix("PEEKY_LAYOUT ") {
+                            self.peekyLayout = String(line.dropFirst(13))
                         } else if line.hasPrefix("YOUTUBE_STATE ") {
                             self.youtubeCollapsed = line.dropFirst(14).trimmingCharacters(in: .whitespaces) == "COLLAPSED"
                         } else if line.hasPrefix("STATUS ") {

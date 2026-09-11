@@ -60,6 +60,51 @@ final class CodeProjectBundlerTests: XCTestCase {
         let a = try XCTUnwrap(CodeProjectBundler.bundle(urls: [root]))
         let b = try XCTUnwrap(CodeProjectBundler.bundle(urls: [root]))
         XCTAssertEqual(a.bundleText, b.bundleText)
+        XCTAssertEqual(a.guidanceText, b.guidanceText)
+    }
+
+    func testLoadsProfileSeparatelyAndDetectsActualStack() throws {
+        try write(".peeky/project-profile.md", """
+        # Remote Freedom SDET
+
+        Prefer deterministic Playwright tests and explain interview tradeoffs.
+        """)
+        try write("package.json", """
+        {
+          "devDependencies": {
+            "@playwright/test": "^1.63.0",
+            "@types/node": "^22.20.2",
+            "eslint": "^10.10.0",
+            "prettier": "^3.9.6",
+            "typescript": "^6.0.3"
+          }
+        }
+        """)
+        try write("playwright.config.ts", "reporter: [['html'], ['junit']]\n")
+        try write(".github/workflows/tests.yml", "name: tests\n")
+
+        let project = try XCTUnwrap(CodeProjectBundler.bundle(urls: [root]))
+        XCTAssertEqual(project.profile?.title, "Remote Freedom SDET")
+        XCTAssertEqual(project.profile?.relativePath, ".peeky/project-profile.md")
+        XCTAssertFalse(project.files.contains { $0.path == ".peeky/project-profile.md" })
+        XCTAssertEqual(project.detectedStack.map(\.name), [
+            "TypeScript", "Playwright Test", "Node.js", "GitHub Actions",
+            "ESLint", "Prettier", "HTML + JUnit reports",
+        ])
+        XCTAssertTrue(project.guidanceText?.contains("never claim those are implemented") == true)
+    }
+
+    func testDoesNotClaimUnconfiguredAspirationalStack() throws {
+        try write(".peeky/project-profile.md", """
+        # SDET Profile
+        Add SQL, Docker, REST API testing, and Allure in future milestones.
+        """)
+
+        let project = try XCTUnwrap(CodeProjectBundler.bundle(urls: [root]))
+        XCTAssertFalse(project.detectedStack.map(\.name).contains("SQL"))
+        XCTAssertFalse(project.detectedStack.map(\.name).contains("Docker"))
+        XCTAssertFalse(project.detectedStack.map(\.name).contains("REST/API testing"))
+        XCTAssertFalse(project.detectedStack.map(\.name).contains("Allure reporting"))
     }
 
     func testLooseFilesRootAtCommonParent() throws {
@@ -138,6 +183,111 @@ final class CodeProjectBundlerTests: XCTestCase {
         let (same, lost) = CodeBlockApplier.apply("tiny", replacing: "nope", in: file)
         XCTAssertEqual(lost, .notFound)
         XCTAssertEqual(same, file)
+    }
+
+    func testApplierReplacesRedefinedFunctionWithoutAQuote() {
+        // Qwen's answer to the local-provider smoke test: the fixed function
+        // alone, no "current code" block before it.
+        let file = """
+        // Peeky Local-provider smoke test. One deliberate bug lives in this file.
+
+        export function average(numbers: number[]): number {
+          let total = 0;
+          for (let i = 0; i <= numbers.length; i++) {
+            total += numbers[i];
+          }
+          return total / numbers.length;
+        }
+
+        console.log(average([2, 4, 6])); // expected 4
+
+        """
+        let fixed = """
+        export function average(numbers: number[]): number {
+          let total = 0;
+          for (let i = 0; i < numbers.length; i++) {
+            total += numbers[i];
+          }
+          return total / numbers.length;
+        }
+        """
+        let (out, outcome) = CodeBlockApplier.apply(fixed, replacing: nil, in: file)
+        XCTAssertEqual(outcome, .replaced(lines: 7, atLine: 3))
+        XCTAssertTrue(out.contains("i < numbers.length"))
+        XCTAssertFalse(out.contains("i <= numbers.length"))
+        XCTAssertTrue(out.hasPrefix("// Peeky Local-provider smoke test"), "the header comment survives")
+        XCTAssertTrue(out.hasSuffix("console.log(average([2, 4, 6])); // expected 4\n"), "the code after the function survives")
+        // A trailing statement makes the block more than one definition — leave it alone.
+        let (same, lost) = CodeBlockApplier.apply(fixed + "\nconsole.log(1);", replacing: nil, in: file)
+        XCTAssertEqual(lost, .notFound)
+        XCTAssertEqual(same, file)
+    }
+
+    func testApplierRedefinitionReindentsAMethodAndIgnoresBracesInStrings() {
+        let file = """
+        class Greeter {
+          greet(name) {
+            return "}" + name;
+          }
+
+          shout(name) {
+            return "{" + name; // }
+          }
+        }
+
+        """
+        let block = """
+        shout(name) {
+          return name.toUpperCase() + "!";
+        }
+        """
+        let (out, outcome) = CodeBlockApplier.apply(block, replacing: nil, in: file)
+        XCTAssertEqual(outcome, .replaced(lines: 3, atLine: 6))
+        XCTAssertEqual(out, """
+        class Greeter {
+          greet(name) {
+            return "}" + name;
+          }
+
+          shout(name) {
+            return name.toUpperCase() + "!";
+          }
+        }
+
+        """)
+    }
+
+    func testApplierRedefinitionCarriesTheDocCommentAndSkipsAmbiguousNames() {
+        let file = """
+        final class Counter {
+            var n = 0
+            /// Bumps.
+            func bump() {
+                n += 1
+            }
+        }
+
+        """
+        let block = """
+        /// Bumps by two.
+        func bump() {
+            n += 2
+        }
+        """
+        let (out, outcome) = CodeBlockApplier.apply(block, replacing: nil, in: file)
+        XCTAssertEqual(outcome, .replaced(lines: 4, atLine: 3))
+        XCTAssertTrue(out.contains("    /// Bumps by two.\n    func bump() {\n        n += 2\n    }\n"))
+        XCTAssertFalse(out.contains("/// Bumps.\n"), "the block's own doc comment replaces the file's")
+
+        // Overloads: two definitions of `f`, so there's no single spot to land.
+        let overloads = "func f(_ a: Int) -> Int { a }\nfunc f(_ a: String) -> String { a }\n"
+        let (same, lost) = CodeBlockApplier.apply("func f(_ a: Int) -> Int { a + 1 }", replacing: nil, in: overloads)
+        XCTAssertEqual(lost, .notFound)
+        XCTAssertEqual(same, overloads)
+        // No body to match: `let` lines are left to the quote-and-replace path.
+        let (same2, lost2) = CodeBlockApplier.apply("let limit = 20", replacing: nil, in: "let limit = 10\nlet other = { 1 }\n")
+        XCTAssertEqual(lost2, .notFound)
+        XCTAssertEqual(same2, "let limit = 10\nlet other = { 1 }\n")
     }
 
     func testApplierKnowsQuotesOfTheFile() {

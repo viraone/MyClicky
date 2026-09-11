@@ -138,6 +138,30 @@ question re-primes the cache). Projects over ~170K tokens are cut off with a
 warning; drop a subfolder instead. `.env`, keys and certificates are never
 bundled.
 
+A project can add `.peeky/project-profile.md` with maintainer-authored guidance
+for Peeky Code. Peeky loads it separately from source, detects the actual stack
+from project files and dependencies, and includes both ahead of the cached
+project block. The project card shows the active profile and detected tools;
+clicking the profile badge prepares a grounded **SDET Review** that separates
+implemented capabilities from planned ones and cites exact project files.
+
+TypeScript projects also start a project-scoped language server. The editor
+shows live error/warning underlines and exposes hover information and
+go-to-definition beside the **TypeScript LSP** status badge. Peeky prefers a
+project-local or installed `typescript-language-server`; when neither exists,
+the first TypeScript project load fetches the pinned v4 server and TypeScript 5
+through npm's cache.
+
+The provider menu beside Peeky Code's question box switches between Claude and
+a local Ollama model. Local mode starts Ollama when needed, defaults to
+`qwen3-coder:30b`, downloads a missing model once, and sends project context
+only to `127.0.0.1`; it has no per-message API charge. The context window is sized to
+the project in steps from 8K up to the model's limit, so a small project
+loads about 18 GB of model instead of the 45 GB a full 262K window costs. Only
+one local model is resident at a time: Peeky starts Ollama with a one-model
+limit, and picking a different model in the menu unloads the one you left.
+Attached images remain a Claude-only feature.
+
 Click the project card to browse its files and click one to preview it
 (the caret on the preview folds it away); questions are then about that
 file. The preview is editable: type and it saves to disk about a second
@@ -153,16 +177,16 @@ snapshot. Code blocks in answers have **Copy** and **Apply to <file>**
 buttons; when Claude gives a "current code" block followed by a
 "replacement" block, Apply swaps the first for the second in the file
 you're viewing (or rewrites the file when the block is a whole-file
-rewrite), and copies it to the clipboard when it can't find a place. Cards
+rewrite). When an answer gives only the replacement — one complete
+function, type, or method with no "current code" quote, which local models
+do often — Apply finds that definition by name in the file, matches its
+braces, and swaps it in place, re-indenting a flush-left method to fit.
+It copies the block to the clipboard instead when there's no single
+obvious spot (the name is defined twice, the block is more than one
+definition, or there's no `{…}` body to match). Cards
 that change code show a red/green diff of what Apply will do, with a
 `+N −M` count next to the button (toggle back to the raw replacement with
 the `diff`/`code` link); ⌘Z undoes an Apply in one step once it's landed.
-Each block's header also says where it goes — `app.js:412`, worked out
-locally from the fence's file name and the "current code" block, no Claude
-call — and clicking that opens the file at those lines. **Apply** targets
-that file whether or not it's the one open, then lands you on the change.
-Backticked names in the prose (`initializeApp()`, `style.css`) that exist
-in the project are links to where they're defined.
 Each block's header also says where it goes — `app.js:412`, worked out
 locally from the fence's file name and the "current code" block, no Claude
 call — and clicking that opens the file at those lines. **Apply** targets

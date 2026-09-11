@@ -106,6 +106,7 @@ enum AssistantTab: String, CaseIterable {
         case .code: "chevron.left.forwardslash.chevron.right"
         case .terminal: "terminal"
         }
+
     }
 
     /// Tabs with a mic: everything but the terminal.
@@ -119,6 +120,18 @@ enum AssistantTab: String, CaseIterable {
         case .talk: "Talk"
         case .code: "Code"
         case .terminal: "Term"
+        }
+    }
+}
+
+enum CodeAIProvider: String, CaseIterable {
+    case claude
+    case ollama
+
+    var label: String {
+        switch self {
+        case .claude: return "Claude"
+        case .ollama: return "Local"
         }
     }
 }
@@ -349,10 +362,13 @@ final class AssistantState: ObservableObject {
     @Published var codeFocusedFile: String? {
         didSet {
             if codeFocusedFile != nil { codeShowingFiles = false }
+            codeLSPHover = nil
+            codeLSPDiagnosticPreview = nil
             // A freshly opened file is there to be read; the caret only
             // folds the one you're on.
             if codeFocusedFile != nil, codeFocusedFile != oldValue { codeViewerCollapsed = false; codeViewerExpanded = false; closeCodeFind() }
             codeDraft = codeFocusedFile.flatMap { codeCurrentText(of: $0) } ?? ""
+            if let path = codeFocusedFile { onLSPFocusFile?(path, codeDraft) }
         }
     }
     /// Files Peeky has saved since the project was read, by path. The
@@ -363,6 +379,7 @@ final class AssistantState: ObservableObject {
     /// The focused file's text as it stands in the editor.
     @Published var codeDraft = "" {
         didSet {
+            if let path = codeFocusedFile { onLSPDocumentChange?(path, codeDraft) }
             guard let path = codeFocusedFile, codeDraft != codeCurrentText(of: path) else {
                 codeSaveTask?.cancel(); return
             }
@@ -378,6 +395,21 @@ final class AssistantState: ObservableObject {
     private var codeSaveTask: Task<Void, Never>?
     /// When the focused file was last written to disk, for the header.
     @Published var codeLastSaved: Date?
+    static let defaultCodeFontSize: CGFloat = 12.5
+    @Published var codeFontSize = defaultCodeFontSize
+    @Published var codeLSPStatus: CodeLSPStatus = .inactive
+    @Published var codeLSPDiagnostics: [String: [CodeLSPDiagnostic]] = [:]
+    @Published var codeLSPHover: String?
+    @Published var codeLSPDiagnosticPreview: String?
+    @Published var codeLSPCaretOffset = 0
+
+    func zoomCode(by steps: Int) {
+        if steps == 0 {
+            codeFontSize = Self.defaultCodeFontSize
+        } else {
+            codeFontSize = min(28, max(9, codeFontSize + CGFloat(steps)))
+        }
+    }
 
     /// Folders in the file list the user has folded shut. Reset on load.
     @Published var codeCollapsedFolders: Set<String> = []
@@ -534,6 +566,25 @@ final class AssistantState: ObservableObject {
     /// Real month-to-date spend from the Admin API, nil without an admin key
     /// or before the first fetch. When present it replaces the estimate.
     @Published var codeLiveCost: AnthropicService.LiveCost?
+    static let codeProviderKey = "peeky.code.provider"
+    static let codeOllamaModelKey = "peeky.code.ollamaModel"
+    @Published var codeAIProvider = CodeAIProvider(
+        rawValue: UserDefaults.standard.string(forKey: codeProviderKey) ?? ""
+    ) ?? .claude {
+        didSet {
+            UserDefaults.standard.set(codeAIProvider.rawValue, forKey: Self.codeProviderKey)
+            onCodeProviderChanged?(codeAIProvider)
+        }
+    }
+    @Published var codeOllamaModel = UserDefaults.standard.string(forKey: codeOllamaModelKey)
+        ?? "qwen3-coder:30b" {
+        didSet {
+            UserDefaults.standard.set(codeOllamaModel, forKey: Self.codeOllamaModelKey)
+            if oldValue != codeOllamaModel { onCodeModelChanged?(oldValue, codeOllamaModel) }
+        }
+    }
+    @Published var codeOllamaModels: [String] = []
+    @Published var codeOllamaStatus: String?
 
     func logCode(_ kind: CodeLogEntry.Kind, _ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -719,6 +770,14 @@ final class AssistantState: ObservableObject {
     var onPasteCodeImage: (() -> Void)?
     /// Write `text` to the project file at `path` (relative to the root).
     var onSaveCodeFile: ((String, String) -> Void)?
+    var onLSPFocusFile: ((String, String) -> Void)?
+    var onLSPDocumentChange: ((String, String) -> Void)?
+    var onLSPHover: ((String, Int, String) -> Void)?
+    var onLSPDefinition: ((String, Int, String) -> Void)?
+    var onCodeProviderChanged: ((CodeAIProvider) -> Void)?
+    /// (previous model, new model) — the previous one can be let go of.
+    var onCodeModelChanged: ((_ from: String, _ to: String) -> Void)?
+    var onRefreshOllamaModels: (() -> Void)?
     /// Put a code block from an answer into the focused file. `find` is the
     /// block that preceded it in the answer, if any — the code to replace.
     var onApplyCodeBlock: ((_ code: String, _ find: String?, _ path: String) -> Void)?
@@ -810,9 +869,13 @@ final class AssistantPanelController {
     /// chevron on the strip still restores the full card.
     func showAsStrip(on screen: NSScreen) {
         let panel = ensurePanel()
-        if state.collapsed { state.collapsed = false }
+        let wasCollapsed = state.collapsed
+        if wasCollapsed { state.collapsed = false }
         if !state.strip {
-            if panel.isVisible { savedFrame = panel.frame }
+            // `minimize()` already saved the full card frame. Do not replace
+            // it with the dot's 56×56 frame when moving dot → strip, or the
+            // strip chevron will restore a tiny square instead of the card.
+            if panel.isVisible && !wasCollapsed { savedFrame = panel.frame }
             state.strip = true
         }
         let visible = screen.visibleFrame
@@ -1125,6 +1188,12 @@ final class AssistantPanelController {
             self.state.codeViewerExpanded.toggle()
             return true
         }
+        panel.onCodeZoom = { [weak self] steps in
+            guard let self, self.state.tab == .code, self.state.codeFocusedFile != nil,
+                  !self.state.codeViewerCollapsed else { return false }
+            self.state.zoomCode(by: steps)
+            return true
+        }
         // Track which display the panel lives on, including hand drags, so
         // the phone's screen switch can follow reality.
         NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification, object: panel, queue: .main) { [weak self] _ in
@@ -1210,6 +1279,8 @@ final class KeyablePanel: NSPanel {
     /// ⇧⌘↩ on the Code tab. Return true when the file preview took it as
     /// "expand/restore".
     var onToggleCodeExpand: (() -> Bool)?
+    /// ⌘+/⌘-/⌘0 in the Code editor. Positive/negative values zoom; zero resets.
+    var onCodeZoom: ((Int) -> Bool)?
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -1224,6 +1295,16 @@ final class KeyablePanel: NSPanel {
             return true
         }
         if flags == [.command, .shift], key == "\r", onToggleCodeExpand?() == true {
+            return true
+        }
+        let zoomFlags = flags == [.command] || flags == [.command, .shift]
+        if zoomFlags, (key == "+" || key == "="), onCodeZoom?(1) == true {
+            return true
+        }
+        if zoomFlags, key == "-", onCodeZoom?(-1) == true {
+            return true
+        }
+        if flags == [.command], key == "0", onCodeZoom?(0) == true {
             return true
         }
         if super.performKeyEquivalent(with: event) { return true }
@@ -2380,6 +2461,27 @@ struct AssistantPanelView: View {
                 }
                 .help(project.root.path)
                 HStack(spacing: 6) {
+                    if let profile = project.profile {
+                        Button {
+                            state.codePrefillQuestion = Self.sdetReviewPrompt
+                        } label: {
+                            Label(profile.title, systemImage: "checkmark.seal.fill")
+                                .font(.system(size: 11.5, weight: .bold, design: .monospaced))
+                                .foregroundStyle(Color(red: 0.55, green: 0.78, blue: 1))
+                                .lineLimit(1)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(Color.blue.opacity(0.14)))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Active project profile: \(profile.relativePath). Click to prepare an SDET Review.")
+                    }
+                    if !project.detectedStack.isEmpty {
+                        Text(project.detectedStack.map(\.name).joined(separator: " · "))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .help(project.detectedStack.map { "\($0.name): \($0.evidence)" }.joined(separator: "\n"))
+                    }
                     if let usage = state.codeUsage {
                         Image(systemName: usage.hitCache ? "bolt.fill" : "bolt.slash")
                             .font(.system(size: 11, weight: .bold))
@@ -2394,7 +2496,10 @@ struct AssistantPanelView: View {
                         Text(codeSkippedLine(project))
                     }
                     Spacer(minLength: 12)
-                    if let live = state.codeLiveCost {
+                    if state.codeAIProvider == .ollama {
+                        codeCostPill("Local · $0",
+                                     help: "\(state.codeOllamaModel) runs through Ollama on this Mac. No per-message API charge.")
+                    } else if let live = state.codeLiveCost {
                         codeCostPill(live.sinceUSD >= 0.005
                                      ? "Cost: \(codeCostString(live.settledUSD)) + \(codeCostString(live.sinceUSD)) today"
                                      : "Cost: \(codeCostString(live.settledUSD)) this month",
@@ -2589,7 +2694,9 @@ struct AssistantPanelView: View {
                                     .frame(width: 10)
                                 Image(systemName: collapsed ? "folder" : "folder.fill")
                                     .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(Self.codeFolderColor)
                                 Text(group.folder + "/")
+                                    .foregroundStyle(Self.codeFolderColor.opacity(0.9))
                                 Spacer(minLength: 0)
                                 if collapsed {
                                     Text("\(group.files.count) file\(group.files.count == 1 ? "" : "s")")
@@ -2598,7 +2705,6 @@ struct AssistantPanelView: View {
                                 }
                             }
                             .font(.system(size: 12.5, weight: .bold, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.55))
                             .padding(.top, 8)
                             .padding(.bottom, 2)
                             .contentShape(Rectangle())
@@ -2623,13 +2729,14 @@ struct AssistantPanelView: View {
 
     private func codeFileRow(_ file: CodeProject.File, indented: Bool) -> some View {
         let lines = file.text.reduce(into: 0) { if $1 == "\n" { $0 += 1 } }
+        let appearance = Self.codeFileAppearance(for: file.path)
         return Button {
             withAnimation(.easeInOut(duration: 0.18)) { state.codeFocusedFile = file.path }
         } label: {
             HStack(spacing: 8) {
-                Image(systemName: "doc.text")
+                Image(systemName: appearance.icon)
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.45))
+                    .foregroundStyle(appearance.color)
                 Text((file.path as NSString).lastPathComponent)
                     .font(.system(size: 13.5, weight: .medium, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.9))
@@ -2648,11 +2755,56 @@ struct AssistantPanelView: View {
         .help("Open \(file.path)")
     }
 
+    private static let codeFolderColor = Color(red: 0.86, green: 0.68, blue: 0.35)
+
+    private static func codeFileAppearance(for path: String) -> (icon: String, color: Color) {
+        let name = (path as NSString).lastPathComponent.lowercased()
+        let ext = (name as NSString).pathExtension
+        switch name {
+        case "package.json":
+            return ("curlybraces", Color(red: 0.45, green: 0.76, blue: 0.42))
+        case "readme", "readme.md", "readme.markdown":
+            return ("book.closed.fill", Color(red: 0.38, green: 0.72, blue: 0.94))
+        case "dockerfile":
+            return ("shippingbox.fill", Color(red: 0.25, green: 0.65, blue: 0.95))
+        default:
+            break
+        }
+        switch ext {
+        case "swift": return ("swift", Color(red: 0.96, green: 0.43, blue: 0.24))
+        case "js", "mjs", "cjs": return ("j.square.fill", Color(red: 0.94, green: 0.80, blue: 0.25))
+        case "ts", "tsx": return ("t.square.fill", Color(red: 0.30, green: 0.64, blue: 0.91))
+        case "jsx": return ("atom", Color(red: 0.38, green: 0.78, blue: 0.91))
+        case "json": return ("curlybraces", Color(red: 0.86, green: 0.75, blue: 0.32))
+        case "html", "htm": return ("chevron.left.forwardslash.chevron.right", Color(red: 0.93, green: 0.36, blue: 0.22))
+        case "css", "scss", "sass", "less": return ("number.square.fill", Color(red: 0.40, green: 0.55, blue: 0.94))
+        case "py": return ("chevron.left.forwardslash.chevron.right", Color(red: 0.38, green: 0.66, blue: 0.84))
+        case "md", "markdown": return ("text.document.fill", Color(red: 0.38, green: 0.72, blue: 0.94))
+        case "yaml", "yml": return ("list.bullet.rectangle", Color(red: 0.78, green: 0.40, blue: 0.48))
+        case "sh", "bash", "zsh", "fish": return ("terminal.fill", Color(red: 0.43, green: 0.78, blue: 0.46))
+        case "sql": return ("cylinder.fill", Color(red: 0.85, green: 0.55, blue: 0.85))
+        default: return ("doc.text.fill", Color.white.opacity(0.55))
+        }
+    }
+
     /// One file, the way the capture preview shows one image — and
     /// editable: type, and a second later it's saved to disk, where VS Code
     /// or any other editor with the file open picks it up.
     private func codeFileViewer(_ file: CodeProject.File) -> some View {
         let lineCount = state.codeDraft.reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
+        let diagnostics = state.codeLSPDiagnostics[file.path] ?? []
+        let diagnosticHighlights = diagnostics.compactMap { diagnostic in
+            TypeScriptLSPClient.nsRange(diagnostic.range, in: state.codeDraft)
+                .map { CodeEditorDiagnosticHighlight(range: $0, severity: diagnostic.severity) }
+        }
+        let lspColor: Color = {
+            switch state.codeLSPStatus {
+            case .ready: return AssistantPhase.done.color
+            case .starting: return AssistantPhase.working.color
+            case .failed: return .orange
+            case .inactive: return .white.opacity(0.3)
+            }
+        }()
         return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 Button {
@@ -2705,17 +2857,100 @@ struct AssistantPanelView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
+            if TypeScriptLSPClient.supports(path: file.path) {
+                HStack(spacing: 10) {
+                    Image(systemName: state.codeLSPStatus == .ready
+                          ? "bolt.horizontal.circle.fill" : "bolt.horizontal.circle")
+                        .foregroundStyle(lspColor)
+                    Text(state.codeLSPStatus.label)
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(lspColor)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    if !diagnostics.isEmpty {
+                        Button {
+                            let first = diagnostics[0]
+                            state.codeJumpToLine = first.range.start.line + 1
+                            state.codeJumpLineCount = max(1, first.range.end.line - first.range.start.line + 1)
+                        } label: {
+                            Label("\(diagnostics.count)", systemImage: "exclamationmark.triangle.fill")
+                                .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                                .foregroundStyle(diagnostics.contains(where: { $0.severity == 1 }) ? .red : .orange)
+                        }
+                        .buttonStyle(.plain)
+                        .help(diagnostics.map(\.message).joined(separator: "\n"))
+                        .onHover { hovering in
+                            state.codeLSPDiagnosticPreview = hovering
+                                ? diagnostics.enumerated().map { "\($0.offset + 1). \($0.element.message)" }
+                                    .joined(separator: "\n")
+                                : nil
+                        }
+                    }
+                    if state.codeLSPStatus == .ready {
+                        Button {
+                            state.onLSPHover?(file.path, state.codeLSPCaretOffset, state.codeDraft)
+                        } label: {
+                            Label("Hover", systemImage: "info.bubble")
+                                .font(.system(size: 10.5, weight: .semibold))
+                                .foregroundStyle(.white.opacity(0.65))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Show type information for the symbol at the caret")
+                        Button {
+                            state.onLSPDefinition?(file.path, state.codeLSPCaretOffset, state.codeDraft)
+                        } label: {
+                            Label("Definition", systemImage: "arrow.turn.down.right")
+                                .font(.system(size: 10.5, weight: .semibold))
+                                .foregroundStyle(.white.opacity(0.65))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Go to definition")
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Color.white.opacity(0.035))
+                .help(state.codeLSPStatus.detail)
+            }
             if !state.codeViewerCollapsed {
                 if state.codeFindVisible { codeFindBar }
+                if let message = state.codeLSPDiagnosticPreview ?? state.codeLSPHover, !message.isEmpty {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: state.codeLSPDiagnosticPreview == nil
+                              ? "info.circle.fill" : "exclamationmark.triangle.fill")
+                            .foregroundStyle(state.codeLSPDiagnosticPreview == nil
+                                             ? AssistantPhase.working.color : .red)
+                        Text(message)
+                            .font(.system(size: 11.5, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.82))
+                            .lineLimit(4)
+                            .textSelection(.enabled)
+                        Spacer(minLength: 0)
+                        Button {
+                            state.codeLSPHover = nil
+                            state.codeLSPDiagnosticPreview = nil
+                        } label: {
+                            Image(systemName: "xmark")
+                                .foregroundStyle(.white.opacity(0.45))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(Color.white.opacity(0.04))
+                }
                 CodeTextEditor(text: $state.codeDraft,
                                highlights: state.codeFindMatches,
                                current: state.codeFindMatches.isEmpty ? nil : state.codeFindMatches[min(state.codeFindIndex, state.codeFindMatches.count - 1)],
                                onFind: { state.codeFindVisible = true; state.codeFindFocusRequest += 1 },
                                onEscape: { state.closeCodeFind() },
+                               onSelectionChange: { state.codeLSPCaretOffset = $0; state.codeLSPHover = nil },
+                               diagnostics: diagnosticHighlights,
                                language: SyntaxHighlighter.language(for: file.path),
                                jumpToLine: state.codeJumpToLine,
                                jumpLineCount: state.codeJumpLineCount,
-                               onDidJump: { state.codeJumpToLine = nil })
+                               onDidJump: { state.codeJumpToLine = nil },
+                               font: .monospacedSystemFont(ofSize: state.codeFontSize, weight: .regular))
                     .padding(.horizontal, 6)
                     .padding(.bottom, 6)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -2842,6 +3077,18 @@ struct AssistantPanelView: View {
     private func codeCostString(_ usd: Double) -> String {
         usd < 0.01 ? String(format: "$%.3f", usd) : String(format: "$%.2f", usd)
     }
+
+    private static let sdetReviewPrompt = """
+    Perform a mid-level SDET readiness review of this project using the active \
+    project profile and only evidence present in the loaded files. Separate \
+    what is implemented from what is missing or only planned. Assess test \
+    architecture, Playwright practices, TypeScript quality, UI and API \
+    coverage, test-data and SQL strategy, CI, Docker, linting/formatting, and \
+    HTML/JUnit/Allure reporting. Cite exact file paths for every finding, rank \
+    the gaps by hiring impact, and recommend the next three concrete changes. \
+    Also explain how I should discuss the strongest existing design decisions \
+    in a mid-level SDET interview. Do not invent files, tests, or integrations.
+    """
 
     private func codeCostPill(_ text: String, help: String) -> some View {
         Text(text)
@@ -3262,6 +3509,9 @@ struct AssistantPanelView: View {
             if state.tab == .captureDictate || state.tab == .ask || state.tab == .code {
                 addMenu
             }
+            if state.tab == .code {
+                codeProviderMenu
+            }
             if state.tab == .code || state.tab == .terminal {
                 bottomInputField
             } else {
@@ -3284,6 +3534,86 @@ struct AssistantPanelView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: state.canStop)
+    }
+
+    private var codeProviderMenu: some View {
+        Menu {
+            Button {
+                state.codeAIProvider = .claude
+            } label: {
+                Label("Claude (cloud)", systemImage: state.codeAIProvider == .claude ? "checkmark" : "cloud")
+            }
+            Divider()
+            Button {
+                state.codeAIProvider = .ollama
+                state.codeOllamaModel = "qwen3-coder:30b"
+            } label: {
+                Label("Qwen3-Coder 30B", systemImage:
+                    state.codeAIProvider == .ollama && state.codeOllamaModel == "qwen3-coder:30b"
+                        ? "checkmark" : "desktopcomputer")
+            }
+            ForEach(state.codeOllamaModels.filter { $0 != "qwen3-coder:30b" }, id: \.self) { model in
+                Button {
+                    state.codeAIProvider = .ollama
+                    state.codeOllamaModel = model
+                } label: {
+                    Label(model, systemImage:
+                        state.codeAIProvider == .ollama && state.codeOllamaModel == model
+                            ? "checkmark" : "desktopcomputer")
+                }
+            }
+            Divider()
+            Button("Refresh local models") {
+                state.onRefreshOllamaModels?()
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: state.codeAIProvider == .ollama ? "desktopcomputer" : "cloud")
+                    .foregroundStyle(.white)
+                Text(codeProviderLabel)
+                    .foregroundStyle(.white)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+            .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+            .padding(.horizontal, 9)
+            .padding(.vertical, 6)
+            .background(
+                Capsule().fill(
+                    state.codeAIProvider == .ollama
+                        ? AssistantPhase.done.color.opacity(0.35)
+                        : Color.white.opacity(0.15)
+                )
+            )
+            .overlay {
+                Capsule().stroke(
+                    state.codeAIProvider == .ollama
+                        ? AssistantPhase.done.color.opacity(0.75)
+                        : Color.white.opacity(0.25),
+                    lineWidth: 1
+                )
+            }
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(state.codeAIProvider == .ollama
+              ? "\(state.codeOllamaModel) on this Mac · no API charge"
+                + (state.codeOllamaStatus.map { "\n\($0)" } ?? "")
+              : "Claude cloud API")
+        .onAppear {
+            if state.codeAIProvider == .ollama { state.onRefreshOllamaModels?() }
+        }
+    }
+
+    private var codeProviderLabel: String {
+        guard state.codeAIProvider == .ollama else { return "Claude · Cloud" }
+        let model = state.codeOllamaModel == "qwen3-coder:30b"
+            ? "Qwen3-Coder 30B"
+            : state.codeOllamaModel
+        return "Ollama · \(model)"
     }
 
     /// The Code tab's question box, down by the send button where a chat
