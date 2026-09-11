@@ -349,7 +349,7 @@ struct AnthropicService {
         return buckets
     }
 
-    private static let codeSystemPrompt = """
+    static let codeSystemPrompt = """
     You are Peeky Code, a senior software engineer helping the user with a \
     project they have shared with you. The complete source of that project \
     follows this message: a file tree, then every file under a \

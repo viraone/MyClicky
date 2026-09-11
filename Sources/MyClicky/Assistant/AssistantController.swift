@@ -30,6 +30,7 @@ final class AssistantController {
     private let gmailCleanup = GmailCleanupWindowController()
     private let breakCoach = BreakCoach()
     private let typeScriptLSP = TypeScriptLSPClient()
+    private let ollama = OllamaService()
     /// The passage a copy verb last put on the clipboard — what "that" means
     /// in "text that to Noah". Kept apart from `NSPasteboard.general` on
     /// purpose: the system clipboard is shared with every app on the Mac and
@@ -701,11 +702,18 @@ final class AssistantController {
             panel.state.logCode(.error, "Drop a project folder first — then ask away.")
             return
         }
-        guard let apiKey = KeychainService.anthropicAPIKey() else {
+        let provider = panel.state.codeAIProvider
+        let apiKey = provider == .claude ? KeychainService.anthropicAPIKey() : nil
+        if provider == .claude, apiKey == nil {
             panel.state.logCode(.error, "No Anthropic API key found in Keychain.\n\nRun this once in Terminal:\n\(KeychainService.setupCommand)")
             return
         }
-        ActivityLog.recordAction("code-ask", ["text": question, "files": "\(project.files.count)"])
+        if provider == .ollama, !panel.state.codeImages.isEmpty {
+            panel.state.logCode(.error, "The selected local coding model is text-only. Remove attached images or switch to Claude.")
+            return
+        }
+        ActivityLog.recordAction("code-ask", ["text": question, "files": "\(project.files.count)",
+                                               "provider": provider.rawValue])
         let history = panel.state.codeHistory
         let focusedFile = panel.state.codeFocusedFile
         let changedFiles = panel.state.codeChangedFiles
@@ -729,31 +737,59 @@ final class AssistantController {
                 }
             }
             do {
-                let claude = AnthropicService(apiKey: apiKey)
-                let answer = try await claude.askAboutCode(question: question, project: project,
-                                                           focusedFile: focusedFile, images: images,
-                                                           changedFiles: changedFiles,
-                                                           history: history) { [weak self] status in
-                    guard let self, id == self.requestID else { return }
-                    self.panel.state.logCode(.status, status)
+                let answerText: String
+                if provider == .ollama {
+                    answerText = try await ollama.askAboutCode(
+                        question: question, project: project, focusedFile: focusedFile,
+                        changedFiles: changedFiles, history: history,
+                        model: panel.state.codeOllamaModel
+                    ) { [weak self] status in
+                        guard let self, id == self.requestID else { return }
+                        self.panel.state.logCode(.status, status)
+                    }
+                    panel.state.codeUsage = nil
+                } else {
+                    let claude = AnthropicService(apiKey: apiKey!)
+                    let answer = try await claude.askAboutCode(question: question, project: project,
+                                                               focusedFile: focusedFile, images: images,
+                                                               changedFiles: changedFiles,
+                                                               history: history) { [weak self] status in
+                        guard let self, id == self.requestID else { return }
+                        self.panel.state.logCode(.status, status)
+                    }
+                    panel.state.codeUsage = answer.usage
+                    answerText = answer.text
+                    if let usage = answer.usage {
+                        panel.state.codeSpentUSD += usage.costUSD
+                        refreshLiveCost(force: true)
+                        ActivityLog.recordAction("code-answer", ["cache_read": "\(usage.cacheRead)",
+                                                                 "cache_write": "\(usage.cacheWrite)",
+                                                                 "input": "\(usage.input)", "output": "\(usage.output)"])
+                    }
                 }
                 try Task.checkCancellation()
                 guard id == requestID else { return }
                 panel.state.status = .answering
-                panel.state.codeUsage = answer.usage
-                panel.state.logCode(.answer, answer.text)
+                panel.state.logCode(.answer, answerText)
                 panel.state.codeViewerExpanded = false  // show the answer, not just the preview
-                if let usage = answer.usage {
-                    panel.state.codeSpentUSD += usage.costUSD
-                    refreshLiveCost(force: true)
-                    ActivityLog.recordAction("code-answer", ["cache_read": "\(usage.cacheRead)",
-                                                             "cache_write": "\(usage.cacheWrite)",
-                                                             "input": "\(usage.input)", "output": "\(usage.output)"])
-                }
+                ActivityLog.recordAction("code-answer", ["provider": provider.rawValue])
             } catch {
                 guard id == requestID, !Task.isCancelled else { return }
                 panel.state.status = .idle
                 panel.state.logCode(.error, error.localizedDescription)
+            }
+        }
+    }
+
+    private func refreshOllamaModels() {
+        panel.state.codeOllamaStatus = "Connecting to Ollama…"
+        Task {
+            do {
+                let models = try await ollama.models()
+                panel.state.codeOllamaModels = models
+                panel.state.codeOllamaStatus = models.isEmpty ? "No local models installed" : "Ollama ready"
+            } catch {
+                panel.state.codeOllamaStatus = error.localizedDescription
             }
         }
     }
@@ -881,6 +917,10 @@ final class AssistantController {
         panel.state.onLSPDefinition = { [weak self] path, offset, text in
             self?.typeScriptLSP.definition(path: path, characterOffset: offset, text: text)
         }
+        panel.state.onCodeProviderChanged = { [weak self] provider in
+            if provider == .ollama { self?.refreshOllamaModels() }
+        }
+        panel.state.onRefreshOllamaModels = { [weak self] in self?.refreshOllamaModels() }
         panel.state.onApplyCodeBlock = { [weak self] code, find, path in self?.applyCodeBlock(code, replacing: find, path: path) }
         panel.state.onAttachCodeProject = { [weak self] in self?.pickCodeProject() }
         panel.state.onReloadCodeProject = { [weak self] in self?.reloadCodeProject() }

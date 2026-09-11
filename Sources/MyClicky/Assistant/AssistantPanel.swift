@@ -106,6 +106,7 @@ enum AssistantTab: String, CaseIterable {
         case .code: "chevron.left.forwardslash.chevron.right"
         case .terminal: "terminal"
         }
+
     }
 
     /// Tabs with a mic: everything but the terminal.
@@ -119,6 +120,18 @@ enum AssistantTab: String, CaseIterable {
         case .talk: "Talk"
         case .code: "Code"
         case .terminal: "Term"
+        }
+    }
+}
+
+enum CodeAIProvider: String, CaseIterable {
+    case claude
+    case ollama
+
+    var label: String {
+        switch self {
+        case .claude: return "Claude"
+        case .ollama: return "Local"
         }
     }
 }
@@ -553,6 +566,22 @@ final class AssistantState: ObservableObject {
     /// Real month-to-date spend from the Admin API, nil without an admin key
     /// or before the first fetch. When present it replaces the estimate.
     @Published var codeLiveCost: AnthropicService.LiveCost?
+    static let codeProviderKey = "peeky.code.provider"
+    static let codeOllamaModelKey = "peeky.code.ollamaModel"
+    @Published var codeAIProvider = CodeAIProvider(
+        rawValue: UserDefaults.standard.string(forKey: codeProviderKey) ?? ""
+    ) ?? .claude {
+        didSet {
+            UserDefaults.standard.set(codeAIProvider.rawValue, forKey: Self.codeProviderKey)
+            onCodeProviderChanged?(codeAIProvider)
+        }
+    }
+    @Published var codeOllamaModel = UserDefaults.standard.string(forKey: codeOllamaModelKey)
+        ?? "qwen3-coder:30b" {
+        didSet { UserDefaults.standard.set(codeOllamaModel, forKey: Self.codeOllamaModelKey) }
+    }
+    @Published var codeOllamaModels: [String] = []
+    @Published var codeOllamaStatus: String?
 
     func logCode(_ kind: CodeLogEntry.Kind, _ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -742,6 +771,8 @@ final class AssistantState: ObservableObject {
     var onLSPDocumentChange: ((String, String) -> Void)?
     var onLSPHover: ((String, Int, String) -> Void)?
     var onLSPDefinition: ((String, Int, String) -> Void)?
+    var onCodeProviderChanged: ((CodeAIProvider) -> Void)?
+    var onRefreshOllamaModels: (() -> Void)?
     /// Put a code block from an answer into the focused file. `find` is the
     /// block that preceded it in the answer, if any — the code to replace.
     var onApplyCodeBlock: ((_ code: String, _ find: String?, _ path: String) -> Void)?
@@ -2460,7 +2491,10 @@ struct AssistantPanelView: View {
                         Text(codeSkippedLine(project))
                     }
                     Spacer(minLength: 12)
-                    if let live = state.codeLiveCost {
+                    if state.codeAIProvider == .ollama {
+                        codeCostPill("Local · $0",
+                                     help: "\(state.codeOllamaModel) runs through Ollama on this Mac. No per-message API charge.")
+                    } else if let live = state.codeLiveCost {
                         codeCostPill(live.sinceUSD >= 0.005
                                      ? "Cost: \(codeCostString(live.settledUSD)) + \(codeCostString(live.sinceUSD)) today"
                                      : "Cost: \(codeCostString(live.settledUSD)) this month",
@@ -3470,6 +3504,9 @@ struct AssistantPanelView: View {
             if state.tab == .captureDictate || state.tab == .ask || state.tab == .code {
                 addMenu
             }
+            if state.tab == .code {
+                codeProviderMenu
+            }
             if state.tab == .code || state.tab == .terminal {
                 bottomInputField
             } else {
@@ -3492,6 +3529,86 @@ struct AssistantPanelView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: state.canStop)
+    }
+
+    private var codeProviderMenu: some View {
+        Menu {
+            Button {
+                state.codeAIProvider = .claude
+            } label: {
+                Label("Claude (cloud)", systemImage: state.codeAIProvider == .claude ? "checkmark" : "cloud")
+            }
+            Divider()
+            Button {
+                state.codeAIProvider = .ollama
+                state.codeOllamaModel = "qwen3-coder:30b"
+            } label: {
+                Label("Qwen3-Coder 30B", systemImage:
+                    state.codeAIProvider == .ollama && state.codeOllamaModel == "qwen3-coder:30b"
+                        ? "checkmark" : "desktopcomputer")
+            }
+            ForEach(state.codeOllamaModels.filter { $0 != "qwen3-coder:30b" }, id: \.self) { model in
+                Button {
+                    state.codeAIProvider = .ollama
+                    state.codeOllamaModel = model
+                } label: {
+                    Label(model, systemImage:
+                        state.codeAIProvider == .ollama && state.codeOllamaModel == model
+                            ? "checkmark" : "desktopcomputer")
+                }
+            }
+            Divider()
+            Button("Refresh local models") {
+                state.onRefreshOllamaModels?()
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: state.codeAIProvider == .ollama ? "desktopcomputer" : "cloud")
+                    .foregroundStyle(.white)
+                Text(codeProviderLabel)
+                    .foregroundStyle(.white)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+            .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+            .padding(.horizontal, 9)
+            .padding(.vertical, 6)
+            .background(
+                Capsule().fill(
+                    state.codeAIProvider == .ollama
+                        ? AssistantPhase.done.color.opacity(0.35)
+                        : Color.white.opacity(0.15)
+                )
+            )
+            .overlay {
+                Capsule().stroke(
+                    state.codeAIProvider == .ollama
+                        ? AssistantPhase.done.color.opacity(0.75)
+                        : Color.white.opacity(0.25),
+                    lineWidth: 1
+                )
+            }
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help(state.codeAIProvider == .ollama
+              ? "\(state.codeOllamaModel) on this Mac · no API charge"
+                + (state.codeOllamaStatus.map { "\n\($0)" } ?? "")
+              : "Claude cloud API")
+        .onAppear {
+            if state.codeAIProvider == .ollama { state.onRefreshOllamaModels?() }
+        }
+    }
+
+    private var codeProviderLabel: String {
+        guard state.codeAIProvider == .ollama else { return "Claude · Cloud" }
+        let model = state.codeOllamaModel == "qwen3-coder:30b"
+            ? "Qwen3-Coder 30B"
+            : state.codeOllamaModel
+        return "Ollama · \(model)"
     }
 
     /// The Code tab's question box, down by the send button where a chat
