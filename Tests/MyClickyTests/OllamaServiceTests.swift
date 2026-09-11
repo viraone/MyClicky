@@ -60,4 +60,26 @@ final class OllamaServiceTests: XCTestCase {
         XCTAssertTrue(last.contains("1 | export const answer = 42"), "focused file rides along with line numbers")
         XCTAssertTrue(last.hasSuffix(OllamaService.questionReminder), "reminder is the last thing the model reads")
     }
+
+    func testContextWindowSnapsToBucketsAndRespectsTheModelLimit() {
+        func messages(characters: Int) -> [[String: String]] {
+            [["role": "user", "content": String(repeating: "x", count: characters)]]
+        }
+        XCTAssertEqual(OllamaService.estimatedTokens(of: messages(characters: 3_500)), 1_000)
+        // A tiny prompt gets the smallest bucket, however roomy the model.
+        XCTAssertEqual(OllamaService.contextWindow(for: messages(characters: 7_000), limit: 262_144), 8_192)
+        // ~20K tokens of prompt plus answer headroom needs the 32K bucket.
+        XCTAssertEqual(OllamaService.contextWindow(for: messages(characters: 70_000), limit: 262_144), 32_768)
+        // Just past a bucket edge steps up rather than squeezing.
+        let edge = (32_768 - OllamaService.answerHeadroom) * 35 / 10
+        XCTAssertEqual(OllamaService.contextWindow(for: messages(characters: edge), limit: 262_144), 32_768)
+        XCTAssertEqual(OllamaService.contextWindow(for: messages(characters: edge + 350), limit: 262_144), 65_536)
+        // A model with a smaller window caps the bucket at its own limit.
+        XCTAssertEqual(OllamaService.contextWindow(for: messages(characters: 70_000), limit: 30_000), 30_000)
+        // Unknown limit: buckets alone.
+        XCTAssertEqual(OllamaService.contextWindow(for: messages(characters: 7_000), limit: nil), 8_192)
+        // Too big for the model: nil, so the caller explains instead of letting Ollama truncate the prompt.
+        XCTAssertNil(OllamaService.contextWindow(for: messages(characters: 200_000), limit: 32_768))
+        XCTAssertTrue(OllamaService.OllamaError.tooLarge(tokens: 57_000, limit: 32_768).localizedDescription.contains("57K tokens"))
+    }
 }

@@ -155,7 +155,9 @@ through npm's cache.
 The provider menu beside Peeky Code's question box switches between Claude and
 a local Ollama model. Local mode starts Ollama when needed, defaults to
 `qwen3-coder:30b`, downloads a missing model once, and sends project context
-only to `127.0.0.1`; it has no per-message API charge. Attached images remain a
+only to `127.0.0.1`; it has no per-message API charge. The context window is sized to
+the project in steps from 8K up to the model's limit, so a small project
+loads about 18 GB of model instead of the 45 GB a full 262K window costs. Attached images remain a
 Claude-only feature.
 
 Click the project card to browse its files and click one to preview it

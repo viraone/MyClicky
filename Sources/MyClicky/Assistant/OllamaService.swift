@@ -25,12 +25,16 @@ final class OllamaService {
 
         let messages = Self.messages(question: question, project: project, focusedFile: focusedFile,
                                      changedFiles: changedFiles, history: history)
-
+        let limit = await contextLength(of: model)
+        guard let window = Self.contextWindow(for: messages, limit: limit) else {
+            throw OllamaError.tooLarge(tokens: Self.estimatedTokens(of: messages), limit: limit)
+        }
+        onStatus?("\(model) · \(window / 1024)K context")
         let body: [String: Any] = [
             "model": model,
             "stream": false,
             "messages": messages,
-            "options": ["temperature": 0.2],
+            "options": ["temperature": 0.2, "num_ctx": window],
         ]
         let data = try await post(path: "api/chat", body: body, timeout: 600)
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -94,6 +98,51 @@ final class OllamaService {
     /// Tacked onto the end of every question, where small models look last.
     static let questionReminder = "(Reminder: to change existing code, first a fenced block quoting the current code "
         + "exactly, then a second fenced block with the replacement. Tag both with language and file path.)"
+
+    /// Context windows worth asking for, smallest first. Ollama reloads
+    /// the model whenever `num_ctx` changes, so requests snap to one of
+    /// these instead of tracking the prompt token by token.
+    static let contextBuckets = [8_192, 16_384, 32_768, 65_536, 131_072, 262_144]
+    /// Room kept for the answer on top of the prompt.
+    static let answerHeadroom = 4_096
+
+    /// Rough token count of a conversation — code runs about 3.5
+    /// characters a token, the same figure the project card uses.
+    static func estimatedTokens(of messages: [[String: String]]) -> Int {
+        let characters = messages.reduce(0) { $0 + ($1["content"]?.count ?? 0) }
+        return Int(Double(characters) / 3.5)
+    }
+
+    /// The smallest bucket that holds the prompt plus headroom, capped at
+    /// the model's own limit; nil when even the limit isn't enough (so the
+    /// caller can say so rather than let Ollama silently drop the start of
+    /// the prompt — which is the system prompt and the project). Left to
+    /// its defaults Ollama sizes the key/value cache for the model's full
+    /// window — 262K for Qwen3-Coder, about 26 GB on top of 17 GB of
+    /// weights — on every question, however small the project.
+    static func contextWindow(for messages: [[String: String]], limit: Int?) -> Int? {
+        let needed = estimatedTokens(of: messages) + answerHeadroom
+        if let limit, needed > limit { return nil }
+        if let bucket = contextBuckets.first(where: { $0 >= needed }) {
+            return limit.map { min(bucket, $0) } ?? bucket
+        }
+        return limit
+    }
+
+    private var contextLengths: [String: Int] = [:]
+
+    /// The model's trained context length from `/api/show`, cached per
+    /// model. nil when Ollama doesn't report one.
+    func contextLength(of model: String) async -> Int? {
+        if let known = contextLengths[model] { return known }
+        guard let data = try? await post(path: "api/show", body: ["model": model], timeout: 30),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let info = json["model_info"] as? [String: Any],
+              let entry = info.first(where: { $0.key.hasSuffix(".context_length") }),
+              let length = entry.value as? Int else { return nil }
+        contextLengths[model] = length
+        return length
+    }
 
     /// `"a\nb"` → `"1 | a\n2 | b"`, right-aligned so columns line up.
     static func numbered(_ text: String) -> String {
@@ -177,9 +226,13 @@ final class OllamaService {
         case badResponse
         case emptyResponse
         case api(String)
+        case tooLarge(tokens: Int, limit: Int?)
 
         var errorDescription: String? {
             switch self {
+            case .tooLarge(let tokens, let limit):
+                let cap = limit.map { " (\($0 / 1024)K tokens)" } ?? ""
+                return "This project is about \(tokens / 1000)K tokens — more than the local model's context window\(cap). Drop a smaller folder, or switch to Claude."
             case .notInstalled: return "Ollama is not installed. Install it from ollama.com first."
             case .couldNotStart(let detail): return "Ollama could not start: \(detail)"
             case .badResponse: return "Ollama returned an unexpected response."
