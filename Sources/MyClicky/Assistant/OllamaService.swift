@@ -161,12 +161,45 @@ final class OllamaService {
         onStatus?("\(model) is ready locally.")
     }
 
+    /// Ollama's default keeps up to three models resident, each for its
+    /// keep-alive window — switch from Qwen to GPT-OSS to Llama 70B and all
+    /// three sit in memory. When we start the server, one at a time; an
+    /// explicit setting in the environment is respected.
+    static func serverEnvironment(base: [String: String]) -> [String: String] {
+        var env = base
+        env["OLLAMA_MAX_LOADED_MODELS"] = base["OLLAMA_MAX_LOADED_MODELS"] ?? "1"
+        return env
+    }
+
+    /// Models currently resident, per `/api/ps`. Empty when the server
+    /// isn't running — this never starts it just to ask.
+    func loadedModels() async -> [String] {
+        guard await isRunning(),
+              let (data, _) = try? await URLSession.shared.data(from: Self.baseURL.appendingPathComponent("api/ps")),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let models = json["models"] as? [[String: Any]] else { return [] }
+        return models.compactMap { $0["name"] as? String }
+    }
+
+    /// Drops `model` from memory now instead of at the end of its keep-alive
+    /// window. Only acts when it's actually resident (a `keep_alive: 0`
+    /// request would otherwise load 17 GB just to unload it) and when the
+    /// server was started outside the app with the default three-model
+    /// limit. Returns whether anything was unloaded.
+    @discardableResult
+    func unload(_ model: String) async -> Bool {
+        let loaded = await loadedModels()
+        guard loaded.contains(where: { $0 == model || $0.hasPrefix("\(model):") }) else { return false }
+        return (try? await post(path: "api/generate", body: ["model": model, "keep_alive": 0], timeout: 60)) != nil
+    }
+
     private func ensureRunning() async throws {
         if await isRunning() { return }
         guard let executable = Self.ollamaExecutable() else { throw OllamaError.notInstalled }
         let process = Process()
         process.executableURL = executable
         process.arguments = ["serve"]
+        process.environment = Self.serverEnvironment(base: ProcessInfo.processInfo.environment)
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         do {

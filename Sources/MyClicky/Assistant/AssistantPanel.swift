@@ -578,7 +578,10 @@ final class AssistantState: ObservableObject {
     }
     @Published var codeOllamaModel = UserDefaults.standard.string(forKey: codeOllamaModelKey)
         ?? "qwen3-coder:30b" {
-        didSet { UserDefaults.standard.set(codeOllamaModel, forKey: Self.codeOllamaModelKey) }
+        didSet {
+            UserDefaults.standard.set(codeOllamaModel, forKey: Self.codeOllamaModelKey)
+            if oldValue != codeOllamaModel { onCodeModelChanged?(oldValue, codeOllamaModel) }
+        }
     }
     @Published var codeOllamaModels: [String] = []
     @Published var codeOllamaStatus: String?
@@ -772,6 +775,8 @@ final class AssistantState: ObservableObject {
     var onLSPHover: ((String, Int, String) -> Void)?
     var onLSPDefinition: ((String, Int, String) -> Void)?
     var onCodeProviderChanged: ((CodeAIProvider) -> Void)?
+    /// (previous model, new model) — the previous one can be let go of.
+    var onCodeModelChanged: ((_ from: String, _ to: String) -> Void)?
     var onRefreshOllamaModels: (() -> Void)?
     /// Put a code block from an answer into the focused file. `find` is the
     /// block that preceded it in the answer, if any — the code to replace.

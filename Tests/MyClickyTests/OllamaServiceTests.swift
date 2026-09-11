@@ -82,4 +82,12 @@ final class OllamaServiceTests: XCTestCase {
         XCTAssertNil(OllamaService.contextWindow(for: messages(characters: 200_000), limit: 32_768))
         XCTAssertTrue(OllamaService.OllamaError.tooLarge(tokens: 57_000, limit: 32_768).localizedDescription.contains("57K tokens"))
     }
+
+    func testServerIsStartedWithAOneModelLimitUnlessTheUserSaidOtherwise() {
+        let env = OllamaService.serverEnvironment(base: ["PATH": "/opt/homebrew/bin"])
+        XCTAssertEqual(env["OLLAMA_MAX_LOADED_MODELS"], "1")
+        XCTAssertEqual(env["PATH"], "/opt/homebrew/bin", "the rest of the environment passes through")
+        let explicit = OllamaService.serverEnvironment(base: ["OLLAMA_MAX_LOADED_MODELS": "2"])
+        XCTAssertEqual(explicit["OLLAMA_MAX_LOADED_MODELS"], "2", "a deliberate setting wins")
+    }
 }

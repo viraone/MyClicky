@@ -921,6 +921,14 @@ final class AssistantController {
             if provider == .ollama { self?.refreshOllamaModels() }
         }
         panel.state.onRefreshOllamaModels = { [weak self] in self?.refreshOllamaModels() }
+        panel.state.onCodeModelChanged = { [weak self] previous, _ in
+            // Otherwise the model just left behind stays resident for its
+            // keep-alive window alongside the new one.
+            Task { [weak self] in
+                guard let self, await self.ollama.unload(previous) else { return }
+                self.panel.state.logCode(.status, "Unloaded \(previous) from memory.")
+            }
+        }
         panel.state.onApplyCodeBlock = { [weak self] code, find, path in self?.applyCodeBlock(code, replacing: find, path: path) }
         panel.state.onAttachCodeProject = { [weak self] in self?.pickCodeProject() }
         panel.state.onReloadCodeProject = { [weak self] in self?.reloadCodeProject() }
