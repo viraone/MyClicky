@@ -557,6 +557,8 @@ final class AssistantState: ObservableObject {
     /// every code question until removed. Listed by name only.
     @Published var codeImages: [AskAttachment] = []
     static let maxCodeImages = 5
+    /// Only Claude sends images with code questions; the Local path is text-only.
+    var codeAcceptsImages: Bool { codeAIProvider == .claude }
     /// Estimated dollars spent on code questions since install, from the
     /// token counts each answer reports. Persisted so it survives relaunch.
     @Published var codeSpentUSD: Double = UserDefaults.standard.double(forKey: codeSpentKey) {
@@ -573,6 +575,11 @@ final class AssistantState: ObservableObject {
     ) ?? .claude {
         didSet {
             UserDefaults.standard.set(codeAIProvider.rawValue, forKey: Self.codeProviderKey)
+            if codeAIProvider == .ollama, !codeImages.isEmpty {
+                let n = codeImages.count
+                codeImages.removeAll()
+                logCode(.status, "Removed \(n) attached image\(n == 1 ? "" : "s") — the local model is text-only. Switch to Claude to attach images.")
+            }
             onCodeProviderChanged?(codeAIProvider)
         }
     }
@@ -3762,9 +3769,9 @@ struct AssistantPanelView: View {
             folder.target = pick
             actions.append(pick)
             menu.addItem(folder)
-            let images = NSMenuItem(title: "Images for the question…", action: #selector(MenuAction.fire), keyEquivalent: "")
+            let images = NSMenuItem(title: state.codeAcceptsImages ? "Images for the question…" : "Images for the question (Claude only)", action: #selector(MenuAction.fire), keyEquivalent: "")
             images.image = NSImage(systemSymbolName: "photo.on.rectangle", accessibilityDescription: nil)
-            images.isEnabled = state.codeImages.count < AssistantState.maxCodeImages
+            images.isEnabled = state.codeAcceptsImages && state.codeImages.count < AssistantState.maxCodeImages
             let imagesAction = MenuAction { state.onAttachCodeImages?() }
             images.target = imagesAction
             actions.append(imagesAction)
