@@ -347,6 +347,8 @@ final class ClickyClient: ObservableObject {
     /// Recording ended with nothing to send — take the Mac out of listening too.
     func stopListening() { send("STOP") }
     func collapse() { send("COLLAPSE") }
+    /// Toggle Peeky's thin status strip without minimizing it to the corner dot.
+    func toggleStrip() { send("STRIP") }
     /// Put Peeky (panel and pointer) on display n, 1-based.
     func screen(_ n: Int) { send("SCREEN \(n)") }
     func tab(_ name: String) { send("TAB \(name)") }

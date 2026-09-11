@@ -931,6 +931,14 @@ final class AssistantController {
                 self.showPanel()
             }
         }
+        remote.onStrip = { [weak self] in
+            guard let self else { return }
+            if self.panel.isVisible && !self.panel.state.collapsed {
+                self.panel.toggleStrip()
+            } else {
+                self.panel.showAsStrip(on: self.panel.screen ?? self.workingScreen)
+            }
+        }
         remote.onTab = { [weak self] name in
             guard let self else { return }
             self.showPanel()

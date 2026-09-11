@@ -1644,8 +1644,12 @@ struct NumpadView: View {
                     statusText = n == 2 ? "Peeky → Screen 2 (your monitor)" : "Peeky → Screen 1 (MacBook)"
                 }
                 .frame(width: geo.size.width, height: switchH)
-                key("0", label: "PEEKY", icon: "sparkles", tint: Snes.purple, lit: true,
-                    h: bannerH, w: geo.size.width, banner: true)
+                HStack(spacing: gap) {
+                    key("0", label: "PEEKY", icon: "sparkles", tint: Snes.purple, lit: true,
+                        h: bannerH, w: columnW, banner: true)
+                    key("strip", label: "COLLAPSE", icon: "chevron.left", tint: Snes.green, lit: true,
+                        h: bannerH, w: columnW, banner: true)
+                }
                 HStack(alignment: .top, spacing: gap) {
                     // ASK records on the phone and sends `ASK <text>`: the Mac
                     // answers exactly as it does for ⌥⌘C (screenshot of the
@@ -1882,6 +1886,9 @@ struct NumpadView: View {
             // Toggle: the Mac shows Peeky if hidden/collapsed, collapses it if open.
             client.collapse()
             statusText = "Peeky toggled — tap PEEKY again to hide or bring it back"
+        case "strip":
+            client.toggleStrip()
+            statusText = "Peeky's compact bar toggled on your Mac"
         case "4":
             client.show()
             client.tab("ASK")
