@@ -428,6 +428,11 @@ final class AssistantState: ObservableObject {
     static let defaultCodeFontSize: CGFloat = 12.5
     @Published var codeFontSize = defaultCodeFontSize
     @Published var codeLSPStatus: CodeLSPStatus = .inactive
+    /// Off keeps the project loaded for Q&A but sheds the language server
+    /// and its node workers (≈300 MB). Remembered across launches.
+    @Published var codeLSPEnabled = UserDefaults.standard.object(forKey: "codeLSPEnabled") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(codeLSPEnabled, forKey: "codeLSPEnabled") }
+    }
     @Published var codeLSPDiagnostics: [String: [CodeLSPDiagnostic]] = [:]
     @Published var codeLSPHover: String?
     @Published var codeLSPDiagnosticPreview: String?
@@ -827,6 +832,8 @@ final class AssistantState: ObservableObject {
     var onLSPDocumentChange: ((String, String) -> Void)?
     var onLSPHover: ((String, Int, String) -> Void)?
     var onLSPDefinition: ((String, Int, String) -> Void)?
+    /// Badge click: stop the language server (keep the project) or start it again.
+    var onToggleLSP: (() -> Void)?
     var onCodeProviderChanged: ((CodeAIProvider) -> Void)?
     /// (previous model, new model) — the previous one can be let go of.
     var onCodeModelChanged: ((_ from: String, _ to: String) -> Void)?
@@ -2852,7 +2859,7 @@ struct AssistantPanelView: View {
             case .ready: return AssistantPhase.done.color
             case .starting: return AssistantPhase.working.color
             case .failed: return .orange
-            case .inactive: return .white.opacity(0.3)
+            case .inactive, .disabled: return .white.opacity(0.3)
             }
         }()
         return VStack(alignment: .leading, spacing: 0) {
@@ -2909,13 +2916,25 @@ struct AssistantPanelView: View {
             .padding(.vertical, 7)
             if TypeScriptLSPClient.supports(path: file.path) {
                 HStack(spacing: 10) {
-                    Image(systemName: state.codeLSPStatus == .ready
-                          ? "bolt.horizontal.circle.fill" : "bolt.horizontal.circle")
-                        .foregroundStyle(lspColor)
-                    Text(state.codeLSPStatus.label)
-                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(lspColor)
-                        .lineLimit(1)
+                    Button {
+                        state.onToggleLSP?()
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: state.codeLSPStatus == .ready
+                                  ? "bolt.horizontal.circle.fill" : "bolt.horizontal.circle")
+                                .foregroundStyle(lspColor)
+                            Text(state.codeLSPStatus.label)
+                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(lspColor)
+                                .lineLimit(1)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(state.codeLSPEnabled
+                          ? "Switch the TypeScript language server off — keeps the project, frees ≈300 MB"
+                          : "Switch the TypeScript language server on — live errors, Hover, Definition")
+                    .accessibilityLabel(state.codeLSPEnabled ? "Turn TypeScript LSP off" : "Turn TypeScript LSP on")
                     Spacer(minLength: 8)
                     if !diagnostics.isEmpty {
                         Button {

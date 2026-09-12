@@ -2,6 +2,9 @@ import Foundation
 
 enum CodeLSPStatus: Equatable {
     case inactive
+    /// Switched off by the user (badge click) — the project stays loaded
+    /// but the server and its node workers are gone.
+    case disabled
     case starting(String)
     case ready
     case failed(String)
@@ -9,6 +12,7 @@ enum CodeLSPStatus: Equatable {
     var label: String {
         switch self {
         case .inactive: return "LSP off"
+        case .disabled: return "LSP off"
         case .starting(let detail): return detail
         case .ready: return "TypeScript LSP"
         case .failed: return "LSP unavailable"
@@ -18,8 +22,9 @@ enum CodeLSPStatus: Equatable {
     var detail: String {
         switch self {
         case .inactive: return "No TypeScript project is active."
+        case .disabled: return "Language server switched off — click to start it (≈300 MB of node processes)."
         case .starting(let detail): return detail
-        case .ready: return "Diagnostics, hover information, and go to definition are active."
+        case .ready: return "Diagnostics, hover information, and go to definition are active. Click to switch off and free ≈300 MB."
         case .failed(let detail): return detail
         }
     }

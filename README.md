@@ -150,7 +150,9 @@ shows live error/warning underlines and exposes hover information and
 go-to-definition beside the **TypeScript LSP** status badge. Peeky prefers a
 project-local or installed `typescript-language-server`; when neither exists,
 the first TypeScript project load fetches the pinned v4 server and TypeScript 5
-through npm's cache.
+through npm's cache. Click the badge to switch the server off — the project and
+open file stay loaded for Q&A while the server and its node workers (≈300 MB)
+exit; click again to bring it back. The choice is remembered across launches.
 
 The provider menu beside Peeky Code's question box switches between Claude and
 a local Ollama model. Local mode starts Ollama when needed, defaults to
