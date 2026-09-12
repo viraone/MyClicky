@@ -355,13 +355,23 @@ final class AssistantState: ObservableObject {
     /// What the last question cost — shown so the cache saving is visible.
     @Published var codeUsage: AnthropicService.Usage?
     /// The project card is expanded into its file list.
-    @Published var codeShowingFiles = false {
-        didSet { if codeShowingFiles { codeViewerExpanded = false } }
+    @Published var codeShowingFiles = false
+    /// Browsing must not discard the active editor's draft or language-server state.
+    func showCodeFiles() {
+        guard codeProject != nil else { return }
+        codeShowingFiles = true
     }
-    /// Path of the file open in the preview, nil for the whole project.
+
+    func toggleCodeFiles() {
+        if codeShowingFiles { codeShowingFiles = false }
+        else { showCodeFiles() }
+    }
+
+    /// Path of the file open in the preview, retained while browsing the project.
     @Published var codeFocusedFile: String? {
         didSet {
-            if codeFocusedFile != nil { codeShowingFiles = false }
+            // Returning from the browser to the same file keeps its live edit.
+            guard codeFocusedFile != oldValue else { return }
             codeLSPHover = nil
             codeLSPDiagnosticPreview = nil
             // A freshly opened file is there to be read; the caret only
@@ -1616,13 +1626,16 @@ struct AssistantPanelView: View {
                     let viewerExpanded = state.codeViewerExpanded && !state.codeViewerCollapsed && state.codeFocusedFile != nil
                     if state.codeShowingFiles, let project = state.codeProject {
                         codeFileList(project)
-                    } else if let path = state.codeFocusedFile, let file = state.codeProject?.file(at: path) {
+                            // Keep the browser from taking the expanded editor's space.
+                            .frame(maxHeight: state.codeFocusedFile == nil ? .infinity : 180)
+                    }
+                    if let path = state.codeFocusedFile, let file = state.codeProject?.file(at: path) {
                         codeFileViewer(file)
                             .frame(maxHeight: viewerExpanded ? .infinity : nil)
                     }
                     // With a file or the list up and nothing asked yet, the
                     // empty log's hint would steal half the height. Expanded,
-                    // the preview alone fills the tab and the log is hidden.
+                    // the preview fills the remaining space and the log is hidden.
                     if !viewerExpanded, !state.codeLog.isEmpty || (!state.codeShowingFiles && state.codeFocusedFile == nil) {
                         codeLogView
                     }
@@ -2418,20 +2431,21 @@ struct AssistantPanelView: View {
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 8) {
                     Button {
-                        withAnimation(.easeInOut(duration: 0.18)) {
-                            if state.codeFocusedFile != nil {
-                                state.codeFocusedFile = nil
-                                state.codeShowingFiles = true
-                            } else {
-                                state.codeShowingFiles.toggle()
-                            }
-                        }
+                        withAnimation(.easeInOut(duration: 0.18)) { state.toggleCodeFiles() }
+                    } label: {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 11, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.5))
+                            .rotationEffect(.degrees(state.codeShowingFiles ? 90 : 0))
+                            .padding(.vertical, 4)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(state.codeShowingFiles ? "Hide the file list" : "Show every file in the project")
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.18)) { state.showCodeFiles() }
                     } label: {
                         HStack(spacing: 8) {
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 11, weight: .bold))
-                                .foregroundStyle(.white.opacity(0.5))
-                                .rotationEffect(.degrees(state.codeShowingFiles ? 90 : 0))
                             Image(systemName: "folder.fill")
                                 .font(.system(size: 14, weight: .semibold))
                                 .foregroundStyle(Color(red: 0.35, green: 0.78, blue: 0.98))
@@ -2458,11 +2472,11 @@ struct AssistantPanelView: View {
                                     .lineLimit(1)
                             }
                         }
+                        .padding(.vertical, 4)
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .help(state.codeFocusedFile != nil ? "Back to the file list"
-                          : state.codeShowingFiles ? "Hide the file list" : "Show every file in the project")
+                    .help("Show every file in \(project.name)")
                     Spacer(minLength: 0)
                     if let path = state.codeFocusedFile {
                         if state.codeXcodeContainer != nil { codeRunButton }
