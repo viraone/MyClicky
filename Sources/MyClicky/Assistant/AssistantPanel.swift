@@ -161,17 +161,19 @@ enum PanelResizeCorner: Equatable {
     /// The whole bottom edge: drag it up to shrink the panel, down to grow
     /// it. Only the height changes; the top edge stays put.
     case bottom
+    /// The top edge changes height without moving the bottom edge.
+    case top
     /// The whole left edge: drag it out to widen the panel, in to narrow
     /// it. Only the width changes; the right edge stays put.
     case leading
 
-    var isEdge: Bool { self == .bottom || self == .leading }
+    var isEdge: Bool { self == .bottom || self == .top || self == .leading }
 
     /// The opposite corner, which stays put while this one moves.
     func anchor(in rect: NSRect) -> NSPoint {
         switch self {
         case .topLeading: NSPoint(x: rect.maxX, y: rect.minY)
-        case .topTrailing: NSPoint(x: rect.minX, y: rect.minY)
+        case .topTrailing, .top: NSPoint(x: rect.minX, y: rect.minY)
         case .bottomLeading, .leading: NSPoint(x: rect.maxX, y: rect.maxY)
         case .bottomTrailing, .bottom: NSPoint(x: rect.minX, y: rect.maxY)
         }
@@ -181,11 +183,29 @@ enum PanelResizeCorner: Equatable {
     func point(in rect: NSRect) -> NSPoint {
         switch self {
         case .topLeading: NSPoint(x: rect.minX, y: rect.maxY)
-        case .topTrailing: NSPoint(x: rect.maxX, y: rect.maxY)
+        case .topTrailing, .top: NSPoint(x: rect.maxX, y: rect.maxY)
         case .bottomLeading, .leading: NSPoint(x: rect.minX, y: rect.minY)
         case .bottomTrailing, .bottom: NSPoint(x: rect.maxX, y: rect.minY)
         }
     }
+
+    /// The top edge must stop at the screen boundary instead of shifting its bottom anchor.
+    func resizedFrame(from start: NSRect, dragged: NSPoint, minimum: NSSize,
+                      maximum: NSSize, visible: NSRect) -> NSRect {
+        if self == .top {
+            let limit = max(0, min(maximum.height, visible.maxY - start.minY))
+            let height = min(max(dragged.y - start.minY, min(minimum.height, limit)), limit)
+            return NSRect(x: start.minX, y: start.minY, width: start.width, height: height)
+        }
+        let anchor = anchor(in: start)
+        let width = min(max(abs(dragged.x - anchor.x), minimum.width), maximum.width)
+        let height = min(max(abs(dragged.y - anchor.y), minimum.height), maximum.height)
+        let x = self == .leading || dragged.x < anchor.x ? anchor.x - width : anchor.x
+        let y = isEdge || dragged.y < anchor.y ? anchor.y - height : anchor.y
+        return NSRect(x: min(max(x, visible.minX), visible.maxX - width),
+                      y: min(max(y, visible.minY), visible.maxY - height), width: width, height: height)
+    }
+
 }
 
 /// Which version of a screen capture — as originally grabbed, or after the
@@ -1054,7 +1074,7 @@ final class AssistantPanelController {
     /// from where this drag started (SwiftUI, down-positive); `nil` means the
     /// drag just ended. The opposite corner stays anchored in place.
     func resize(_ corner: PanelResizeCorner, translation: CGSize?) {
-        guard let panel, !state.collapsed, !state.strip else { return }
+        guard let panel else { return }
         guard let translation else {
             resizeStartFrame = nil
             resizeGrabOffset = nil
@@ -1071,10 +1091,10 @@ final class AssistantPanelController {
             }
             return
         }
+        guard !state.collapsed, !state.strip else { return }
         let start = resizeStartFrame ?? panel.frame
         resizeStartFrame = start
 
-        let anchor = corner.anchor(in: start)
         let original = corner.point(in: start)
         let dragged: NSPoint
         if corner.isEdge {
@@ -1096,19 +1116,9 @@ final class AssistantPanelController {
             dragged = NSPoint(x: original.x + translation.width, y: original.y - translation.height)
         }
 
-        let width = min(max(abs(dragged.x - anchor.x), Self.minPanelSize.width), Self.maxPanelSize.width)
-        let height = min(max(abs(dragged.y - anchor.y), Self.minPanelSize.height), Self.maxPanelSize.height)
-        // The left edge always sits left of its (right) anchor, and the
-        // bottom edge below its (top) anchor, even if the pointer overshoots.
-        let x = corner == .leading || dragged.x < anchor.x ? anchor.x - width : anchor.x
-        let y = corner.isEdge || dragged.y < anchor.y ? anchor.y - height : anchor.y
-
         let screen = panel.screen ?? NSScreen.main
-        let visible = screen?.visibleFrame ?? .zero
-        let clampedX = min(max(x, visible.minX), visible.maxX - width)
-        let clampedY = min(max(y, visible.minY), visible.maxY - height)
-
-        let frame = NSRect(x: clampedX, y: clampedY, width: width, height: height)
+        let frame = corner.resizedFrame(from: start, dragged: dragged, minimum: Self.minPanelSize,
+                                        maximum: Self.maxPanelSize, visible: screen?.visibleFrame ?? start)
         guard frame != panel.frame else { return }
         // No implicit animation: the frame must land on the very event that
         // moved the pointer or the edge lags a beat behind the hand.
@@ -1119,6 +1129,8 @@ final class AssistantPanelController {
     }
 
     func hide() {
+        resizeStartFrame = nil
+        resizeGrabOffset = nil
         onHide?()
         panel?.orderOut(nil)
         state.status = .idle
@@ -1701,6 +1713,7 @@ struct AssistantPanelView: View {
             }
             .padding(.trailing, 3)
         }
+        .overlay(alignment: .top) { topEdgeHandle }
         .overlay(alignment: .bottom) { bottomEdgeHandle }
         .overlay(alignment: .leading) { leadingEdgeHandle }
         .overlay(alignment: .topLeading) { resizeHandle(.topLeading) }
@@ -4314,6 +4327,13 @@ struct AssistantPanelView: View {
                     .onEnded { _ in state.onResize?(corner, nil) }
             )
             .help("Drag to resize")
+    }
+
+    /// Leave the corner targets clear while making the rest of the top border resizable.
+    private var topEdgeHandle: some View {
+        PanelTopResizeHandle { translation in state.onResize?(.top, translation) }
+            .frame(height: 8)
+            .padding(.horizontal, 30)
     }
 
     /// Grab strip along the bottom edge: drag it up to shrink the panel (or
