@@ -1648,8 +1648,9 @@ struct NumpadView: View {
         GeometryReader { geo in
             let gap: CGFloat = 12
             let topInset: CGFloat = 12
-            // Reserve enough square width for the unchanged hero labels and
-            // horizontal photo captions, shrinking the chrome on compact heights.
+            let isLandscape = geo.size.width > geo.size.height
+            // Portrait keeps square hero keys. Landscape uses the full
+            // two-column width and lets height fit the available rows.
             let rowH = (geo.size.height - topInset - gap * 7) / 8.8
             let columnW = (geo.size.width - gap) / 2
             let bannerW = (geo.size.width - gap * 2) / 3
@@ -1659,8 +1660,11 @@ struct NumpadView: View {
             let switchH = min(max(64, rowH * 1.55), max(64, chromeBudget - max(64, rowH)))
             let bannerH = min(max(64, rowH), max(36, chromeBudget - switchH))
             let available = geo.size.height - topInset - gap * 5 - switchH - bannerH
-            let heroW = max(0, min(columnW, (available - minimumPhotoH * 2) / 2))
-            let heroH = heroW
+            let squareHeroSide = max(0, min(columnW, (available - minimumPhotoH * 2) / 2))
+            let heroW = isLandscape ? columnW : squareHeroSide
+            let heroH = isLandscape
+                ? max(minimumPhotoH, (available - minimumPhotoH * 2) / 2)
+                : squareHeroSide
             let photoH = max(minimumPhotoH, (available - heroH * 2) / 2)
             VStack(spacing: gap) {
                 ScreenSwitch(count: client.screenCount, current: client.currentScreen) { n in
@@ -1685,30 +1689,30 @@ struct NumpadView: View {
                     key("5", label: askRecording ? "STOP" : "ASK",
                         icon: askRecording ? "stop.fill" : "questionmark.bubble.fill",
                         tint: askRecording ? Snes.red : Snes.green, lit: true,
-                        h: heroH, w: heroW, hero: true, waveform: askRecording)
+                        h: heroH, w: heroW, hero: !isLandscape, waveform: askRecording)
                     if mode == .code {
                         key("terminal", label: "TERMINAL", icon: "terminal",
-                            tint: Snes.red, lit: true, h: heroH, w: heroW, hero: true)
+                            tint: Snes.red, lit: true, h: heroH, w: heroW, hero: !isLandscape)
                             .accessibilityLabel("Open Terminal")
-                    } else {
-                        key("3", label: dictateRecording ? "STOP" : "DICTATE",
-                            icon: dictateRecording ? "stop.fill" : "waveform",
-                            tint: Snes.red, lit: true,
-                            h: heroH, w: heroW, hero: true, waveform: dictateRecording)
-                    }
-                }
-                HStack(alignment: .top, spacing: gap) {
-                    key("2", label: "CAPTURE", icon: "camera.viewfinder", tint: Snes.blue, lit: true,
-                        h: heroH, w: heroW, hero: true)
-                    if mode == .code {
-                        key("enter", label: "ENTER", icon: "return",
-                            tint: Snes.talk, lit: true, h: heroH, w: heroW, hero: true)
-                            .accessibilityLabel("Press Enter on Mac")
                     } else {
                         key("talk", label: talkRecording ? "STOP" : "TALK",
                             icon: talkRecording ? "stop.fill" : "mic.fill",
                             tint: talkRecording ? Snes.red : Snes.talk, lit: true,
-                            h: heroH, w: heroW, hero: true, waveform: talkRecording) { _ in talkTapped() }
+                            h: heroH, w: heroW, hero: !isLandscape, waveform: talkRecording) { _ in talkTapped() }
+                    }
+                }
+                HStack(alignment: .top, spacing: gap) {
+                    key("2", label: "CAPTURE", icon: "camera.viewfinder", tint: Snes.blue, lit: true,
+                        h: heroH, w: heroW, hero: !isLandscape)
+                    if mode == .code {
+                        key("enter", label: "ENTER", icon: "return",
+                            tint: Snes.talk, lit: true, h: heroH, w: heroW, hero: !isLandscape)
+                            .accessibilityLabel("Press Enter on Mac")
+                    } else {
+                        key("code", label: "PEEKY CODE", icon: "chevron.left.forwardslash.chevron.right",
+                            tint: Snes.red, lit: true,
+                            h: heroH, w: heroW, hero: !isLandscape) { _ in openPeekyCode() }
+                            .accessibilityLabel("Open Peeky Code on Mac")
                     }
                 }
                 HStack(alignment: .top, spacing: gap) {
@@ -1717,18 +1721,17 @@ struct NumpadView: View {
                         tint: Snes.blue, lit: true,
                         h: photoH, w: heroW) { _ in desktopPhotoTapped() }
                         .disabled(savingToDesktop)
-                    key("code", label: "PEEKY CODE", icon: "chevron.left.forwardslash.chevron.right",
-                        tint: Snes.red, lit: true,
-                        h: photoH, w: heroW) { _ in openPeekyCode() }
-                        .accessibilityLabel("Open Peeky Code on Mac")
+                    key("terminal", label: "TERMINAL", icon: "terminal",
+                        tint: Snes.red, lit: true, h: photoH, w: heroW)
+                        .accessibilityLabel("Open Terminal on Mac")
                 }
                 HStack(alignment: .top, spacing: gap) {
                     key("camera", label: "CAMERA", icon: "camera.fill", tint: Snes.purple, lit: true,
                         h: photoH, w: heroW) { _ in desktopCameraTapped() }
                         .disabled(savingToDesktop)
-                    key("terminal", label: "TERMINAL", icon: "terminal",
-                        tint: Snes.red, lit: true, h: photoH, w: heroW)
-                        .accessibilityLabel("Open Terminal on Mac")
+                    key("enter", label: "ENTER", icon: "return",
+                        tint: Snes.talk, lit: true, h: photoH, w: heroW)
+                        .accessibilityLabel("Press Enter on Mac")
                 }
             }
             .padding(.top, topInset)
