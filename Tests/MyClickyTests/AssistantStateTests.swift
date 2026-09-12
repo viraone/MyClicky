@@ -174,3 +174,29 @@ final class AssistantStateTests: XCTestCase {
         XCTAssertEqual(AssistantState.ollamaDisplayName("qwen2.5-coder:32b"), "qwen2.5-coder:32b", "unknown variants stay as-is")
     }
 }
+
+@MainActor
+final class CodeLSPToggleTests: XCTestCase {
+    override func setUp() {
+        UserDefaults.standard.removeObject(forKey: "codeLSPEnabled")
+    }
+
+    override func tearDown() {
+        UserDefaults.standard.removeObject(forKey: "codeLSPEnabled")
+    }
+
+    func testLSPDefaultsToEnabledAndPersistsTheToggle() {
+        let state = AssistantState()
+        XCTAssertTrue(state.codeLSPEnabled)
+
+        state.codeLSPEnabled = false
+        XCTAssertEqual(UserDefaults.standard.object(forKey: "codeLSPEnabled") as? Bool, false)
+        XCTAssertFalse(AssistantState().codeLSPEnabled, "a fresh state should remember the choice")
+    }
+
+    func testDisabledStatusReadsAsOffWithARestartHint() {
+        XCTAssertEqual(CodeLSPStatus.disabled.label, "LSP off")
+        XCTAssertTrue(CodeLSPStatus.disabled.detail.contains("click to start"))
+        XCTAssertNotEqual(CodeLSPStatus.disabled, .inactive)
+    }
+}

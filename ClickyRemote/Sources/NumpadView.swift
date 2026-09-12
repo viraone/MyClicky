@@ -51,7 +51,7 @@ struct NumpadView: View {
         static let vip = WhatsAppChat(label: "VIP", icon: "star.fill",
                                       name: "viradeth xay-ananh- VIP Automated Resume System")
     }
-    /// Which "cartridge" is loaded: the desktop remote or Gmail mode.
+    /// Which "cartridge" is loaded: the desktop remote, Peeky Code, or an app remote.
     @State private var mode: RemoteMode = .remote
     /// Playlist the Spotify "Add to playlist" button targets; editable by tapping the label.
     @AppStorage("spotifyPlaylist") private var spotifyPlaylist = "Playlist 2027"
@@ -65,7 +65,7 @@ struct NumpadView: View {
         /// The keypad. Talk isn't a mode: its button rides in the corner of
         /// every pad (see `cornerTalkButton`), so it needs no cartridge.
         case remote = "Mobile Peeky"
-        case gmail = "GMAIL"
+        case code = "PEEKY CODE"
         case spotify = "SPOTIFY"
         case whatsapp = "WHATSAPP"
         case youtube = "YOUTUBE"
@@ -73,7 +73,7 @@ struct NumpadView: View {
         var icon: String {
             switch self {
             case .remote: ""
-            case .gmail: "envelope.fill"
+            case .code: "chevron.left.forwardslash.chevron.right"
             case .spotify: "music.note"
             case .whatsapp: "bubble.left.and.bubble.right.fill"
             case .youtube: "play.rectangle.fill"
@@ -85,6 +85,7 @@ struct NumpadView: View {
         var shortName: String {
             switch self {
             case .remote: "PEEKY"
+            case .code: "PEEKY CODE"
             default: rawValue
             }
         }
@@ -92,7 +93,7 @@ struct NumpadView: View {
         var accent: Color {
             switch self {
             case .remote: Snes.purple
-            case .gmail: Snes.red
+            case .code: Snes.red
             case .spotify: Snes.spotify
             case .whatsapp: Snes.whatsapp
             case .youtube: Snes.youtube
@@ -102,7 +103,7 @@ struct NumpadView: View {
         var welcome: String {
             switch self {
             case .remote: "Tap PEEKY to move it to the corner, or ON to bring it back"
-            case .gmail: "Gmail mode — buttons control Gmail on your Mac"
+            case .code: "Peeky Code mode — Terminal and Enter control Peeky on your Mac"
             case .spotify: "Spotify mode — buttons control the Spotify app on your Mac"
             case .whatsapp: "WhatsApp mode — buttons control the WhatsApp app on your Mac"
             case .youtube: "YouTube mode — buttons control the YouTube tab open in your browser"
@@ -212,16 +213,17 @@ struct NumpadView: View {
 
     // MARK: - Mode tabs (cartridge selector)
 
-    /// Entries in the scrolling mode wheel: the Refresh action plus every mode.
-    /// REFRESH and Mobile Peeky swap places so Mobile Peeky sits at the top,
-    /// within easy thumb reach, since it's the mode used most.
+    /// Shared portrait/landscape order. Peeky Code replaces Gmail and Refresh
+    /// moves into Gmail's former third position.
     private var wheelEntries: [String] {
-        var entries = ["REFRESH"] + RemoteMode.allCases.map(\.rawValue)
-        if let refreshIndex = entries.firstIndex(of: "REFRESH"),
-           let remoteIndex = entries.firstIndex(of: RemoteMode.remote.rawValue) {
-            entries.swapAt(refreshIndex, remoteIndex)
-        }
-        return entries
+        [
+            RemoteMode.remote.rawValue,
+            RemoteMode.code.rawValue,
+            "REFRESH",
+            RemoteMode.spotify.rawValue,
+            RemoteMode.whatsapp.rawValue,
+            RemoteMode.youtube.rawValue,
+        ]
     }
 
     /// The active mode's pad, with the corner Talk button and any pending
@@ -230,7 +232,7 @@ struct NumpadView: View {
         Group {
             switch mode {
             case .remote: keypad
-            case .gmail: gmailPad
+            case .code: keypad
             case .spotify: spotifyPad
             case .whatsapp: whatsappPad
             case .youtube: youtubePad
@@ -245,7 +247,7 @@ struct NumpadView: View {
             // The trailing padding is what holds it off the right
             // edge — raise it to move Talk further left, lower it to
             // push it back toward the corner.
-            if mode != .remote { cornerTalkButton.padding(.trailing, 44) }
+            if mode != .remote && mode != .code { cornerTalkButton.padding(.trailing, 44) }
         }
         // A confirmation is the one thing that must not be missed —
         // it used to live on the Talk pad, so it now covers whichever
@@ -300,15 +302,11 @@ struct NumpadView: View {
         } else if let m = RemoteMode(rawValue: entry) {
             stripItem(icon: m.icon.isEmpty ? "sparkles" : m.icon, title: m.shortName, accent: m.accent,
                       selected: mode == m) {
-                withAnimation(.easeInOut(duration: 0.15)) { mode = m }
-                UISelectionFeedbackGenerator().selectionChanged()
-                statusText = m.welcome
+                selectMode(m)
             }
             .overlay(alignment: .topTrailing) {
                 if m == .whatsapp, client.whatsappUnread > 0 {
                     unreadBadge(client.whatsappUnread).offset(x: 6, y: -6)
-                } else if m == .gmail, client.gmailUnread > 0 {
-                    unreadBadge(client.gmailUnread).offset(x: 6, y: -6)
                 }
             }
         }
@@ -403,22 +401,40 @@ struct NumpadView: View {
             }
         } else if let m = RemoteMode(rawValue: entry) {
             modeButton(icon: m.icon, title: m.rawValue, accent: m.accent, selected: mode == m) {
-                withAnimation(.easeInOut(duration: 0.15)) { mode = m }
-                statusText = m.welcome
+                selectMode(m)
             }
             .overlay(alignment: .topTrailing) {
                 if m == .whatsapp, client.whatsappUnread > 0 {
                     unreadBadge(client.whatsappUnread)
                         .offset(x: 4, y: -6)
                         .transition(.scale.combined(with: .opacity))
-                } else if m == .gmail, client.gmailUnread > 0 {
-                    unreadBadge(client.gmailUnread)
-                        .offset(x: 4, y: -6)
-                        .transition(.scale.combined(with: .opacity))
                 }
             }
             .animation(.spring(response: 0.3, dampingFraction: 0.6), value: client.whatsappUnread)
-            .animation(.spring(response: 0.3, dampingFraction: 0.6), value: client.gmailUnread)
+        }
+    }
+
+    private func selectMode(_ newMode: RemoteMode) {
+        UISelectionFeedbackGenerator().selectionChanged()
+        let applySelection = {
+            withAnimation(.easeInOut(duration: 0.15)) { mode = newMode }
+            statusText = newMode.welcome
+            if newMode == .code {
+                client.show()
+                client.tab("CODE")
+            }
+        }
+
+        guard recorder.isListening, newMode == .code || mode == .code else {
+            applySelection()
+            return
+        }
+        Task {
+            _ = await recorder.stop()
+            client.stopListening()
+            dictateMode = false
+            recordTarget = .ask
+            applySelection()
         }
     }
 
@@ -1663,18 +1679,30 @@ struct NumpadView: View {
                         icon: askRecording ? "stop.fill" : "questionmark.bubble.fill",
                         tint: askRecording ? Snes.red : Snes.green, lit: true,
                         h: heroH, w: heroW, hero: true, waveform: askRecording)
-                    key("3", label: dictateRecording ? "STOP" : "DICTATE",
-                        icon: dictateRecording ? "stop.fill" : "waveform",
-                        tint: Snes.red, lit: true,
-                        h: heroH, w: heroW, hero: true, waveform: dictateRecording)
+                    if mode == .code {
+                        key("terminal", label: "TERMINAL", icon: "terminal",
+                            tint: Snes.red, lit: true, h: heroH, w: heroW, hero: true)
+                            .accessibilityLabel("Open Terminal")
+                    } else {
+                        key("3", label: dictateRecording ? "STOP" : "DICTATE",
+                            icon: dictateRecording ? "stop.fill" : "waveform",
+                            tint: Snes.red, lit: true,
+                            h: heroH, w: heroW, hero: true, waveform: dictateRecording)
+                    }
                 }
                 HStack(alignment: .top, spacing: gap) {
                     key("2", label: "CAPTURE", icon: "camera.viewfinder", tint: Snes.blue, lit: true,
                         h: heroH, w: heroW, hero: true)
-                    key("talk", label: talkRecording ? "STOP" : "TALK",
-                        icon: talkRecording ? "stop.fill" : "mic.fill",
-                        tint: talkRecording ? Snes.red : Snes.talk, lit: true,
-                        h: heroH, w: heroW, hero: true, waveform: talkRecording) { _ in talkTapped() }
+                    if mode == .code {
+                        key("enter", label: "ENTER", icon: "return",
+                            tint: Snes.talk, lit: true, h: heroH, w: heroW, hero: true)
+                            .accessibilityLabel("Press Enter on Mac")
+                    } else {
+                        key("talk", label: talkRecording ? "STOP" : "TALK",
+                            icon: talkRecording ? "stop.fill" : "mic.fill",
+                            tint: talkRecording ? Snes.red : Snes.talk, lit: true,
+                            h: heroH, w: heroW, hero: true, waveform: talkRecording) { _ in talkTapped() }
+                    }
                 }
                 HStack(alignment: .top, spacing: gap) {
                     key("photos", label: savingToDesktop ? "SAVING…" : "PHOTOS",
@@ -1933,9 +1961,13 @@ struct NumpadView: View {
                 client.tab("DICTATE")
             }
             toggleListening()
+        case "terminal":
+            client.show()
+            client.tab("TERMINAL")
+            statusText = "Peeky Terminal opened on your Mac"
         case "enter":
-            client.collapse()
-            statusText = "Peeky collapsed on your Mac"
+            client.enter()
+            statusText = "Enter pressed on your Mac"
         default:
             break
         }

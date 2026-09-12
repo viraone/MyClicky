@@ -150,7 +150,9 @@ shows live error/warning underlines and exposes hover information and
 go-to-definition beside the **TypeScript LSP** status badge. Peeky prefers a
 project-local or installed `typescript-language-server`; when neither exists,
 the first TypeScript project load fetches the pinned v4 server and TypeScript 5
-through npm's cache.
+through npm's cache. Click the badge to switch the server off — the project and
+open file stay loaded for Q&A while the server and its node workers (≈300 MB)
+exit; click again to bring it back. The choice is remembered across launches.
 
 The provider menu beside Peeky Code's question box switches between Claude and
 a local Ollama model. Local mode starts Ollama when needed, defaults to
@@ -230,7 +232,10 @@ Bonjour (`_clicky._tcp`) and sends newline-terminated text commands
 (`RemoteControlService`). Pad: PEEKY = show/hide the Mac panel; COLLAPSE =
 toggle its thin status bar; ASK = record a question on the phone and send it
 (answered like ⌥⌘C); DICTATE = clean-up to the Mac clipboard; CAPTURE = region
-grab; TALK = "do it" action mode.
+grab; TALK = "do it" action mode. The **PEEKY CODE** mode opens Peeky Code on
+the Mac and remaps DICTATE to **TERMINAL** (open the integrated terminal) and
+TALK to **ENTER** (send one Return keystroke to the focused Mac control).
+Tapping **PEEKY** in the phone's top mode bar restores the normal controls.
 
 ## ClickyLogs (weekly dashboard)
 

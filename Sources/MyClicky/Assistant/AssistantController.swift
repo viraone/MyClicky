@@ -454,7 +454,7 @@ final class AssistantController {
             panel.state.codeProject = project
             panel.state.codeLSPDiagnostics = [:]
             panel.state.codeLSPHover = nil
-            typeScriptLSP.start(for: project)
+            startLSPIfEnabled(for: project)
             if let focused = panel.state.codeFocusedFile {
                 panel.state.codeDraft = project.file(at: focused)?.text ?? ""
             }
@@ -498,6 +498,41 @@ final class AssistantController {
         panel.state.codeLSPDiagnostics = [:]
         panel.state.codeLSPHover = nil
         ActivityLog.recordAction("code-project-remove", [:])
+    }
+
+    /// Honors the badge toggle: a TypeScript project only gets a server
+    /// when the user hasn't switched it off.
+    private func startLSPIfEnabled(for project: CodeProject) {
+        if panel.state.codeLSPEnabled {
+            typeScriptLSP.start(for: project)
+        } else if project.detectedStack.contains(where: { $0.name == "TypeScript" }) {
+            panel.state.codeLSPStatus = .disabled
+        } else {
+            panel.state.codeLSPStatus = .inactive
+        }
+    }
+
+    /// Badge click. Off: kill the server and its node workers, keep the
+    /// project and the open file. On: start it again and re-open the file
+    /// so diagnostics come back.
+    private func toggleLSP() {
+        let state = panel.state
+        state.codeLSPEnabled.toggle()
+        state.codeLSPDiagnostics = [:]
+        state.codeLSPHover = nil
+        state.codeLSPDiagnosticPreview = nil
+        guard let project = state.codeProject else {
+            state.codeLSPStatus = .inactive
+            return
+        }
+        if state.codeLSPEnabled {
+            typeScriptLSP.start(for: project)
+            if let path = state.codeFocusedFile { typeScriptLSP.focus(path: path, text: state.codeDraft) }
+        } else {
+            typeScriptLSP.stop()
+            state.codeLSPStatus = .disabled
+        }
+        ActivityLog.recordAction("code-lsp-toggle", ["enabled": state.codeLSPEnabled ? "1" : "0"])
     }
 
     // MARK: Peeky Code — run in Simulator
@@ -927,6 +962,7 @@ final class AssistantController {
         panel.state.onLSPDefinition = { [weak self] path, offset, text in
             self?.typeScriptLSP.definition(path: path, characterOffset: offset, text: text)
         }
+        panel.state.onToggleLSP = { [weak self] in self?.toggleLSP() }
         panel.state.onCodeProviderChanged = { [weak self] provider in
             if provider == .ollama { self?.refreshOllamaModels() }
         }
@@ -1046,11 +1082,20 @@ final class AssistantController {
             switch name {
             case "DICTATE", "CAPTURE", "CAPTURE_DICTATE": self.panel.state.tab = .captureDictate
             case "CODE": self.panel.state.tab = .code
+            case "TERMINAL": self.panel.state.tab = .terminal
             // The phone's ASK key sends TAB ASK before it listens. With a
             // project open on Peeky Code, that ask is about the code — stay.
             case "ASK" where self.codeTabPinned: break
             default: self.panel.state.tab = .ask
             }
+        }
+        remote.onEnter = { [weak self] in
+            guard AXIsProcessTrusted() else {
+                self?.toast.show("Allow Accessibility to press Enter",
+                                 icon: "exclamationmark.triangle.fill", tint: .orange)
+                return
+            }
+            KeyboardTyper.press(KeyboardTyper.returnKey)
         }
         remote.onCapture = { [weak self] in self?.onCaptureRequest?() }
         remote.onBrowserReload = { [weak self] in
