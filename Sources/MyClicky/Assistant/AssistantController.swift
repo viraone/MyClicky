@@ -1097,6 +1097,20 @@ final class AssistantController {
             }
             KeyboardTyper.press(KeyboardTyper.returnKey)
         }
+        remote.onPaste = { [weak self] in
+            guard let self else { return }
+            guard let text = NSPasteboard.general.string(forType: .string), !text.isEmpty else {
+                self.toast.show("Clipboard has no text to paste",
+                                icon: "exclamationmark.triangle.fill", tint: .orange)
+                return
+            }
+            self.showPanel()
+            self.panel.state.tab = .terminal
+            self.panel.state.onRestartTerminal?()
+            self.panel.state.terminal.view.send(txt: text)
+            ActivityLog.recordAction("remote-terminal-paste", ["characters": "\(text.count)"])
+            self.toast.show("Pasted into Peeky Terminal", icon: "doc.on.clipboard", tint: .green)
+        }
         remote.onCapture = { [weak self] in self?.onCaptureRequest?() }
         remote.onBrowserReload = { [weak self] in
             ActivityLog.recordAction("browser-reload")
@@ -1258,11 +1272,9 @@ final class AssistantController {
         }
         remote.onAsk = { [weak self] question in
             guard let self else { return }
-            // ASK from the phone always reads on the Ask tab, full size — the
-            // exceptions are the Mac deliberately parked on Capture + Dictate,
-            // or on Peeky Code with a project loaded (the question is about it).
-            // A Talk still running would make handleQuestion drop the question
-            // on its busy guard; the user's ASK wins.
+            // Keep a user-selected Terminal or Capture + Dictate tab in place.
+            // A Talk still running would make handleQuestion drop the question,
+            // so the phone's ASK wins.
             if self.busy, !self.streamQuestionsOnly { self.abandonWork() }
             if self.codeTabPinned {
                 self.showPanel(full: true)
@@ -1274,9 +1286,12 @@ final class AssistantController {
                 }
                 return
             }
-            if self.panel.state.tab != .captureDictate { self.panel.state.tab = .ask }
-            self.phoneAskInFlight = true
-            self.showPanel(full: true)
+            if self.panel.state.tab != .captureDictate && self.panel.state.tab != .terminal {
+                self.panel.state.tab = .ask
+            }
+            let presentingOnAskTab = self.panel.state.tab == .ask
+            self.phoneAskInFlight = presentingOnAskTab
+            self.showPanel(full: presentingOnAskTab)
             self.panel.state.transcript = question
             if self.talkStreaming, self.streamQuestionsOnly {
                 self.finishTalkStreaming(final: question)
