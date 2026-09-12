@@ -24,15 +24,27 @@ final class RemoteControlServiceTests: XCTestCase {
         XCTAssertEqual(presses, 1)
     }
 
+    func testPasteIsForwardedExactlyOnce() {
+        let service = RemoteControlService()
+        var pastes = 0
+        service.onPaste = { pastes += 1 }
+
+        service.handle("KEY PASTE")
+
+        XCTAssertEqual(pastes, 1)
+    }
+
     func testUnknownKeyCommandIsIgnored() {
         let service = RemoteControlService()
-        var presses = 0
-        service.onEnter = { presses += 1 }
+        var keyActions = 0
+        service.onEnter = { keyActions += 1 }
+        service.onPaste = { keyActions += 1 }
 
         service.handle("KEY SPACE")
         service.handle("KEY ENTER EXTRA")
+        service.handle("KEY PASTE EXTRA")
 
-        XCTAssertEqual(presses, 0)
+        XCTAssertEqual(keyActions, 0)
     }
 
     func testExistingTabAliasesRemainForwarded() {

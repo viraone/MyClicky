@@ -1646,26 +1646,27 @@ struct NumpadView: View {
 
     private var keypad: some View {
         GeometryReader { geo in
-            let gap: CGFloat = 12
-            let topInset: CGFloat = 12
             let isLandscape = geo.size.width > geo.size.height
+            let gap: CGFloat = isLandscape ? 8 : 12
+            let topInset: CGFloat = isLandscape ? 8 : 12
             // Portrait keeps square hero keys. Landscape uses the full
             // two-column width and lets height fit the available rows.
-            let rowH = (geo.size.height - topInset - gap * 7) / 8.8
             let columnW = (geo.size.width - gap) / 2
             let bannerW = (geo.size.width - gap * 2) / 3
-            let minimumPhotoH: CGFloat = 56
-            let chromeBudget = max(100, geo.size.height - topInset - gap * 5
-                                   - minimumPhotoH * 2 - min(120, columnW) * 2)
-            let switchH = min(max(64, rowH * 1.55), max(64, chromeBudget - max(64, rowH)))
-            let bannerH = min(max(64, rowH), max(36, chromeBudget - switchH))
-            let available = geo.size.height - topInset - gap * 5 - switchH - bannerH
-            let squareHeroSide = max(0, min(columnW, (available - minimumPhotoH * 2) / 2))
+            let minimumPhotoH: CGFloat = isLandscape ? 40 : 56
+            let rowH = (geo.size.height - topInset - gap * 8) / 9.8
+            let chromeBudget = max(88, geo.size.height - topInset - gap * 6
+                                   - minimumPhotoH * 3 - min(120, columnW) * 2)
+            let calculatedSwitchH = min(max(64, rowH * 1.55), max(64, chromeBudget - max(64, rowH)))
+            let switchH = isLandscape ? min(82, max(52, geo.size.height * 0.15)) : calculatedSwitchH
+            let calculatedBannerH = min(max(64, rowH), max(36, chromeBudget - switchH))
+            let bannerH = isLandscape ? 44 : calculatedBannerH
+            let available = geo.size.height - topInset - gap * 6 - switchH - bannerH
+            let squareHeroSide = max(0, min(columnW, (available - minimumPhotoH * 3) / 2))
+            let landscapeKeyH = max(minimumPhotoH, available / 5)
             let heroW = isLandscape ? columnW : squareHeroSide
-            let heroH = isLandscape
-                ? max(minimumPhotoH, (available - minimumPhotoH * 2) / 2)
-                : squareHeroSide
-            let photoH = max(minimumPhotoH, (available - heroH * 2) / 2)
+            let heroH = isLandscape ? landscapeKeyH : squareHeroSide
+            let photoH = isLandscape ? landscapeKeyH : max(minimumPhotoH, (available - heroH * 2) / 3)
             VStack(spacing: gap) {
                 ScreenSwitch(count: client.screenCount, current: client.currentScreen) { n in
                     client.screen(n)
@@ -1683,6 +1684,10 @@ struct NumpadView: View {
                         h: bannerH, w: bannerW, banner: true)
                 }
                 HStack(alignment: .top, spacing: gap) {
+                    key("talk", label: talkRecording ? "STOP" : "TALK",
+                        icon: talkRecording ? "stop.fill" : "mic.fill",
+                        tint: talkRecording ? Snes.red : Snes.talk, lit: true,
+                        h: heroH, w: heroW, hero: !isLandscape, waveform: talkRecording) { _ in talkTapped() }
                     // ASK records on the phone and sends `ASK <text>`: the Mac
                     // answers exactly as it does for ⌥⌘C (screenshot of the
                     // display under the pointer, or the focused editor file).
@@ -1690,48 +1695,40 @@ struct NumpadView: View {
                         icon: askRecording ? "stop.fill" : "questionmark.bubble.fill",
                         tint: askRecording ? Snes.red : Snes.green, lit: true,
                         h: heroH, w: heroW, hero: !isLandscape, waveform: askRecording)
-                    if mode == .code {
-                        key("terminal", label: "TERMINAL", icon: "terminal",
-                            tint: Snes.red, lit: true, h: heroH, w: heroW, hero: !isLandscape)
-                            .accessibilityLabel("Open Terminal")
-                    } else {
-                        key("talk", label: talkRecording ? "STOP" : "TALK",
-                            icon: talkRecording ? "stop.fill" : "mic.fill",
-                            tint: talkRecording ? Snes.red : Snes.talk, lit: true,
-                            h: heroH, w: heroW, hero: !isLandscape, waveform: talkRecording) { _ in talkTapped() }
-                    }
                 }
                 HStack(alignment: .top, spacing: gap) {
+                    key("code", label: "PEEKY CODE", icon: "chevron.left.forwardslash.chevron.right",
+                        tint: Snes.red, lit: true,
+                        h: heroH, w: heroW, hero: !isLandscape) { _ in openPeekyCode() }
+                        .accessibilityLabel("Open Peeky Code on Mac")
                     key("2", label: "CAPTURE", icon: "camera.viewfinder", tint: Snes.blue, lit: true,
                         h: heroH, w: heroW, hero: !isLandscape)
-                    if mode == .code {
-                        key("enter", label: "ENTER", icon: "return",
-                            tint: Snes.talk, lit: true, h: heroH, w: heroW, hero: !isLandscape)
-                            .accessibilityLabel("Press Enter on Mac")
-                    } else {
-                        key("code", label: "PEEKY CODE", icon: "chevron.left.forwardslash.chevron.right",
-                            tint: Snes.red, lit: true,
-                            h: heroH, w: heroW, hero: !isLandscape) { _ in openPeekyCode() }
-                            .accessibilityLabel("Open Peeky Code on Mac")
-                    }
                 }
                 HStack(alignment: .top, spacing: gap) {
+                    key("terminal", label: "TERMINAL", icon: "terminal",
+                        tint: Snes.red, lit: true, h: photoH, w: heroW)
+                        .accessibilityLabel("Open Terminal on Mac")
                     key("photos", label: savingToDesktop ? "SAVING…" : "PHOTOS",
                         icon: savingToDesktop ? "arrow.up.circle.dotted" : "photo.on.rectangle.angled",
                         tint: Snes.blue, lit: true,
                         h: photoH, w: heroW) { _ in desktopPhotoTapped() }
                         .disabled(savingToDesktop)
-                    key("terminal", label: "TERMINAL", icon: "terminal",
-                        tint: Snes.red, lit: true, h: photoH, w: heroW)
-                        .accessibilityLabel("Open Terminal on Mac")
                 }
                 HStack(alignment: .top, spacing: gap) {
+                    key("paste", label: "PASTE", icon: "doc.on.clipboard",
+                        tint: Snes.talk, lit: true, h: photoH, w: heroW)
+                        .accessibilityLabel("Paste on Mac")
                     key("camera", label: "CAMERA", icon: "camera.fill", tint: Snes.purple, lit: true,
                         h: photoH, w: heroW) { _ in desktopCameraTapped() }
                         .disabled(savingToDesktop)
+                }
+                HStack(alignment: .top, spacing: gap) {
                     key("enter", label: "ENTER", icon: "return",
                         tint: Snes.talk, lit: true, h: photoH, w: heroW)
                         .accessibilityLabel("Press Enter on Mac")
+                    Color.clear
+                        .frame(width: heroW, height: photoH)
+                        .accessibilityHidden(true)
                 }
             }
             .padding(.top, topInset)
@@ -1957,8 +1954,6 @@ struct NumpadView: View {
             if !recorder.isListening {
                 dictateMode = false
                 recordTarget = .ask
-                client.show()
-                client.tab("ASK")
             }
             toggleListening()
         case "1":
@@ -1987,6 +1982,11 @@ struct NumpadView: View {
         case "enter":
             client.enter()
             statusText = "Enter pressed on your Mac"
+        case "paste":
+            client.show()
+            client.tab("TERMINAL")
+            client.paste()
+            statusText = "Pasted into Peeky Terminal on your Mac"
         default:
             break
         }

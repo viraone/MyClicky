@@ -17,6 +17,7 @@ import Network
 ///   TAB CODE       – switch the panel to Peeky Code
 ///   TAB TERMINAL   – switch the panel to Terminal
 ///   KEY ENTER      – press Return once in the currently focused Mac control
+///   KEY PASTE      – press Command-V in the currently focused Mac control
 ///   BROWSER RELOAD – reload the active browser tab (like ⌘R)
 ///   GMAIL COMPOSE  – open a new Gmail compose window in the browser
 ///   GMAIL INBOX    – go back to the inbox list
@@ -105,6 +106,7 @@ final class RemoteControlService {
     var onStrip: (() -> Void)?
     var onTab: ((String) -> Void)?
     var onEnter: (() -> Void)?
+    var onPaste: (() -> Void)?
     var onGmail: ((String) -> Void)?
     var onSpotify: ((String) -> Void)?
     var onYouTube: ((String) -> Void)?
@@ -214,6 +216,8 @@ final class RemoteControlService {
             onTab?(String(line.dropFirst(4)))
         } else if line == "KEY ENTER" {
             onEnter?()
+        } else if line == "KEY PASTE" {
+            onPaste?()
         } else if line == "BROWSER RELOAD" {
             onBrowserReload?()
         } else if line.hasPrefix("GMAIL ") {
