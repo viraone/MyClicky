@@ -1726,9 +1726,9 @@ struct NumpadView: View {
                     key("camera", label: "CAMERA", icon: "camera.fill", tint: Snes.purple, lit: true,
                         h: photoH, w: heroW) { _ in desktopCameraTapped() }
                         .disabled(savingToDesktop)
-                    Color.clear
-                        .frame(width: heroW, height: photoH)
-                        .accessibilityHidden(true)
+                    key("terminal", label: "TERMINAL", icon: "terminal",
+                        tint: Snes.red, lit: true, h: photoH, w: heroW)
+                        .accessibilityLabel("Open Terminal on Mac")
                 }
             }
             .padding(.top, topInset)
