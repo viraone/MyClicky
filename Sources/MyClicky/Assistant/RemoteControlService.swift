@@ -14,6 +14,9 @@ import Network
 ///   TAB ASK        – switch the panel to the Ask tab
 ///   TAB DICTATE    – switch the panel to the Capture + Dictate tab
 ///                    (TAB CAPTURE / TAB CAPTURE_DICTATE are aliases)
+///   TAB CODE       – switch the panel to Peeky Code
+///   TAB TERMINAL   – switch the panel to Terminal
+///   KEY ENTER      – press Return once in the currently focused Mac control
 ///   BROWSER RELOAD – reload the active browser tab (like ⌘R)
 ///   GMAIL COMPOSE  – open a new Gmail compose window in the browser
 ///   GMAIL INBOX    – go back to the inbox list
@@ -101,6 +104,7 @@ final class RemoteControlService {
     var onCollapse: (() -> Void)?
     var onStrip: (() -> Void)?
     var onTab: ((String) -> Void)?
+    var onEnter: (() -> Void)?
     var onGmail: ((String) -> Void)?
     var onSpotify: ((String) -> Void)?
     var onYouTube: ((String) -> Void)?
@@ -191,7 +195,7 @@ final class RemoteControlService {
         }
     }
 
-    private func handle(_ line: String) {
+    func handle(_ line: String) {
         if line == "SHOW" {
             onShow?()
         } else if line == "LISTEN" {
@@ -208,6 +212,8 @@ final class RemoteControlService {
             onCapture?()
         } else if line.hasPrefix("TAB ") {
             onTab?(String(line.dropFirst(4)))
+        } else if line == "KEY ENTER" {
+            onEnter?()
         } else if line == "BROWSER RELOAD" {
             onBrowserReload?()
         } else if line.hasPrefix("GMAIL ") {

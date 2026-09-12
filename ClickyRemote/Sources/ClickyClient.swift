@@ -356,6 +356,7 @@ final class ClickyClient: ObservableObject {
     /// Put Peeky (panel and pointer) on display n, 1-based.
     func screen(_ n: Int) { send("SCREEN \(n)") }
     func tab(_ name: String) { send("TAB \(name)") }
+    func enter() { send("KEY ENTER") }
     func capture() { send("CAPTURE") }
     func gmail(_ action: String) { send("GMAIL \(action)") }
     func spotify(_ action: String) { send("SPOTIFY \(action)") }

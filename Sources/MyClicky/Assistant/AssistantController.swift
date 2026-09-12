@@ -1046,11 +1046,20 @@ final class AssistantController {
             switch name {
             case "DICTATE", "CAPTURE", "CAPTURE_DICTATE": self.panel.state.tab = .captureDictate
             case "CODE": self.panel.state.tab = .code
+            case "TERMINAL": self.panel.state.tab = .terminal
             // The phone's ASK key sends TAB ASK before it listens. With a
             // project open on Peeky Code, that ask is about the code — stay.
             case "ASK" where self.codeTabPinned: break
             default: self.panel.state.tab = .ask
             }
+        }
+        remote.onEnter = { [weak self] in
+            guard AXIsProcessTrusted() else {
+                self?.toast.show("Allow Accessibility to press Enter",
+                                 icon: "exclamationmark.triangle.fill", tint: .orange)
+                return
+            }
+            KeyboardTyper.press(KeyboardTyper.returnKey)
         }
         remote.onCapture = { [weak self] in self?.onCaptureRequest?() }
         remote.onBrowserReload = { [weak self] in
