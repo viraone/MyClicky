@@ -75,6 +75,87 @@ final class AssistantStateTests: XCTestCase {
         }
     }
 
+    func testProjectBrowserPreservesNestedAndRootFileDrafts() {
+        for path in ["tests/smoke/jobs.smoke.spec.ts", "main.swift"] {
+            let state = AssistantState()
+            let project = CodeProject(root: URL(fileURLWithPath: "/tmp/PeekyNavigation"),
+                                      name: "PeekyNavigation", files: [.init(path: path, text: "original")],
+                                      profile: nil, detectedStack: [], skippedFolders: [], skippedFiles: [], truncated: false)
+            state.codeProject = project
+            state.codeFocusedFile = path
+            state.codeDraft = "unsaved edit"
+            state.codeLSPHover = "existing hover"
+            state.codeLSPCaretOffset = 4
+            state.codeFindVisible = true
+            state.codeFindQuery = "edit"
+            state.logCode(.question, "Keep this conversation")
+            var focusCalls = 0
+            var documentChanges = 0
+            state.onLSPFocusFile = { _, _ in focusCalls += 1 }
+            state.onLSPDocumentChange = { _, _ in documentChanges += 1 }
+
+            for _ in 0..<3 {
+                state.codeViewerExpanded = true
+                state.showCodeFiles()
+                XCTAssertTrue(state.codeShowingFiles)
+                XCTAssertTrue(state.codeViewerExpanded)
+                state.showCodeFiles()
+                XCTAssertTrue(state.codeShowingFiles, "root navigation is idempotent")
+                XCTAssertEqual(state.codeFocusedFile, path)
+                XCTAssertEqual(state.codeDraft, "unsaved edit")
+
+                state.codeFocusedFile = path // The existing file-row action.
+                XCTAssertTrue(state.codeShowingFiles, "selecting a file keeps the browser visible")
+                XCTAssertEqual(state.codeDraft, "unsaved edit")
+
+                state.toggleCodeFiles()
+                XCTAssertFalse(state.codeShowingFiles)
+                XCTAssertTrue(state.codeViewerExpanded)
+                state.toggleCodeFiles()
+                XCTAssertTrue(state.codeShowingFiles)
+                XCTAssertTrue(state.codeViewerExpanded)
+                XCTAssertEqual(state.codeFocusedFile, path)
+                XCTAssertEqual(state.codeDraft, "unsaved edit")
+            }
+            XCTAssertEqual(state.codeProject, project)
+            XCTAssertEqual(state.codeLog.map(\.text), ["Keep this conversation"])
+            XCTAssertEqual(state.codeLSPHover, "existing hover")
+            XCTAssertEqual(state.codeLSPCaretOffset, 4)
+            XCTAssertTrue(state.codeFindVisible)
+            XCTAssertEqual(state.codeFindQuery, "edit")
+            XCTAssertEqual(focusCalls, 0)
+            XCTAssertEqual(documentChanges, 0)
+        }
+    }
+
+    func testOpeningAnotherFileKeepsTheProjectBrowserVisible() {
+        let state = AssistantState()
+        state.codeProject = CodeProject(root: URL(fileURLWithPath: "/tmp/PeekyNavigation"),
+                                        name: "PeekyNavigation",
+                                        files: [.init(path: "a.swift", text: "a"), .init(path: "b.swift", text: "b")],
+                                        profile: nil, detectedStack: [], skippedFolders: [], skippedFiles: [], truncated: false)
+        state.showCodeFiles()
+        state.codeFocusedFile = "a.swift"
+        XCTAssertTrue(state.codeShowingFiles)
+        state.codeFocusedFile = "b.swift"
+        XCTAssertTrue(state.codeShowingFiles)
+        XCTAssertEqual(state.codeDraft, "b")
+    }
+
+    func testProjectDisclosureWithoutAnOpenFile() {
+        let state = AssistantState()
+        state.showCodeFiles()
+        XCTAssertFalse(state.codeShowingFiles)
+        state.codeProject = CodeProject(root: URL(fileURLWithPath: "/tmp/PeekyNavigation"),
+                                        name: "PeekyNavigation", files: [.init(path: "main.swift", text: "")],
+                                        profile: nil, detectedStack: [], skippedFolders: [], skippedFiles: [], truncated: false)
+        state.toggleCodeFiles()
+        XCTAssertTrue(state.codeShowingFiles)
+        state.toggleCodeFiles()
+        XCTAssertFalse(state.codeShowingFiles)
+        XCTAssertNil(state.codeFocusedFile)
+    }
+
     private func withSavedCodeProvider(_ body: () -> Void) {
         let saved = UserDefaults.standard.string(forKey: AssistantState.codeProviderKey)
         defer {
