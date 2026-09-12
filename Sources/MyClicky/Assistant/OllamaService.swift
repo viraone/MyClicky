@@ -16,6 +16,59 @@ final class OllamaService {
         return models.compactMap { $0["name"] as? String }.sorted()
     }
 
+    func ask(question: String, context: String?,
+             history: [(question: String, answer: String)], model: String,
+             onStatus: (@MainActor (String) -> Void)? = nil) async throws -> String {
+        try await ensureRunning()
+        try await ensureModel(model, onStatus: onStatus)
+
+        let messages = Self.askMessages(question: question, context: context, history: history)
+        let limit = await contextLength(of: model)
+        guard let window = Self.contextWindow(for: messages, limit: limit) else {
+            throw OllamaError.tooLarge(tokens: Self.estimatedTokens(of: messages), limit: limit)
+        }
+        onStatus?("\(model) · local text model")
+        let body: [String: Any] = [
+            "model": model,
+            "stream": false,
+            "messages": messages,
+            "options": ["temperature": 0.3, "num_ctx": window],
+        ]
+        let data = try await post(path: "api/chat", body: body, timeout: 600)
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let message = json["message"] as? [String: Any],
+              let text = (message["content"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty else {
+            throw OllamaError.emptyResponse
+        }
+        return text
+    }
+
+    static func askMessages(question: String, context: String?,
+                            history: [(question: String, answer: String)]) -> [[String: String]] {
+        var messages: [[String: String]] = [[
+            "role": "system",
+            "content": """
+            You are MyClicky, a helpful macOS assistant. Answer concisely and conversationally \
+            in plain text. You are running locally and cannot see the user's screen or attached \
+            images. Use any text context provided. If the question requires visual details that \
+            are not present in the context, say that local mode cannot see the screen and suggest \
+            switching Ask to Claude.
+            """,
+        ]]
+        for turn in history.suffix(6) {
+            messages.append(["role": "user", "content": turn.question])
+            messages.append(["role": "assistant", "content": turn.answer])
+        }
+        var current = ""
+        if let context, !context.isEmpty {
+            current += "Current app context:\n\n\(context)\n\n"
+        }
+        current += question
+        messages.append(["role": "user", "content": current])
+        return messages
+    }
+
     func askAboutCode(question: String, project: CodeProject, focusedFile: String?,
                       changedFiles: [(path: String, text: String)],
                       history: [(question: String, answer: String)], model: String,

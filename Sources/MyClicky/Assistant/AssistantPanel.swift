@@ -745,6 +745,26 @@ final class AssistantState: ObservableObject {
     static let maxAskAttachments = 10
     @Published var askAttachments: [AskAttachment] = []
     @Published var askAttachmentsCollapsed = false
+    static let askProviderKey = "peeky.ask.provider"
+    static let askOllamaModelKey = "peeky.ask.ollamaModel"
+    @Published var askAIProvider = CodeAIProvider(
+        rawValue: UserDefaults.standard.string(forKey: askProviderKey) ?? ""
+    ) ?? .claude {
+        didSet {
+            UserDefaults.standard.set(askAIProvider.rawValue, forKey: Self.askProviderKey)
+            onAskProviderChanged?(askAIProvider)
+        }
+    }
+    @Published var askOllamaModel = UserDefaults.standard.string(forKey: askOllamaModelKey)
+        ?? "qwen3-coder:30b" {
+        didSet {
+            UserDefaults.standard.set(askOllamaModel, forKey: Self.askOllamaModelKey)
+            if oldValue != askOllamaModel { onAskModelChanged?(oldValue, askOllamaModel) }
+        }
+    }
+    @Published var askOllamaModels: [String] = []
+    @Published var askOllamaStatus: String?
+    var askAcceptsImages: Bool { askAIProvider == .claude }
     /// Every answered question, newest first — survives closing Peeky.
     @Published var askHistory: [AskHistoryEntry] = []
     /// The Ask tab is showing the History list instead of the current Q&A.
@@ -820,6 +840,9 @@ final class AssistantState: ObservableObject {
     /// Files dropped on, or pasted into, the Ask tab.
     var onDropIntoAsk: (([URL]) -> Void)?
     var onPasteIntoAsk: (() -> Void)?
+    var onAskProviderChanged: ((CodeAIProvider) -> Void)?
+    var onAskModelChanged: ((_ from: String, _ to: String) -> Void)?
+    var onRefreshAskOllamaModels: (() -> Void)?
     /// Peeky Code: a folder or files dropped or picked for the project,
     /// re-reading it from disk after edits, letting it go, and asking.
     var onDropIntoCode: (([URL]) -> Void)?
@@ -1434,6 +1457,8 @@ struct AssistantPanelView: View {
                 .font(.system(size: 14, weight: .heavy, design: .monospaced))
                 .kerning(1.2)
                 .foregroundStyle(phase.color)
+                .lineLimit(1)
+                .fixedSize()
             Text(phaseHint)
                 .font(.system(size: 12.5, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.65))
@@ -1734,9 +1759,9 @@ struct AssistantPanelView: View {
     private var tabBar: some View {
         HStack(spacing: 4) {
             if state.size == .half {
-                // The half column can't fit three labels, and bare icons
+                // The half column can't fit five labels, and bare icons
                 // were a guessing game — so one dropdown names the current
-                // tab and lists the other two.
+                // tab and lists the others.
                 tabDropdown
             } else {
                 ForEach(AssistantTab.allCases, id: \.self) { tab in
@@ -1746,7 +1771,7 @@ struct AssistantPanelView: View {
                         HStack(spacing: 6) {
                             Image(systemName: tab.icon)
                                 .font(.system(size: 12, weight: .semibold))
-                            Text(tab.rawValue)
+                            Text(state.size == .full ? tab.rawValue : tab.shortName)
                                 .font(.system(size: 14, weight: state.tab == tab ? .semibold : .regular, design: .monospaced))
                                 .lineLimit(1)
                                 .fixedSize()
@@ -3530,7 +3555,7 @@ struct AssistantPanelView: View {
             HStack(spacing: 5) {
                 Image(systemName: state.textOnlyMode ? "text.bubble.fill" : "speaker.wave.2.fill")
                     .font(.system(size: 12, weight: .semibold))
-                Text("Read Response")
+                Text(state.size == .half ? "Read" : "Read Response")
                     .font(.system(size: 13, weight: .semibold, design: .monospaced))
                     .lineLimit(1)
                     .fixedSize()
@@ -3551,35 +3576,138 @@ struct AssistantPanelView: View {
     }
 
     private var bottomBar: some View {
-        HStack(spacing: 10) {
-            if state.tab == .captureDictate || state.tab == .ask || state.tab == .code {
-                addMenu
-            }
-            if state.tab == .code {
-                codeProviderMenu
-            }
-            if state.tab == .code || state.tab == .terminal {
-                bottomInputField
+        Group {
+            if state.tab == .ask && state.size == .half {
+                VStack(spacing: 6) {
+                    HStack(spacing: 10) {
+                        addMenu
+                        askProviderMenu
+                        Spacer(minLength: 0)
+                        coachButton
+                        readAloudToggle
+                    }
+                    HStack(spacing: 10) {
+                        promptReadout
+                        micIndicator
+                        bottomActionControl
+                    }
+                }
             } else {
-                promptReadout
-            }
-            coachButton
-            if state.tab == .ask {
-                readAloudToggle
-            }
-            micIndicator
-            // While recording (either tab) the mic itself is the stop
-            // control, so the red Stop button (which would discard the
-            // recording) is redundant.
-            if state.status == .listening {
-                EmptyView()
-            } else if state.canStop {
-                stopButton
-            } else {
-                sendButton
+                HStack(spacing: 10) {
+                    if state.tab == .captureDictate || state.tab == .ask || state.tab == .code {
+                        addMenu
+                    }
+                    if state.tab == .ask {
+                        askProviderMenu
+                    } else if state.tab == .code {
+                        codeProviderMenu
+                    }
+                    if state.tab == .code || state.tab == .terminal {
+                        bottomInputField
+                    } else {
+                        promptReadout
+                    }
+                    coachButton
+                    if state.tab == .ask {
+                        readAloudToggle
+                    }
+                    micIndicator
+                    bottomActionControl
+                }
             }
         }
         .animation(.easeInOut(duration: 0.2), value: state.canStop)
+    }
+
+    @ViewBuilder private var bottomActionControl: some View {
+        // While recording, the mic itself is the stop control.
+        if state.status == .listening {
+            EmptyView()
+        } else if state.canStop {
+            stopButton
+        } else {
+            sendButton
+        }
+    }
+
+    private var askProviderMenu: some View {
+        Menu {
+            Button {
+                state.askAIProvider = .claude
+            } label: {
+                Label("Claude (cloud)", systemImage: state.askAIProvider == .claude ? "checkmark" : "cloud")
+            }
+            Divider()
+            Button {
+                state.askAIProvider = .ollama
+                state.askOllamaModel = "qwen3-coder:30b"
+            } label: {
+                Label("Qwen3-Coder 30B", systemImage:
+                    state.askAIProvider == .ollama && state.askOllamaModel == "qwen3-coder:30b"
+                        ? "checkmark" : "desktopcomputer")
+            }
+            ForEach(state.askOllamaModels.filter { $0 != "qwen3-coder:30b" }, id: \.self) { model in
+                Button {
+                    state.askAIProvider = .ollama
+                    state.askOllamaModel = model
+                } label: {
+                    Label(AssistantState.ollamaDisplayName(model), systemImage:
+                        state.askAIProvider == .ollama && state.askOllamaModel == model
+                            ? "checkmark" : "desktopcomputer")
+                }
+            }
+            Divider()
+            Button("Refresh local models") {
+                state.onRefreshAskOllamaModels?()
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: state.askAIProvider == .ollama ? "desktopcomputer" : "cloud")
+                    .foregroundStyle(.white)
+                Text(askProviderLabel)
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.white)
+            }
+            .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+            .padding(.horizontal, 9)
+            .padding(.vertical, 6)
+            .background(
+                Capsule().fill(
+                    state.askAIProvider == .ollama
+                        ? AssistantPhase.done.color.opacity(0.35)
+                        : Color.white.opacity(0.15)
+                )
+            )
+            .overlay {
+                Capsule().stroke(
+                    state.askAIProvider == .ollama
+                        ? AssistantPhase.done.color.opacity(0.75)
+                        : Color.white.opacity(0.25),
+                    lineWidth: 1
+                )
+            }
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .frame(maxWidth: state.size == .half ? 180 : nil)
+        .fixedSize(horizontal: state.size != .half, vertical: true)
+        .help(state.askAIProvider == .ollama
+              ? "\(state.askOllamaModel) on this Mac · text only · no API charge"
+                + (state.askOllamaStatus.map { "\n\($0)" } ?? "")
+              : "Claude cloud API · includes the current screen and attached images")
+        .onAppear {
+            if state.askAIProvider == .ollama { state.onRefreshAskOllamaModels?() }
+        }
+    }
+
+    private var askProviderLabel: String {
+        guard state.askAIProvider == .ollama else { return "Claude · Cloud" }
+        return "Ollama · \(AssistantState.ollamaDisplayName(state.askOllamaModel))"
     }
 
     private var codeProviderMenu: some View {
@@ -3768,7 +3896,10 @@ struct AssistantPanelView: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .help(state.tab == .ask ? "Attach images for your question (or drop / paste them here)"
+        .help(state.tab == .ask
+              ? (state.askAcceptsImages
+                    ? "Attach images for your question (or drop / paste them here)"
+                    : "Ask image attachments require Claude")
               : state.tab == .code ? "Pick a project folder or files (or drop them here)"
                                    : "Add a file or folder from this Mac to the preview")
     }
@@ -3782,17 +3913,19 @@ struct AssistantPanelView: View {
         var actions: [MenuAction] = []
         if state.tab == .ask {
             let full = state.askAttachments.count >= AssistantState.maxAskAttachments
-            let images = NSMenuItem(title: full ? "Images (10 of 10 attached)" : "Images…",
+            let images = NSMenuItem(title: !state.askAcceptsImages ? "Images (Claude only)"
+                                    : full ? "Images (10 of 10 attached)" : "Images…",
                                     action: #selector(MenuAction.fire), keyEquivalent: "")
             images.image = NSImage(systemSymbolName: "photo.on.rectangle.angled", accessibilityDescription: nil)
-            images.isEnabled = !full
+            images.isEnabled = state.askAcceptsImages && !full
             let pick = MenuAction { state.onAttachToAsk?() }
             images.target = pick
             actions.append(pick)
             menu.addItem(images)
             let paste = NSMenuItem(title: "Paste image from clipboard", action: #selector(MenuAction.fire), keyEquivalent: "")
             paste.image = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: nil)
-            paste.isEnabled = !full && NSPasteboard.general.canReadObject(forClasses: [NSImage.self, NSURL.self], options: nil)
+            paste.isEnabled = state.askAcceptsImages && !full
+                && NSPasteboard.general.canReadObject(forClasses: [NSImage.self, NSURL.self], options: nil)
             let pasteAction = MenuAction { state.onPasteIntoAsk?() }
             paste.target = pasteAction
             actions.append(pasteAction)
@@ -4158,7 +4291,7 @@ struct AssistantPanelView: View {
             HStack(spacing: 6) {
                 Image(systemName: on ? "cup.and.saucer.fill" : "cup.and.saucer")
                     .font(.system(size: 12, weight: .semibold))
-                Text(on ? state.coachCountdown : "break coach off")
+                Text(on ? state.coachCountdown : (state.size == .half ? "off" : "break coach off"))
                     .font(.system(size: 13, weight: .semibold, design: .monospaced))
                     .monospacedDigit()
                     .lineLimit(1)
@@ -4566,6 +4699,7 @@ private struct RecBadge: View {
                     .overlay(Capsule().strokeBorder(Color.red.opacity(0.7), lineWidth: 1))
             )
         }
+        .fixedSize()
         .onAppear { pulsing = true }
         .onDisappear { pulsing = false }
         .help("The microphone is still recording. Press STOP or the mic to end it.")

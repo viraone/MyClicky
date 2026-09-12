@@ -295,6 +295,11 @@ final class AssistantController {
 
     private func addAskAttachments(_ items: [(image: NSImage, name: String)], via: String) {
         guard !items.isEmpty else { return }
+        guard panel.state.askAcceptsImages else {
+            hud.report("Images require Claude — switch Ask to Claude to attach one.", ok: false)
+            ActivityLog.recordAction("ask-attach-image-refused", ["via": via, "count": "\(items.count)"])
+            return
+        }
         let room = AssistantState.maxAskAttachments - panel.state.askAttachments.count
         guard room > 0 else {
             hud.report("That's \(AssistantState.maxAskAttachments) images — remove one to add another.", ok: false)
@@ -838,6 +843,20 @@ final class AssistantController {
             }
         }
     }
+
+    private func refreshAskOllamaModels() {
+        panel.state.askOllamaStatus = "Connecting to Ollama…"
+        Task {
+            do {
+                let models = try await ollama.models()
+                panel.state.askOllamaModels = models
+                panel.state.askOllamaStatus = models.isEmpty ? "No local models installed" : "Ollama ready"
+            } catch {
+                panel.state.askOllamaStatus = error.localizedDescription
+            }
+        }
+    }
+
     /// What the current listening session will do with what it hears.
     private enum RecordKind { case ask, dictate, talk, code }
     private var recordKind: RecordKind = .ask
@@ -937,6 +956,16 @@ final class AssistantController {
             ActivityLog.recordAction("ask-history-clear", [:])
         }
         panel.state.onDropIntoAsk = { [weak self] urls in self?.addAskAttachments(urls: urls, via: "drop") }
+        panel.state.onAskProviderChanged = { [weak self] provider in
+            if provider == .ollama { self?.refreshAskOllamaModels() }
+        }
+        panel.state.onRefreshAskOllamaModels = { [weak self] in self?.refreshAskOllamaModels() }
+        panel.state.onAskModelChanged = { [weak self] previous, _ in
+            Task { [weak self] in
+                guard let self else { return }
+                _ = await self.ollama.unload(previous)
+            }
+        }
         panel.state.onDropIntoCode = { [weak self] urls in self?.dropIntoCode(urls: urls) }
         panel.state.onAttachCodeImages = { [weak self] in self?.attachImagesToCode() }
         panel.state.onPasteCodeImage = { [weak self] in self?.pasteCodeImage() }
@@ -1938,12 +1967,19 @@ final class AssistantController {
             }
             return
         }
-        ActivityLog.recordAction("ask", ["text": question])
-        guard let apiKey = KeychainService.anthropicAPIKey() else {
+        let provider = panel.state.askAIProvider
+        let apiKey = provider == .claude ? KeychainService.anthropicAPIKey() : nil
+        if provider == .claude, apiKey == nil {
             panel.state.errorText = "No Anthropic API key found in Keychain.\n\nRun this once in Terminal:\n\(KeychainService.setupCommand)"
             panel.state.status = .idle
             return
         }
+        if provider == .ollama, !panel.state.askAttachments.isEmpty {
+            panel.state.errorText = "The selected local model is text-only. Remove attached images or switch Ask to Claude."
+            panel.state.status = .idle
+            return
+        }
+        ActivityLog.recordAction("ask", ["text": question, "provider": provider.rawValue])
         let screen = workingScreen
 
         busy = true
@@ -1975,8 +2011,13 @@ final class AssistantController {
                 }
             }
             do {
-                let image = try await capture.captureDisplayJPEG(screen: screen, maxDimension: 1600,
+                let image: Data?
+                if provider == .claude {
+                    image = try await capture.captureDisplayJPEG(screen: screen, maxDimension: 1600,
                                                                  excludingOwnWindows: true)
+                } else {
+                    image = nil
+                }
                 try Task.checkCancellation()
                 var context: String?
                 // A box in edit mode is what the question is about — "explain
@@ -2011,28 +2052,46 @@ final class AssistantController {
                 if context == nil, let editor = EditorContextReader.current() {
                     context = "Actual text of the file currently focused in \(editor.appName) (read via the Accessibility API — use this as the primary source; the screenshot may only show part of it):\n\n\(editor.text)"
                 }
-                let claude = AnthropicService(apiKey: apiKey)
-                let attachments = askAttachmentJPEGs()
-                if !attachments.isEmpty {
-                    ActivityLog.recordAction("ask-with-attachments", ["count": "\(attachments.count)"])
-                }
-                let answer = try await claude.ask(question: question, jpegImage: image, context: context,
-                                                  attachments: attachments) { [weak self] status in
-                    guard let self, id == self.requestID else { return }
-                    self.panel.state.answer = status
+                let answerText: String
+                let highlight: CGRect?
+                if provider == .ollama {
+                    let history = panel.state.askHistory.reversed().map {
+                        (question: $0.question, answer: $0.answer)
+                    }
+                    answerText = try await ollama.ask(
+                        question: question, context: context, history: history,
+                        model: panel.state.askOllamaModel
+                    ) { [weak self] status in
+                        guard let self, id == self.requestID else { return }
+                        self.panel.state.answer = status
+                    }
+                    highlight = nil
+                } else {
+                    let attachments = askAttachmentJPEGs()
+                    if !attachments.isEmpty {
+                        ActivityLog.recordAction("ask-with-attachments", ["count": "\(attachments.count)"])
+                    }
+                    let claude = AnthropicService(apiKey: apiKey!)
+                    let answer = try await claude.ask(question: question, jpegImage: image!, context: context,
+                                                      attachments: attachments) { [weak self] status in
+                        guard let self, id == self.requestID else { return }
+                        self.panel.state.answer = status
+                    }
+                    answerText = answer.text
+                    highlight = answer.highlight
                 }
                 try Task.checkCancellation()
                 guard id == requestID else { return }
                 panel.state.status = .answering
-                panel.state.answer = answer.text
-                rememberAsk(question: question, answer: answer.text)
-                if siteOpen { SiteEditActions.showReply(answer.text, question: question) }
-                if let box = answer.highlight {
+                panel.state.answer = answerText
+                rememberAsk(question: question, answer: answerText)
+                if siteOpen { SiteEditActions.showReply(answerText, question: question) }
+                if let box = highlight {
                     let rect = Self.screenRect(fromNormalized: box, on: screen)
                     lastHighlightRect = rect
                     ring.show(over: rect)
                 }
-                if !panel.state.textOnlyMode { speak(answer.text) }
+                if !panel.state.textOnlyMode { speak(answerText) }
             } catch {
                 // Stopped by the user — the panel was already reset in stop().
                 guard id == requestID, !Task.isCancelled else { return }

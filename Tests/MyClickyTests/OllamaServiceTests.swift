@@ -61,6 +61,22 @@ final class OllamaServiceTests: XCTestCase {
         XCTAssertTrue(last.hasSuffix(OllamaService.questionReminder), "reminder is the last thing the model reads")
     }
 
+    func testLocalAskMessagesIncludeContextAndHistory() throws {
+        let messages = OllamaService.askMessages(
+            question: "What does this mean?",
+            context: "The focused editor contains: let answer = 42",
+            history: [(question: "Earlier question", answer: "Earlier answer")]
+        )
+
+        XCTAssertEqual(messages.map { $0["role"] }, ["system", "user", "assistant", "user"])
+        XCTAssertTrue(try XCTUnwrap(messages[0]["content"]).contains("cannot see the user's screen"))
+        XCTAssertEqual(messages[1]["content"], "Earlier question")
+        XCTAssertEqual(messages[2]["content"], "Earlier answer")
+        let current = try XCTUnwrap(messages[3]["content"])
+        XCTAssertTrue(current.contains("let answer = 42"))
+        XCTAssertTrue(current.hasSuffix("What does this mean?"))
+    }
+
     func testContextWindowSnapsToBucketsAndRespectsTheModelLimit() {
         func messages(characters: Int) -> [[String: String]] {
             [["role": "user", "content": String(repeating: "x", count: characters)]]
