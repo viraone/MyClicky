@@ -126,6 +126,9 @@ final class TerminalShortcutTests: XCTestCase {
 
     func testFocusOnMountDoesNotStealLaterFieldFocus() async {
         let panel = panel()
+        panel.orderFrontRegardless()
+        panel.makeKey()
+        defer { panel.close() }
         let session = TerminalSession()
         let coordinator = TerminalPane.Coordinator(session)
         coordinator.focusWhenMounted(session.view)
@@ -151,9 +154,7 @@ final class TerminalShortcutTests: XCTestCase {
         XCTAssertFalse(panel.firstResponder === session.view)
     }
 
-    // A plain NSView (the terminal) never asks a becomesKeyOnlyIfNeeded panel
-    // to become key on click, so ⌘K/⌘V would go nowhere without this.
-    func testFocusOnMountMakesPanelKey() async {
+    func testFocusOnMountDoesNotReclaimKeyWindow() async {
         let panel = panel()
         panel.orderFrontRegardless()
         let session = TerminalSession()
@@ -161,8 +162,25 @@ final class TerminalShortcutTests: XCTestCase {
         coordinator.focusWhenMounted(session.view)
         panel.contentView!.addSubview(session.view)
         await drainMainQueue()
-        XCTAssertTrue(panel.isKeyWindow)
+        XCTAssertFalse(panel.isKeyWindow)
+        XCTAssertFalse(panel.firstResponder === session.view)
+        XCTAssertTrue(session.view.needsPanelToBecomeKey)
         panel.close()
+    }
+
+    func testPendingMountDoesNotReclaimFocusAfterPanelResignsKey() async {
+        let panel = panel()
+        panel.orderFrontRegardless()
+        panel.makeKey()
+        defer { panel.close() }
+        let session = TerminalSession()
+        panel.contentView!.addSubview(session.view)
+        let coordinator = TerminalPane.Coordinator(session)
+        coordinator.focusWhenMounted(session.view)
+        panel.resignKey()
+        await drainMainQueue()
+        XCTAssertFalse(panel.isKeyWindow)
+        XCTAssertFalse(panel.firstResponder === session.view)
     }
 
     private func drainMainQueue() async {
