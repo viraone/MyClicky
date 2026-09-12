@@ -1001,6 +1001,13 @@ struct NumpadView: View {
         desktopCameraShown = true
     }
 
+    private func openPeekyCode() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        client.show()
+        client.tab("CODE")
+        statusText = "Peeky Code opened on your Mac"
+    }
+
     /// Loads the picked photo and ships it to the Mac, which writes it
     /// straight to the Desktop — no WhatsApp relay needed.
     private func sendPhotoToDesktop(_ item: PhotosPickerItem) async {
@@ -1643,18 +1650,18 @@ struct NumpadView: View {
             let topInset: CGFloat = 12
             // Reserve enough square width for the unchanged hero labels and
             // horizontal photo captions, shrinking the chrome on compact heights.
-            let rowH = (geo.size.height - topInset - gap * 6) / 7.8
+            let rowH = (geo.size.height - topInset - gap * 7) / 8.8
             let columnW = (geo.size.width - gap) / 2
             let bannerW = (geo.size.width - gap * 2) / 3
             let minimumPhotoH: CGFloat = 56
-            let chromeBudget = max(100, geo.size.height - topInset - gap * 4
-                                   - minimumPhotoH - min(120, columnW) * 2)
+            let chromeBudget = max(100, geo.size.height - topInset - gap * 5
+                                   - minimumPhotoH * 2 - min(120, columnW) * 2)
             let switchH = min(max(64, rowH * 1.55), max(64, chromeBudget - max(64, rowH)))
             let bannerH = min(max(64, rowH), max(36, chromeBudget - switchH))
-            let available = geo.size.height - topInset - gap * 4 - switchH - bannerH
-            let heroW = max(0, min(columnW, (available - minimumPhotoH) / 2))
+            let available = geo.size.height - topInset - gap * 5 - switchH - bannerH
+            let heroW = max(0, min(columnW, (available - minimumPhotoH * 2) / 2))
             let heroH = heroW
-            let photoH = max(minimumPhotoH, available - heroH * 2)
+            let photoH = max(minimumPhotoH, (available - heroH * 2) / 2)
             VStack(spacing: gap) {
                 ScreenSwitch(count: client.screenCount, current: client.currentScreen) { n in
                     client.screen(n)
@@ -1710,9 +1717,18 @@ struct NumpadView: View {
                         tint: Snes.blue, lit: true,
                         h: photoH, w: heroW) { _ in desktopPhotoTapped() }
                         .disabled(savingToDesktop)
+                    key("code", label: "PEEKY CODE", icon: "chevron.left.forwardslash.chevron.right",
+                        tint: Snes.red, lit: true,
+                        h: photoH, w: heroW) { _ in openPeekyCode() }
+                        .accessibilityLabel("Open Peeky Code on Mac")
+                }
+                HStack(alignment: .top, spacing: gap) {
                     key("camera", label: "CAMERA", icon: "camera.fill", tint: Snes.purple, lit: true,
                         h: photoH, w: heroW) { _ in desktopCameraTapped() }
                         .disabled(savingToDesktop)
+                    Color.clear
+                        .frame(width: heroW, height: photoH)
+                        .accessibilityHidden(true)
                 }
             }
             .padding(.top, topInset)
