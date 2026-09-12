@@ -17,8 +17,8 @@ targets:
         INFOPLIST_KEY_NSMicrophoneUsageDescription: Peeky Remote uses the microphone so you can speak questions to your Mac.
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: Your speech is transcribed on-device before being sent to your Mac.
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: Peeky Remote connects to the Peeky app running on your Mac over your local network.
-        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait"
-        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationPortrait"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationLandscapeRight UIInterfaceOrientationLandscapeLeft"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: "UIInterfaceOrientationLandscapeRight UIInterfaceOrientationLandscapeLeft"
         GENERATE_INFOPLIST_FILE: YES
         CURRENT_PROJECT_VERSION: 1
         MARKETING_VERSION: 1.0
