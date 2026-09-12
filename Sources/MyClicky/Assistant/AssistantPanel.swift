@@ -570,6 +570,22 @@ final class AssistantState: ObservableObject {
     @Published var codeLiveCost: AnthropicService.LiveCost?
     static let codeProviderKey = "peeky.code.provider"
     static let codeOllamaModelKey = "peeky.code.ollamaModel"
+    /// Menu and pill names for local models. Tags people recognise get the
+    /// name they use for them; anything else shows its Ollama tag, minus a
+    /// bare ":latest", so a freshly pulled model is still readable.
+    static func ollamaDisplayName(_ tag: String) -> String {
+        let parts = tag.split(separator: ":", maxSplits: 1).map(String.init)
+        let family = parts[0], variant = parts.count > 1 ? parts[1] : "latest"
+        switch (family, variant) {
+        case ("qwen3-coder", "30b"): return "Qwen3-Coder 30B"
+        case ("qwen3-coder-next", _): return "Qwen3-Coder-Next 80B"
+        case ("qwen3.6", "35b-a3b"): return "Qwen3.6 35B-A3B"
+        case ("qwen3.6", "27b"): return "Qwen3.6 27B"
+        case ("gpt-oss", "20b"): return "GPT-OSS 20B"
+        case ("gpt-oss", "120b"): return "GPT-OSS 120B"
+        default: return variant == "latest" ? family : tag
+        }
+    }
     @Published var codeAIProvider = CodeAIProvider(
         rawValue: UserDefaults.standard.string(forKey: codeProviderKey) ?? ""
     ) ?? .claude {
@@ -3564,7 +3580,7 @@ struct AssistantPanelView: View {
                     state.codeAIProvider = .ollama
                     state.codeOllamaModel = model
                 } label: {
-                    Label(model, systemImage:
+                    Label(AssistantState.ollamaDisplayName(model), systemImage:
                         state.codeAIProvider == .ollama && state.codeOllamaModel == model
                             ? "checkmark" : "desktopcomputer")
                 }
@@ -3617,10 +3633,7 @@ struct AssistantPanelView: View {
 
     private var codeProviderLabel: String {
         guard state.codeAIProvider == .ollama else { return "Claude · Cloud" }
-        let model = state.codeOllamaModel == "qwen3-coder:30b"
-            ? "Qwen3-Coder 30B"
-            : state.codeOllamaModel
-        return "Ollama · \(model)"
+        return "Ollama · \(AssistantState.ollamaDisplayName(state.codeOllamaModel))"
     }
 
     /// The Code tab's question box, down by the send button where a chat
