@@ -84,4 +84,12 @@ final class AssistantStateTests: XCTestCase {
         body()
     }
 
+    func testLocalModelsGetReadableNames() {
+        XCTAssertEqual(AssistantState.ollamaDisplayName("qwen3-coder:30b"), "Qwen3-Coder 30B")
+        XCTAssertEqual(AssistantState.ollamaDisplayName("qwen3-coder-next:latest"), "Qwen3-Coder-Next 80B")
+        XCTAssertEqual(AssistantState.ollamaDisplayName("qwen3-coder-next"), "Qwen3-Coder-Next 80B")
+        XCTAssertEqual(AssistantState.ollamaDisplayName("gpt-oss:20b"), "GPT-OSS 20B")
+        XCTAssertEqual(AssistantState.ollamaDisplayName("llama3.3:latest"), "llama3.3", "unknown tags drop a bare :latest")
+        XCTAssertEqual(AssistantState.ollamaDisplayName("qwen2.5-coder:32b"), "qwen2.5-coder:32b", "unknown variants stay as-is")
+    }
 }
