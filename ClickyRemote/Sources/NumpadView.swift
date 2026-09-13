@@ -1684,10 +1684,6 @@ struct NumpadView: View {
                         h: bannerH, w: bannerW, banner: true)
                 }
                 HStack(alignment: .top, spacing: gap) {
-                    key("talk", label: talkRecording ? "STOP" : "TALK",
-                        icon: talkRecording ? "stop.fill" : "mic.fill",
-                        tint: talkRecording ? Snes.red : Snes.talk, lit: true,
-                        h: heroH, w: heroW, hero: !isLandscape, waveform: talkRecording) { _ in talkTapped() }
                     // ASK records on the phone and sends `ASK <text>`: the Mac
                     // answers exactly as it does for ⌥⌘C (screenshot of the
                     // display under the pointer, or the focused editor file).
@@ -1695,6 +1691,10 @@ struct NumpadView: View {
                         icon: askRecording ? "stop.fill" : "questionmark.bubble.fill",
                         tint: askRecording ? Snes.red : Snes.green, lit: true,
                         h: heroH, w: heroW, hero: !isLandscape, waveform: askRecording)
+                    key("talk", label: talkRecording ? "STOP" : "TALK",
+                        icon: talkRecording ? "stop.fill" : "mic.fill",
+                        tint: talkRecording ? Snes.red : Snes.talk, lit: true,
+                        h: heroH, w: heroW, hero: !isLandscape, waveform: talkRecording) { _ in talkTapped() }
                 }
                 HStack(alignment: .top, spacing: gap) {
                     key("code", label: "PEEKY CODE", icon: "chevron.left.forwardslash.chevron.right",
