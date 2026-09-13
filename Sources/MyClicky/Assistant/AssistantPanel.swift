@@ -1414,6 +1414,7 @@ struct AssistantPanelView: View {
     /// system tooltips never appear over a non-activating panel.
     @State private var headerHint: String?
     @State private var copiedAnswerID: UUID?
+    @State private var copiedAskQuestion = false
     @FocusState private var fieldFocused: Bool
     @FocusState private var findFocused: Bool
     @State private var breathing = false
@@ -3317,6 +3318,8 @@ struct AssistantPanelView: View {
                     Text(entry.text)
                         .font(.system(size: 14.5, weight: .semibold, design: .monospaced))
                         .foregroundStyle(.white)
+                    Spacer(minLength: 8)
+                    copyLogButton(entry, help: "Copy your whole question")
                 }
                 .padding(.vertical, 8)
                 .padding(.horizontal, 10)
@@ -3334,7 +3337,7 @@ struct AssistantPanelView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     codeAnswerView(entry.text)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    copyAnswerButton(entry)
+                    copyLogButton(entry, help: "Copy Peeky's whole answer")
                 }
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -3370,9 +3373,8 @@ struct AssistantPanelView: View {
             }
     }
 
-    /// Copies the whole answer (prose and code, as Claude wrote it). Shows a
-    /// ✓ for a moment so you know it landed.
-    private func copyAnswerButton(_ entry: CodeLogEntry) -> some View {
+    /// Copies a complete question or answer and briefly confirms it landed.
+    private func copyLogButton(_ entry: CodeLogEntry, help: String) -> some View {
         let copied = copiedAnswerID == entry.id
         return Button {
             NSPasteboard.general.clearContents()
@@ -3393,7 +3395,7 @@ struct AssistantPanelView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Copy Peeky's whole answer")
+        .help(help)
     }
 
     /// An answer with its fenced code blocks pulled out into cards. Each
@@ -4517,9 +4519,28 @@ struct AssistantPanelView: View {
                     .foregroundStyle(state.accent.opacity(0.8))
                     .padding(.top, 3)
                 Text(state.transcript)
-                    .font(.system(size: 14, weight: .medium, design: .monospaced))
+                    .font(state.tab == .ask
+                          ? .custom("Charter-Bold", size: 15)
+                          : .system(size: 14, weight: .medium, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.75))
                     .lineLimit(3)
+                Spacer(minLength: 8)
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(state.transcript, forType: .string)
+                    copiedAskQuestion = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                        copiedAskQuestion = false
+                    }
+                } label: {
+                    Image(systemName: copiedAskQuestion ? "checkmark" : "doc.on.doc")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(copiedAskQuestion ? AssistantPhase.done.color : .white.opacity(0.45))
+                        .frame(width: 20, height: 20)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(copiedAskQuestion ? "Copied" : "Copy your question")
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -4565,7 +4586,9 @@ struct AssistantPanelView: View {
                     let hasCopied = !(state.copiedPreview ?? "").isEmpty
                     ScrollView {
                         Text(state.answer)
-                            .font(.system(size: 15.5, weight: .regular, design: .monospaced))
+                            .font(state.tab == .ask
+                                  ? .custom("Charter-Roman", size: 16)
+                                  : .system(size: 15.5, weight: .regular, design: .monospaced))
                             .foregroundStyle(.white.opacity(0.94))
                             .lineSpacing(3.5)
                             .textSelection(.enabled)
