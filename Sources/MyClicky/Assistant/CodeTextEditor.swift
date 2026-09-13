@@ -140,7 +140,7 @@ struct CodeTextEditor: NSViewRepresentable {
                     textView.layoutManager?.ensureLayout(forCharacterRange: NSRange(location: 0, length: NSMaxRange(range)))
                     textView.setSelectedRange(range)
                     textView.scrollRangeToVisible(range)
-                    textView.window?.makeFirstResponder(textView)
+                    Self.focusIfPanelIsKey(textView)
                     onDidJump?()
                 } else {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { attempt(remaining - 1) }
@@ -148,6 +148,11 @@ struct CodeTextEditor: NSViewRepresentable {
             }
             DispatchQueue.main.async { attempt(40) }
         }
+    }
+
+    static func focusIfPanelIsKey(_ textView: NSTextView) {
+        guard let window = textView.window, window.isKeyWindow else { return }
+        window.makeFirstResponder(textView)
     }
 
     fileprivate func applyHighlights(to textView: NSTextView, coordinator: Coordinator) {
