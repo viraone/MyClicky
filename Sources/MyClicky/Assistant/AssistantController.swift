@@ -63,6 +63,9 @@ final class AssistantController {
     private var driveCleanupTask: Task<Void, Never>?
     /// Same as `driveCleanupTask`, for the Gmail large-attachment scan (⌥⌘G).
     private var gmailCleanupTask: Task<Void, Never>?
+    /// The last pasteboard state written by Peeky. Background updates must not
+    /// replace something the user copied in another app afterward.
+    private var clipboardChangeCount: Int?
 
     private var activeScreen: NSScreen?
     /// The display the user is working on, decided at the moment it's needed:
@@ -366,7 +369,7 @@ final class AssistantController {
         panel.state.editedCaptureImage = image
         panel.state.clipboardChoice = .edited
         saveCurrentCaptureIntoTray()
-        copyPairToClipboard()
+        copyPairToClipboard(ifUnchangedSince: clipboardChangeCount)
     }
 
     /// Clears the whole tab — every tray item, the preview, the watcher.
@@ -1898,7 +1901,7 @@ final class AssistantController {
         panel.state.status = .thinking
         panel.state.dictationText = raw
         // Copy the raw text immediately so it's usable even if cleanup fails.
-        copyPairToClipboard()
+        let initialClipboardChangeCount = copyPairToClipboard()
 
         requestID += 1
         let id = requestID
@@ -1915,18 +1918,21 @@ final class AssistantController {
             guard id == requestID else { return }
             panel.state.status = .answering
             panel.state.dictationText = final
-            copyPairToClipboard()
+            copyPairToClipboard(ifUnchangedSince: initialClipboardChangeCount)
         }
     }
 
     /// Puts the latest capture and dictation on the clipboard as a single
     /// pasteboard item carrying both image and text representations, so ⌘V
     /// pastes the image into image-aware apps and the text into text fields.
-    private func copyPairToClipboard() {
+    @discardableResult
+    private func copyPairToClipboard(ifUnchangedSince expectedChangeCount: Int? = nil) -> Int? {
         let text = panel.state.dictationText
         let image = panel.state.imageForClipboard
-        guard image != nil || !text.isEmpty else { return }
+        guard image != nil || !text.isEmpty else { return nil }
 
+        let pasteboard = NSPasteboard.general
+        guard expectedChangeCount == nil || pasteboard.changeCount == expectedChangeCount else { return nil }
         let item = NSPasteboardItem()
         // A non-image attachment is copied as the file itself (paste into
         // Finder, Mail, Slack…), not as a picture of its icon.
@@ -1941,9 +1947,10 @@ final class AssistantController {
         if !text.isEmpty {
             item.setString(text, forType: .string)
         }
-        let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.writeObjects([item])
+        guard pasteboard.writeObjects([item]) else { return nil }
+        clipboardChangeCount = pasteboard.changeCount
+        return clipboardChangeCount
     }
 
     // MARK: - Ask Claude
@@ -2162,6 +2169,18 @@ final class AssistantController {
             sendOpenDraft()
             return
         }
+        let messagesInFront = [targetApp?.bundleIdentifier, NSWorkspace.shared.frontmostApplication?.bundleIdentifier]
+            .contains(MessagesActions.bundleID)
+        let messagesRecentlyOpened = messagesDraftOpenedAt.map { Date().timeIntervalSince($0) < 10 * 60 } ?? false
+        if (messagesInFront || messagesRecentlyOpened),
+           let message = Self.messageBeforeTrailingSendCommand(utterance),
+           let recipient = MessagesActions.openConversation(),
+           let apiKey = KeychainService.anthropicAPIKey() {
+            ghost?.clear()
+            draftMessage(gist: message, recipient: recipient, apiKey: apiKey,
+                         previewed: ghost != nil, sendAfterDraft: true)
+            return
+        }
         // A prompt Peeky typed into an AI chat site is the most recent draft:
         // "send it" / "run it" / "hit enter" runs it; "erase that" clears it.
         if chatSiteDraftIsCurrent {
@@ -2294,8 +2313,6 @@ final class AssistantController {
         // the message. (Seen live: "open Messages" via the planner, then "I
         // will see you later today" — the planner typed it and proposed
         // pressing Return, so a send card appeared before "send it" was said.)
-        let messagesInFront = [targetApp?.bundleIdentifier, NSWorkspace.shared.frontmostApplication?.bundleIdentifier]
-            .contains(MessagesActions.bundleID)
         let messagesActive = !gateBypassed && ((messagesDraftOpenedAt.map { Date().timeIntervalSince($0) < 10 * 60 } ?? false)
                                                || messagesInFront)
         let messagesFirst = messagesInFront || (messagesDraftOpenedAt ?? .distantPast) > (gmailDraftOpenedAt ?? .distantPast)
@@ -3139,6 +3156,16 @@ final class AssistantController {
         return words[(sendAt + 1)...].allSatisfy { filler.contains($0) }
     }
 
+    static func messageBeforeTrailingSendCommand(_ utterance: String) -> String? {
+        guard !isSendIt(utterance) else { return nil }
+        let pattern = #"(?i)^(.+?\S)\s+(?:please\s+)?(?:send|sent)\s+(?:it|that|this)(?:\s+(?:now|please))?[\s.!?]*$"#
+        guard let expression = try? NSRegularExpression(pattern: pattern),
+              let match = expression.firstMatch(in: utterance, range: NSRange(utterance.startIndex..., in: utterance)),
+              let messageRange = Range(match.range(at: 1), in: utterance) else { return nil }
+        let message = utterance[messageRange].trimmingCharacters(in: .whitespacesAndNewlines)
+        return message.isEmpty ? nil : message
+    }
+
     /// "Erase that", "delete the whole message", "clear it", "start over" —
     /// empty the draft rather than revise it. The drafter can't express
     /// "nothing" (an empty reply is treated as a failure), so left to Claude
@@ -3586,7 +3613,8 @@ final class AssistantController {
         remote.broadcast("STATUS \(message)")
     }
 
-    private func draftMessage(gist: String, recipient: String, apiKey: String, previewed: Bool = false) {
+    private func draftMessage(gist: String, recipient: String, apiKey: String,
+                              previewed: Bool = false, sendAfterDraft: Bool = false) {
         busy = true
         synthesizer.stopSpeaking(at: .immediate)
         ring.hide()
@@ -3651,6 +3679,11 @@ final class AssistantController {
             panel.state.answer = message
             panel.state.logTalk(ok ? .status : .error, message)
             remote.broadcast("STATUS \(message)")
+            if ok, sendAfterDraft {
+                ActivityLog.recordAction("messages-send-after-draft")
+                await sendOpenMessagesDraft()
+                return
+            }
             // The landed-write confirmation lived only on the panel and the
             // phone's status line — easy to miss with the panel behind other
             // windows (observed live: "I didn't see it land").
