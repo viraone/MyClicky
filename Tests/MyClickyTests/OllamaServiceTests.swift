@@ -54,11 +54,47 @@ final class OllamaServiceTests: XCTestCase {
         let system = try XCTUnwrap(messages[0]["content"])
         XCTAssertTrue(system.contains(AnthropicService.codeSystemPrompt), "same prompt Claude gets")
         XCTAssertTrue(system.contains(OllamaService.editFormatReminder), "plus the local-model reminder")
-        XCTAssertTrue(system.contains("===== FILE: answer.ts"), "and the project itself")
+        XCTAssertTrue(system.contains("  answer.ts"), "the project tree remains available")
+        XCTAssertFalse(system.contains("===== FILE: answer.ts"), "the focused file is not duplicated in the system prompt")
         let last = try XCTUnwrap(messages[3]["content"])
         XCTAssertTrue(last.contains("Make it 43"))
         XCTAssertTrue(last.contains("1 | export const answer = 42"), "focused file rides along with line numbers")
         XCTAssertTrue(last.hasSuffix(OllamaService.questionReminder), "reminder is the last thing the model reads")
+    }
+
+    func testFocusedFileOmitsLargeUnrelatedFilesFromLocalPrompt() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("peeky-ollama-focused-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "const focused = true\n".write(
+            to: root.appendingPathComponent("focused.ts"), atomically: true, encoding: .utf8)
+        try String(repeating: "unrelated-data\n", count: 10_000).write(
+            to: root.appendingPathComponent("large.json"), atomically: true, encoding: .utf8)
+        let project = try XCTUnwrap(CodeProjectBundler.bundle(urls: [root]))
+
+        let messages = OllamaService.messages(question: "Explain this file", project: project,
+                                              focusedFile: "focused.ts", changedFiles: [], history: [])
+        let combined = messages.compactMap { $0["content"] }.joined(separator: "\n")
+        XCTAssertTrue(combined.contains("1 | const focused = true"))
+        XCTAssertFalse(combined.contains("unrelated-data"))
+        XCTAssertLessThan(OllamaService.estimatedTokens(of: messages), 10_000)
+    }
+
+    func testNoFocusedFileUsesBoundedLocalProjectSlice() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("peeky-ollama-slice-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for index in 0..<3 {
+            try String(repeating: "\(index)", count: 40_000).write(
+                to: root.appendingPathComponent("file\(index).txt"), atomically: true, encoding: .utf8)
+        }
+        let project = try XCTUnwrap(CodeProjectBundler.bundle(urls: [root]))
+
+        let context = OllamaService.localProjectContext(project, focusedFile: nil)
+        XCTAssertLessThan(context.count, OllamaService.maxLocalProjectCharacters + 1_000)
+        XCTAssertTrue(context.contains("files omitted from the local slice"))
     }
 
     func testLocalAskMessagesIncludeContextAndHistory() throws {

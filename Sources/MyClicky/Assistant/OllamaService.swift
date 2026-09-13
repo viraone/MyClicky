@@ -82,7 +82,8 @@ final class OllamaService {
         guard let window = Self.contextWindow(for: messages, limit: limit) else {
             throw OllamaError.tooLarge(tokens: Self.estimatedTokens(of: messages), limit: limit)
         }
-        onStatus?("\(model) · \(window / 1024)K context")
+        let scope = focusedFile == nil ? "project slice" : "focused file"
+        onStatus?("\(model) · \(scope) · \(window / 1024)K context")
         let body: [String: Any] = [
             "model": model,
             "stream": false,
@@ -106,12 +107,13 @@ final class OllamaService {
     static func messages(question: String, project: CodeProject, focusedFile: String?,
                          changedFiles: [(path: String, text: String)],
                          history: [(question: String, answer: String)]) -> [[String: String]] {
+        let projectContext = localProjectContext(project, focusedFile: focusedFile)
         var messages: [[String: String]] = [[
             "role": "system",
             "content": AnthropicService.codeSystemPrompt
                 + "\n\n" + editFormatReminder
                 + (project.guidanceText.map { "\n\n\($0)" } ?? "")
-                + "\n\n" + project.bundleText,
+                + "\n\n" + projectContext,
         ]]
         for turn in history.suffix(AnthropicService.codeHistoryLimit) {
             messages.append(["role": "user", "content": turn.question])
@@ -138,6 +140,43 @@ final class OllamaService {
         messages.append(["role": "user", "content": current])
         return messages
     }
+
+    /// Local models pay the full prompt cost on every question and allocate
+    /// a much larger KV cache as context grows. When a file is open, its
+    /// numbered current contents already ride with the question, so sending
+    /// the entire project as well only duplicates that file and can turn a
+    /// small question into a 100K-token request. Keep the tree for navigation;
+    /// without a focused file, include a bounded project slice.
+    static func localProjectContext(_ project: CodeProject, focusedFile: String?) -> String {
+        var out = "Project: \(project.name) — \(project.files.count) file\(project.files.count == 1 ? "" : "s")\n"
+        out += "File tree:\n"
+        for file in project.files { out += "  \(file.path)\n" }
+        if focusedFile != nil {
+            out += "\nThe focused file's current contents are supplied with the user's question. "
+                + "Other files are listed by path only to keep this local request responsive."
+            return out
+        }
+
+        out += "\nProject slice for local analysis:\n"
+        var remaining = maxLocalProjectCharacters
+        var included = 0
+        for file in project.files {
+            let header = "===== FILE: \(file.path) =====\n"
+            let needed = header.count + file.text.count + 2
+            guard needed <= remaining else { continue }
+            out += header + file.text
+            if !file.text.hasSuffix("\n") { out += "\n" }
+            out += "\n"
+            remaining -= needed
+            included += 1
+        }
+        if included < project.files.count {
+            out += "(\(project.files.count - included) files omitted from the local slice; open one to ask about it directly.)\n"
+        }
+        return out
+    }
+
+    static let maxLocalProjectCharacters = 80_000
 
     /// Appended to the system prompt for local models only.
     static let editFormatReminder = """

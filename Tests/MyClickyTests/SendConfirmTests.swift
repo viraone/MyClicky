@@ -24,6 +24,26 @@ final class SendConfirmTests: XCTestCase {
         }
     }
 
+    func testTrailingSendCommandIsSeparatedFromMessage() {
+        let cases = [
+            ("Let's find time next week to meet in person Send it",
+             "Let's find time next week to meet in person"),
+            ("I will bring the prototype. Please send that now.",
+             "I will bring the prototype."),
+            ("Sounds good to me sent it please",
+             "Sounds good to me"),
+        ]
+        for (utterance, expected) in cases {
+            XCTAssertEqual(AssistantController.messageBeforeTrailingSendCommand(utterance), expected, utterance)
+        }
+    }
+
+    func testOrdinaryMessageDoesNotBecomeTrailingSendCommand() {
+        for phrase in ["send it", "Please send it now", "I can send the file tomorrow", "Tell him to send it tomorrow"] {
+            XCTAssertNil(AssistantController.messageBeforeTrailingSendCommand(phrase), phrase)
+        }
+    }
+
     func testConfirmFieldEncodingKeepsOneLinePerMessage() {
         let encoded = AssistantController.encodeConfirmField("Send to Dino Dad?\n\nSee you\tat 7\r\nbring snacks")
         XCTAssertFalse(encoded.contains("\n"))
