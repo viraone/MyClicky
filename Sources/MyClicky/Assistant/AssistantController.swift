@@ -460,6 +460,7 @@ final class AssistantController {
             panel.state.codeLastSaved = nil
             if panel.state.codeProject?.root != project.root { panel.state.codeCollapsedFolders = [] }
             panel.state.codeProject = project
+            panel.state.github.load(projectRoot: project.root)
             panel.state.codeLSPDiagnostics = [:]
             panel.state.codeLSPHover = nil
             startLSPIfEnabled(for: project)
@@ -497,6 +498,7 @@ final class AssistantController {
     private func removeCodeProject() {
         typeScriptLSP.stop()
         panel.state.codeProject = nil
+        panel.state.github.reset()
         panel.state.codeUsage = nil
         panel.state.codeLog = []
         panel.state.codeFocusedFile = nil
