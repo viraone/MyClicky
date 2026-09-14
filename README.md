@@ -145,11 +145,12 @@ project block. The project card shows the active profile and detected tools;
 clicking the profile badge prepares a grounded **SDET Review** that separates
 implemented capabilities from planned ones and cites exact project files.
 
-TypeScript projects also start a project-scoped language server. The editor
-shows live error/warning underlines and exposes hover information and
-go-to-definition beside the **TypeScript LSP** status badge. Peeky prefers a
+JavaScript and TypeScript projects also start a project-scoped language server.
+The editor shows live error/warning underlines and provides completion
+(**Control-Space**), hover information, go-to-definition, and clickable
+reference results beside the **TypeScript LSP** status badge. Peeky prefers a
 project-local or installed `typescript-language-server`; when neither exists,
-the first TypeScript project load fetches the pinned v4 server and TypeScript 5
+the first supported project load fetches the pinned v4 server and TypeScript 5
 through npm's cache. Click the badge to switch the server off — the project and
 open file stay loaded for Q&A while the server and its node workers (≈300 MB)
 exit; click again to bring it back. The choice is remembered across launches.

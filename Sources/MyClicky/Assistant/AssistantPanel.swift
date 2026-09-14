@@ -394,6 +394,8 @@ final class AssistantState: ObservableObject {
             guard codeFocusedFile != oldValue else { return }
             codeLSPHover = nil
             codeLSPDiagnosticPreview = nil
+            codeLSPCompletions = []
+            codeLSPReferences = []
             // A freshly opened file is there to be read; the caret only
             // folds the one you're on.
             if codeFocusedFile != nil, codeFocusedFile != oldValue { codeViewerCollapsed = false; codeViewerExpanded = false; closeCodeFind() }
@@ -437,6 +439,9 @@ final class AssistantState: ObservableObject {
     @Published var codeLSPHover: String?
     @Published var codeLSPDiagnosticPreview: String?
     @Published var codeLSPCaretOffset = 0
+    @Published var codeLSPCompletions: [CodeLSPCompletionItem] = []
+    @Published var codeLSPCompletionRequest = 0
+    @Published var codeLSPReferences: [CodeLSPLocation] = []
 
     func zoomCode(by steps: Int) {
         if steps == 0 {
@@ -855,6 +860,8 @@ final class AssistantState: ObservableObject {
     var onLSPDocumentChange: ((String, String) -> Void)?
     var onLSPHover: ((String, Int, String) -> Void)?
     var onLSPDefinition: ((String, Int, String) -> Void)?
+    var onLSPCompletion: ((String, Int, String) -> Void)?
+    var onLSPReferences: ((String, Int, String) -> Void)?
     /// Badge click: stop the language server (keep the project) or start it again.
     var onToggleLSP: (() -> Void)?
     var onCodeProviderChanged: ((CodeAIProvider) -> Void)?
@@ -2936,7 +2943,7 @@ struct AssistantPanelView: View {
                     .buttonStyle(.plain)
                     .help(state.codeLSPEnabled
                           ? "Switch the TypeScript language server off — keeps the project, frees ≈300 MB"
-                          : "Switch the TypeScript language server on — live errors, Hover, Definition")
+                          : "Switch the TypeScript language server on — errors, completion, Hover, Definition, References")
                     .accessibilityLabel(state.codeLSPEnabled ? "Turn TypeScript LSP off" : "Turn TypeScript LSP on")
                     Spacer(minLength: 8)
                     if !diagnostics.isEmpty {
@@ -2960,6 +2967,15 @@ struct AssistantPanelView: View {
                     }
                     if state.codeLSPStatus == .ready {
                         Button {
+                            state.onLSPCompletion?(file.path, state.codeLSPCaretOffset, state.codeDraft)
+                        } label: {
+                            Label("Complete", systemImage: "text.badge.plus")
+                                .font(.system(size: 10.5, weight: .semibold))
+                                .foregroundStyle(.white.opacity(0.65))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Show autocomplete suggestions (Control-Space)")
+                        Button {
                             state.onLSPHover?(file.path, state.codeLSPCaretOffset, state.codeDraft)
                         } label: {
                             Label("Hover", systemImage: "info.bubble")
@@ -2977,6 +2993,15 @@ struct AssistantPanelView: View {
                         }
                         .buttonStyle(.plain)
                         .help("Go to definition")
+                        Button {
+                            state.onLSPReferences?(file.path, state.codeLSPCaretOffset, state.codeDraft)
+                        } label: {
+                            Label("References", systemImage: "point.3.connected.trianglepath.dotted")
+                                .font(.system(size: 10.5, weight: .semibold))
+                                .foregroundStyle(.white.opacity(0.65))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Find references for the symbol at the caret")
                     }
                 }
                 .padding(.horizontal, 12)
@@ -3011,12 +3036,56 @@ struct AssistantPanelView: View {
                     .padding(.vertical, 7)
                     .background(Color.white.opacity(0.04))
                 }
+                if !state.codeLSPReferences.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("\(state.codeLSPReferences.count) references")
+                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.65))
+                            Spacer()
+                            Button {
+                                state.codeLSPReferences = []
+                            } label: {
+                                Image(systemName: "xmark").foregroundStyle(.white.opacity(0.45))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 6) {
+                                ForEach(Array(state.codeLSPReferences.enumerated()), id: \.offset) { _, location in
+                                    Button {
+                                        state.jump(to: .init(path: location.path,
+                                                             line: location.range.start.line + 1,
+                                                             lineCount: max(1, location.range.end.line - location.range.start.line + 1)))
+                                        state.codeLSPReferences = []
+                                    } label: {
+                                        Text("\(location.path):\(location.range.start.line + 1)")
+                                            .font(.system(size: 10.5, design: .monospaced))
+                                            .padding(.horizontal, 7)
+                                            .padding(.vertical, 4)
+                                            .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 5))
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(Color.white.opacity(0.035))
+                }
                 CodeTextEditor(text: $state.codeDraft,
                                highlights: state.codeFindMatches,
                                current: state.codeFindMatches.isEmpty ? nil : state.codeFindMatches[min(state.codeFindIndex, state.codeFindMatches.count - 1)],
                                onFind: { state.codeFindVisible = true; state.codeFindFocusRequest += 1 },
                                onEscape: { state.closeCodeFind() },
                                onSelectionChange: { state.codeLSPCaretOffset = $0; state.codeLSPHover = nil },
+                               onCompletion: { offset in
+                                   state.codeLSPCaretOffset = offset
+                                   state.onLSPCompletion?(file.path, offset, state.codeDraft)
+                               },
+                               completions: state.codeLSPCompletions,
+                               completionRequest: state.codeLSPCompletionRequest,
                                diagnostics: diagnosticHighlights,
                                language: SyntaxHighlighter.language(for: file.path),
                                jumpToLine: state.codeJumpToLine,
