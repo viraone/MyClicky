@@ -1,0 +1,68 @@
+{
+  "id": "hello-peeky",
+  "name": "Hello Peeky",
+  "version": "1.0.0",
+  "description": "A minimal example: a toy language, a warm theme, a whitespace linter and a greeting action.",
+  "author": "viraone",
+  "homepage": "https://github.com/viraone/MyClicky/tree/main/examples/extensions/hello-peeky",
+  "apiVersion": 1,
+  "contributes": {
+    "languages": [
+      {
+        "id": "peekyscript",
+        "name": "PeekyScript",
+        "extensions": ["pk"],
+        "keywords": ["let", "fn", "return", "import"],
+        "control": ["if", "else", "for", "while", "match"],
+        "lineComment": ";;",
+        "rules": [
+          { "pattern": "@[A-Za-z_][A-Za-z0-9_]*", "token": "variable" }
+        ]
+      }
+    ],
+    "themes": [
+      {
+        "id": "hello-warm",
+        "name": "Hello Warm",
+        "colors": {
+          "background": "#1F1B18",
+          "plain": "#F2E9E1",
+          "keyword": "#FF9F68",
+          "control": "#FF7A90",
+          "type": "#F5D76E",
+          "function": "#FFD180",
+          "variable": "#A8E6CF",
+          "string": "#C3E88D",
+          "number": "#F78C6C",
+          "comment": "#8A7F78",
+          "punctuation": "#D9CFC7"
+        }
+      }
+    ],
+    "linters": [
+      {
+        "id": "trailing-whitespace",
+        "name": "Trailing whitespace",
+        "extensions": ["pk", "md", "txt"],
+        "command": "scripts/lint-whitespace.sh",
+        "args": ["${file}"],
+        "stdin": false,
+        "pattern": "^(?<line>\\d+):(?<col>\\d+): (?<severity>\\w+): (?<message>.*)$",
+        "timeout": 10
+      }
+    ],
+    "actions": [
+      {
+        "verb": "say_hello",
+        "description": "Say hello out loud and print a greeting. Use when the user asks Peeky to say hi or greet someone.",
+        "note": "Saying hello…",
+        "runner": "shell",
+        "script": "scripts/hello.sh",
+        "params": [
+          { "name": "name", "description": "Who to greet (defaults to 'Peeky')", "required": false }
+        ],
+        "example": "{\"verb\":\"say_hello\",\"params\":{\"name\":\"Vira\"}}"
+      }
+    ]
+  }
+}

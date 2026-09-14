@@ -19,6 +19,9 @@ struct CodeTextEditor: NSViewRepresentable {
     var onSelectionChange: ((Int) -> Void)?
     var diagnostics: [CodeEditorDiagnosticHighlight] = []
     var language: SyntaxHighlighter.Language = .other
+    /// Bumps when the theme (or an extension grammar) changes so the text
+    /// is re-coloured even though neither text nor language moved.
+    var themeGeneration = 0
     /// Scroll to and select this 1-based line once, then call `onDidJump`.
     var jumpToLine: Int?
     var jumpLineCount = 1
@@ -70,6 +73,7 @@ struct CodeTextEditor: NSViewRepresentable {
             SyntaxHighlighter.highlight(storage, language: language, font: font)
         }
         context.coordinator.language = language
+        context.coordinator.themeGeneration = themeGeneration
 
         textView.onFind = { [weak coordinator = context.coordinator] in coordinator?.parent.onFind?() }
         textView.onEscape = { [weak coordinator = context.coordinator] in coordinator?.parent.onEscape?() }
@@ -111,10 +115,13 @@ struct CodeTextEditor: NSViewRepresentable {
             if let storage = textView.textStorage {
                 SyntaxHighlighter.highlight(storage, language: language, font: font)
             }
-        } else if language != context.coordinator.language || fontChanged, let storage = textView.textStorage {
+        } else if language != context.coordinator.language || fontChanged
+                    || themeGeneration != context.coordinator.themeGeneration, let storage = textView.textStorage {
             SyntaxHighlighter.highlight(storage, language: language, font: font)
+            textView.typingAttributes[.foregroundColor] = SyntaxHighlighter.plain
         }
         context.coordinator.language = language
+        context.coordinator.themeGeneration = themeGeneration
         applyHighlights(to: textView, coordinator: context.coordinator)
         applyDiagnostics(to: textView, coordinator: context.coordinator)
         if let line = jumpToLine, line > 0 {
@@ -196,6 +203,7 @@ struct CodeTextEditor: NSViewRepresentable {
         var highlightKey = ""
         var diagnosticKey = ""
         var language: SyntaxHighlighter.Language = .other
+        var themeGeneration = 0
         private var recolor: DispatchWorkItem?
         init(_ parent: CodeTextEditor) { self.parent = parent }
 
