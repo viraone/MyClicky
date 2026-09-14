@@ -368,6 +368,8 @@ final class AssistantState: ObservableObject {
 
     /// The project dropped on the Code tab, nil until one is.
     @Published var codeProject: CodeProject?
+    /// Git, GitHub CLI, branch, issue, and pull-request state for that project.
+    let github = GitHubIntegrationModel()
     /// True while a dropped folder is being read off disk.
     @Published var codeLoading = false
     /// Questions and answers about the project, oldest first.
@@ -1648,6 +1650,9 @@ struct AssistantPanelView: View {
                 case .code:
                     if !state.codeImages.isEmpty { codeImagesRow }
                     codeProjectCard
+                    if state.codeProject != nil {
+                        GitHubIntegrationView(model: state.github)
+                    }
                     if state.codeRunPhase != .idle || !state.codeBuildErrors.isEmpty { codeRunStrip }
                     let viewerExpanded = state.codeViewerExpanded && !state.codeViewerCollapsed && state.codeFocusedFile != nil
                     if state.codeShowingFiles, let project = state.codeProject {

@@ -145,6 +145,21 @@ project block. The project card shows the active profile and detected tools;
 clicking the profile badge prepares a grounded **SDET Review** that separates
 implemented capabilities from planned ones and cites exact project files.
 
+For a loaded Git repository, the compact **GitHub** card shows the validated
+`origin`, current branch, clean/dirty state, staged/unstaged/untracked counts,
+and upstream ahead/behind counts. Expand it to refresh that state, browse local
+and remote branches, and switch safely when the worktree is clean. Peeky never
+forces a checkout, discards changes, or silently stashes; it explains when
+switching is blocked.
+
+If the [GitHub CLI](https://cli.github.com/) is installed, the same card shows
+its authentication state and active account, plus recent open issues and pull
+requests for a GitHub `origin`; click an item to open it in the browser. Use
+**Sign in in browser** to run `gh auth login --web`. Peeky delegates credentials
+to `gh` and never asks for, stores, or logs a GitHub token. Missing CLI,
+signed-out, non-GitHub remote, empty-list, and network/error states are shown
+directly in the card.
+
 TypeScript projects also start a project-scoped language server. The editor
 shows live error/warning underlines and exposes hover information and
 go-to-definition beside the **TypeScript LSP** status badge. Peeky prefers a
