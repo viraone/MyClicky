@@ -1744,7 +1744,7 @@ struct AssistantPanelView: View {
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(alignment: .trailing) {
             edgeChevron(expanded: true)
-                .padding(.trailing, 3)
+                .padding(.trailing, 14)
         }
         .overlay(alignment: .top) { topEdgeHandle }
         .overlay(alignment: .bottom) { bottomEdgeHandle }
@@ -1753,6 +1753,7 @@ struct AssistantPanelView: View {
         .overlay(alignment: .topTrailing) { resizeHandle(.topTrailing) }
         .overlay(alignment: .bottomLeading) { resizeHandle(.bottomLeading) }
         .overlay(alignment: .bottomTrailing) { resizeHandle(.bottomTrailing) }
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .compositingGroup()
         // Soft outer halo (Spotlight-style) drawn as a blurred rounded rect so
         // the corners stay round, plus a grounding drop shadow.
