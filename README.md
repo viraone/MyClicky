@@ -115,8 +115,8 @@ On first use, allow **Screen Recording** in System Settings for MyClicky.
 ## Dictate (hold Option–Command–V)
 
 Speak → text is cleaned up by Claude and copied to the clipboard. Shown in the
-panel's **Dictate** tab. The panel has four tabs: Ask, Capture + Dictate, Talk,
-Peeky Code.
+panel's **Dictate** tab. The panel has six tabs: Ask, Capture + Dictate, Talk,
+Peeky Code, Terminal, Ext (extensions).
 
 ## Peeky Code (questions about a project)
 
@@ -239,6 +239,24 @@ The card's **Cost** pill is a running estimate of what code questions have
 spent, from the token counts each answer reports at Sonnet list prices;
 the Claude console has the actual bill.
 
+### Extensions
+
+The **Ext** tab lets you extend Peeky Code without rebuilding it. An
+extension is a folder with a `manifest.json` and a few scripts (shell,
+AppleScript or JXA) that can contribute **languages** (highlighting for new
+file types), **code themes**, **formatters** and **linters** (a Format /
+Lint row appears under the open file, with findings underlined), and
+**actions** — reusable verbs that join Peeky Actions, so "say hi to Vira"
+can plan an extension's `say_hello` step, and the phone can fire it directly
+with `EXT say_hello`. Extensions live in
+`~/Library/Application Support/MyClicky/Extensions/`; install one by dropping
+its folder on the tab, pasting a git URL, or picking it from the built-in
+**Marketplace**, which lists a JSON catalog from
+`viraone/peeky-extensions`. Toggle, reveal or trash any extension from the
+same card. The manifest format, script environment and catalog schema are in
+[`docs/extensions.md`](docs/extensions.md); a runnable sample is in
+[`examples/extensions/hello-peeky/`](examples/extensions/hello-peeky/).
+
 ## Peeky Remote (iOS app)
 
 `ClickyRemote/` is a companion iPhone numpad app (open `ClickyRemote.xcodeproj`
@@ -251,6 +269,8 @@ grab; TALK = "do it" action mode. The **PEEKY CODE** mode opens Peeky Code on
 the Mac and remaps DICTATE to **TERMINAL** (open the integrated terminal) and
 TALK to **ENTER** (send one Return keystroke to the focused Mac control).
 Tapping **PEEKY** in the phone's top mode bar restores the normal controls.
+The Mac also accepts `TAB EXTENSIONS` and `EXT <verb>[\tkey=value…]` to run
+an installed extension action; it replies `EXT_STATUS OK|FAIL\t<detail>`.
 
 ## ClickyLogs (weekly dashboard)
 
@@ -307,6 +327,18 @@ The dashboard lives at
 - `Assistant/ConfirmActionPanel`: confirmation dialog gating mouse clicks and
   Drive trash actions before they execute
 - `Assistant/MouseClicker`: synthesizes a real mouse click at a screen point
+- `Assistant/SyntaxHighlighter`: regex highlighter for the Code tab; theme
+  and language tables are extensible at runtime
+- `Assistant/Extensions/ExtensionManifest`: the `manifest.json` schema
+  (languages, themes, formatters, linters, actions) and its validation
+- `Assistant/Extensions/ExtensionManager`: discovers, loads, enables and
+  installs/uninstalls extension folders; publishes an `ExtensionRegistry`
+- `Assistant/Extensions/ExtensionScriptRunner`: runs extension scripts,
+  formatters and linters with a timeout, params and `PEEKY_*` environment
+- `Assistant/Extensions/ExtensionMarketplace`: fetches and searches the
+  remote extension catalog
+- `Assistant/Extensions/ExtensionsView`: the Ext tab (installed list, code
+  theme picker, marketplace)
 
 This is an MVP foundation. A hardened distribution should add an app target
 with sandbox entitlements, code signing, a settings UI for the destination

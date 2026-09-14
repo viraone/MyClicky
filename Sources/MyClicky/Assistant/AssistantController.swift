@@ -641,6 +641,160 @@ final class AssistantController {
         ActivityLog.recordAction("code-apply", ["path": path, "outcome": "\(outcome)"])
     }
 
+    // MARK: - Extensions
+
+    /// Loads installed extensions and keeps the highlighter's theme, the
+    /// open file's colouring and the editor in step with them. Everything
+    /// here is re-run on ↻ in the Extensions tab, so a freshly dropped
+    /// folder is live without a relaunch.
+    private func startExtensions() {
+        let manager = panel.state.extensions
+        manager.onThemeChanged = { [weak self] in
+            guard let self else { return }
+            let registry = manager.registry
+            let theme = manager.themeID.flatMap { registry.theme(id: $0) }.flatMap { SyntaxHighlighter.Theme(manifest: $0.item) }
+            SyntaxHighlighter.theme = theme ?? .darkModern
+            self.panel.state.codeThemeGeneration += 1
+        }
+        manager.onRegistryChanged = { [weak self] registry in
+            guard let self else { return }
+            self.panel.state.codeThemeGeneration += 1
+            // Findings from a linter that's gone shouldn't linger.
+            let liveLinters = Set(registry.linters.map(\.item.name))
+            for (path, findings) in self.panel.state.codeLintFindings {
+                let kept = findings.filter { liveLinters.contains($0.source) }
+                if kept.count != findings.count { self.panel.state.codeLintFindings[path] = kept.isEmpty ? nil : kept }
+            }
+        }
+        manager.reload()
+    }
+
+    /// What a script gets told about the moment it runs in, beyond its own
+    /// params: the frontmost app and the Peeky Code project, if any.
+    private func extensionContext() -> [String: String] {
+        var env: [String: String] = [:]
+        if let app = NSWorkspace.shared.frontmostApplication {
+            env["PEEKY_FRONT_APP"] = app.localizedName ?? ""
+            env["PEEKY_FRONT_BUNDLE"] = app.bundleIdentifier ?? ""
+        }
+        if let project = panel.state.codeProject {
+            env["PEEKY_PROJECT"] = project.root.path
+            if let file = panel.state.codeFocusedFile {
+                env["PEEKY_FILE"] = project.root.appendingPathComponent(file).path
+            }
+        }
+        if let copied = lastCopiedText { env["PEEKY_COPIED"] = copied }
+        return env
+    }
+
+    /// Runs an extension verb outside the planner: the ▶ in the Extensions
+    /// tab, or `EXT <verb>` from the phone. Irreversible ones still confirm.
+    private func runExtensionAction(verb: String, params: [String: String], from source: String) {
+        let manager = panel.state.extensions
+        guard let owned = manager.registry.action(verb: verb) else {
+            let message = "No extension provides “\(verb)”."
+            toast.show(message, icon: "puzzlepiece.extension", tint: .orange)
+            remote.broadcast("EXT_STATUS FAIL\t\(message)")
+            return
+        }
+        let action = owned.item
+        Task { [weak self] in
+            guard let self else { return }
+            if action.irreversible == true {
+                let question = action.note ?? "Run \(verb.replacingOccurrences(of: "_", with: " "))?"
+                guard await self.confirmPlannerStep(question, screen: self.panel.screen ?? self.workingScreen) else {
+                    self.remote.broadcast("EXT_STATUS FAIL\tCancelled.")
+                    return
+                }
+            }
+            self.toast.show(action.note ?? "Running \(verb)…", icon: "puzzlepiece.extension.fill", tint: .yellow)
+            do {
+                let result = try await manager.runAction(verb: verb, params: params, context: self.extensionContext())
+                self.toast.show(result, icon: "puzzlepiece.extension.fill", tint: .green)
+                manager.lastMessage = "\(verb): \(result)"
+                self.remote.broadcast("EXT_STATUS OK\t\(Self.encodeConfirmField(result))")
+                ActivityLog.recordAction("extension-verb", ["verb": verb, "via": source])
+            } catch {
+                let message = error.localizedDescription
+                self.toast.show("\(verb): \(message)", icon: "exclamationmark.triangle.fill", tint: .orange)
+                manager.lastMessage = "\(verb) failed — \(message)"
+                self.remote.broadcast("EXT_STATUS FAIL\t\(Self.encodeConfirmField(message))")
+            }
+        }
+    }
+
+    /// Format button: runs the extension formatter on the editor's text and
+    /// puts the result back through the normal edit path (so autosave,
+    /// LSP and ⌘Z all see it).
+    private func formatCode(formatterID: String, path: String) {
+        let state = panel.state
+        guard let project = state.codeProject,
+              let owned = state.extensions.registry.formatters(forPath: path).first(where: { $0.item.id == formatterID }),
+              !state.codeToolBusy else { return }
+        let text = state.codeLiveText(of: path) ?? state.codeDraft
+        let file = project.root.appendingPathComponent(path)
+        state.codeToolBusy = true
+        state.codeToolStatus = "\(owned.item.name)…"
+        Task { [weak self] in
+            guard let self else { return }
+            defer { state.codeToolBusy = false }
+            do {
+                let result = try await ExtensionScriptRunner.format(owned.item, text: text, file: file, project: project.root,
+                                                                    extensionDir: owned.folder)
+                guard state.codeFocusedFile == path else { return }
+                if result.changed {
+                    let before = text.components(separatedBy: "\n").count, after = result.text.components(separatedBy: "\n").count
+                    state.codeDraft = result.text
+                    self.saveCodeFile(path: path, text: result.text)
+                    state.codeToolStatus = "\(owned.item.name): formatted (\(before) → \(after) lines)"
+                    state.logCode(.status, "\(owned.item.name) formatted \((path as NSString).lastPathComponent) — saved. ⌘Z undoes it.")
+                } else {
+                    state.codeToolStatus = "\(owned.item.name): already formatted"
+                }
+                ActivityLog.recordAction("extension-format", ["formatter": formatterID, "path": path, "changed": "\(result.changed)"])
+            } catch {
+                state.codeToolStatus = "\(owned.item.name): \(error.localizedDescription)"
+                self.hud.report("\(owned.item.name): \(error.localizedDescription)", ok: false)
+            }
+        }
+    }
+
+    /// Lint button: runs the extension linter and shows its findings as
+    /// underlines, the way TypeScript diagnostics already appear.
+    private func lintCode(linterID: String, path: String) {
+        let state = panel.state
+        guard let project = state.codeProject,
+              let owned = state.extensions.registry.linters(forPath: path).first(where: { $0.item.id == linterID }),
+              !state.codeToolBusy else { return }
+        let text = state.codeLiveText(of: path) ?? state.codeDraft
+        let file = project.root.appendingPathComponent(path)
+        state.codeToolBusy = true
+        state.codeToolStatus = "\(owned.item.name)…"
+        Task { [weak self] in
+            guard let self else { return }
+            defer { state.codeToolBusy = false }
+            do {
+                if !(owned.item.stdin ?? false), state.codeDraftDirty {
+                    // The tool reads the file on disk — make sure that's the text on screen.
+                    self.saveCodeFile(path: path, text: text)
+                }
+                let findings = try await ExtensionScriptRunner.lint(owned.item, text: text, file: file, project: project.root,
+                                                                    extensionDir: owned.folder)
+                let others = (state.codeLintFindings[path] ?? []).filter { $0.source != owned.item.name }
+                let merged = others + findings
+                state.codeLintFindings[path] = merged.isEmpty ? nil : merged
+                let errors = findings.filter { $0.severity == 1 }.count
+                state.codeToolStatus = findings.isEmpty
+                    ? "\(owned.item.name): clean"
+                    : "\(owned.item.name): \(findings.count) finding\(findings.count == 1 ? "" : "s")\(errors > 0 ? ", \(errors) error\(errors == 1 ? "" : "s")" : "")"
+                ActivityLog.recordAction("extension-lint", ["linter": linterID, "path": path, "findings": "\(findings.count)"])
+            } catch {
+                state.codeToolStatus = "\(owned.item.name): \(error.localizedDescription)"
+                self.hud.report("\(owned.item.name): \(error.localizedDescription)", ok: false)
+            }
+        }
+    }
+
     private var lastCostFetch: Date = .distantPast
 
     /// Pulls the real spend if an Admin key is in Keychain. Free to call,
@@ -997,6 +1151,10 @@ final class AssistantController {
             self?.typeScriptLSP.definition(path: path, characterOffset: offset, text: text)
         }
         panel.state.onToggleLSP = { [weak self] in self?.toggleLSP() }
+        panel.state.onFormatCode = { [weak self] id, path in self?.formatCode(formatterID: id, path: path) }
+        panel.state.onLintCode = { [weak self] id, path in self?.lintCode(linterID: id, path: path) }
+        panel.state.onRunExtensionAction = { [weak self] verb, params in self?.runExtensionAction(verb: verb, params: params, from: "panel") }
+        startExtensions()
         panel.state.onCodeProviderChanged = { [weak self] provider in
             if provider == .ollama { self?.refreshOllamaModels() }
         }
@@ -1117,6 +1275,7 @@ final class AssistantController {
             case "DICTATE", "CAPTURE", "CAPTURE_DICTATE": self.panel.state.tab = .captureDictate
             case "CODE": self.panel.state.tab = .code
             case "TERMINAL": self.panel.state.tab = .terminal
+            case "EXTENSIONS", "EXT": self.panel.state.tab = .extensions
             // The phone's ASK key sends TAB ASK before it listens. With a
             // project open on Peeky Code, that ask is about the code — stay.
             case "ASK" where self.codeTabPinned: break
@@ -1378,6 +1537,9 @@ final class AssistantController {
             self?.resolveChoice(id: id, index: index)
         }
         remote.onRead = { [weak self] in self?.handleReadScreen() }
+        remote.onExtension = { [weak self] verb, params in
+            self?.runExtensionAction(verb: verb, params: params, from: "remote")
+        }
         remote.greeting = { [weak self] in
             ["WHATSAPP_UNREAD \(self?.whatsappUnread.count ?? 0)",
              "GMAIL_UNREAD \(self?.gmailUnread.count ?? 0)",
@@ -1869,15 +2031,15 @@ final class AssistantController {
     /// finishes the recording (no hold required) — a question on the Ask tab,
     /// a dictation on Capture + Dictate, a command to carry out on Talk.
     private func toggleRecording() {
-        guard panel.state.tab != .terminal else {
-            hud.report("The Terminal tab has no mic — switch to Peeky Ask or Peeky Code to talk.", ok: false)
+        guard panel.state.tab.takesVoice else {
+            hud.report("The \(panel.state.tab.rawValue) tab has no mic — switch to Peeky Ask or Peeky Code to talk.", ok: false)
             return
         }
         let kind: RecordKind = switch panel.state.tab {
         case .ask: .ask
         case .captureDictate: .dictate
         case .talk: .talk
-        case .code, .terminal: .code
+        case .code, .terminal, .extensions: .code
         }
         if panel.state.status == .listening || talkStreaming {
             if recordKind == kind {
@@ -2384,6 +2546,14 @@ final class AssistantController {
                 composeEmail: { [weak self] recipient in
                     guard let self, id == self.requestID else { return "Cancelled." }
                     return await self.composeGmail(to: recipient)
+                },
+                extensionActions: panel.state.extensions.registry.actions,
+                runExtensionAction: { [weak self] verb, params in
+                    guard let self, id == self.requestID else { throw ExtensionScriptRunner.Failure.launch("Cancelled.") }
+                    let result = try await self.panel.state.extensions.runAction(verb: verb, params: params,
+                                                                                 context: self.extensionContext())
+                    ActivityLog.recordAction("extension-verb", ["verb": verb, "via": "talk"])
+                    return result
                 }
             )
             await ActionPlanner.run(utterance: utterance, apiKey: apiKey, targetApp: targetApp, screen: screen, callbacks: callbacks) { [capture] in

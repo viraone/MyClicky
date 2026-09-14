@@ -97,6 +97,9 @@ enum AssistantTab: String, CaseIterable {
     /// A real shell, started in the Peeky Code project's folder. Local
     /// only — never talks to Claude.
     case terminal = "Terminal"
+    /// Installed extensions (languages, themes, formatters, linters,
+    /// actions) and the marketplace to get more.
+    case extensions = "Extensions"
 
     var icon: String {
         switch self {
@@ -105,12 +108,13 @@ enum AssistantTab: String, CaseIterable {
         case .talk: "bolt.fill"
         case .code: "chevron.left.forwardslash.chevron.right"
         case .terminal: "terminal"
+        case .extensions: "puzzlepiece.extension"
         }
 
     }
 
-    /// Tabs with a mic: everything but the terminal.
-    var takesVoice: Bool { self != .terminal }
+    /// Tabs with a mic: everything but the terminal and extensions.
+    var takesVoice: Bool { self != .terminal && self != .extensions }
 
     /// One-word name for the half-width column's tab bar.
     var shortName: String {
@@ -120,6 +124,7 @@ enum AssistantTab: String, CaseIterable {
         case .talk: "Talk"
         case .code: "Code"
         case .terminal: "Term"
+        case .extensions: "Ext"
         }
     }
 }
@@ -370,6 +375,21 @@ final class AssistantState: ObservableObject {
     @Published var codeProject: CodeProject?
     /// Git, GitHub CLI, branch, issue, and pull-request state for that project.
     let github = GitHubIntegrationModel()
+    /// Installed extensions and the remote catalog. Owned here so the
+    /// Extensions tab and the Code tab's Format/Lint buttons share one
+    /// registry; the controller wires the planner and the remote to it.
+    let extensions = ExtensionManager()
+    let marketplace = ExtensionMarketplace()
+    /// Bumped whenever the code theme or an extension grammar changes so
+    /// the open file re-paints.
+    @Published var codeThemeGeneration = 0
+    /// Findings from extension linters, by file path — drawn like LSP
+    /// diagnostics but kept apart so a re-lint replaces only its own.
+    @Published var codeLintFindings: [String: [ExtensionScriptRunner.LintFinding]] = [:]
+    /// What the last Format/Lint did, for the file header ("Prettier: 3 lines changed").
+    @Published var codeToolStatus: String?
+    /// True while a formatter or linter is running on the focused file.
+    @Published var codeToolBusy = false
     /// True while a dropped folder is being read off disk.
     @Published var codeLoading = false
     /// Questions and answers about the project, oldest first.
@@ -869,6 +889,12 @@ final class AssistantState: ObservableObject {
     var onReloadCodeProject: (() -> Void)?
     var onRemoveCodeProject: (() -> Void)?
     var onAskCode: ((String) -> Void)?
+    /// Code tab tool buttons: run the named extension formatter / linter
+    /// on the focused file.
+    var onFormatCode: ((_ formatterID: String, _ path: String) -> Void)?
+    var onLintCode: ((_ linterID: String, _ path: String) -> Void)?
+    /// Extensions tab: fire an extension verb by hand (no planner).
+    var onRunExtensionAction: ((_ verb: String, _ params: [String: String]) -> Void)?
     /// Reads the current answer aloud on demand, regardless of `textOnlyMode`.
     var onReadAloud: (() -> Void)?
     /// Mic button: starts recording (a question on the Ask tab, a dictation
@@ -1672,9 +1698,12 @@ struct AssistantPanelView: View {
                     }
                 case .terminal:
                     terminalTab
+                case .extensions:
+                    ExtensionsView(state: state)
                 }
             }
             .onDrop(of: [.fileURL, .image], isTargeted: nil) { providers in
+                if state.tab == .extensions { return handleExtensionDrop(providers) }
                 guard state.tab == .ask || state.tab == .code else { return false }
                 return handleAskDrop(providers)
             }
@@ -2858,9 +2887,13 @@ struct AssistantPanelView: View {
     private func codeFileViewer(_ file: CodeProject.File) -> some View {
         let lineCount = state.codeDraft.reduce(1) { $1 == "\n" ? $0 + 1 : $0 }
         let diagnostics = state.codeLSPDiagnostics[file.path] ?? []
+        let lintFindings = state.codeLintFindings[file.path] ?? []
         let diagnosticHighlights = diagnostics.compactMap { diagnostic in
             TypeScriptLSPClient.nsRange(diagnostic.range, in: state.codeDraft)
                 .map { CodeEditorDiagnosticHighlight(range: $0, severity: diagnostic.severity) }
+        } + lintFindings.compactMap { finding in
+            Self.lineRange(finding.line, in: state.codeDraft)
+                .map { CodeEditorDiagnosticHighlight(range: $0, severity: finding.severity) }
         }
         let lspColor: Color = {
             switch state.codeLSPStatus {
@@ -2922,6 +2955,7 @@ struct AssistantPanelView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 7)
+            if !state.codeViewerCollapsed { codeToolsRow(file) }
             if TypeScriptLSPClient.supports(path: file.path) {
                 HStack(spacing: 10) {
                     Button {
@@ -3024,6 +3058,7 @@ struct AssistantPanelView: View {
                                onSelectionChange: { state.codeLSPCaretOffset = $0; state.codeLSPHover = nil },
                                diagnostics: diagnosticHighlights,
                                language: SyntaxHighlighter.language(for: file.path),
+                               themeGeneration: state.codeThemeGeneration,
                                jumpToLine: state.codeJumpToLine,
                                jumpLineCount: state.codeJumpLineCount,
                                onDidJump: { state.codeJumpToLine = nil },
@@ -3039,6 +3074,86 @@ struct AssistantPanelView: View {
             if !state.codeViewerCollapsed { codeViewerExpandToggle }
         }
         .id(file.path)
+    }
+
+    /// 1-based `line` of `text` as an NSRange (nil past the end).
+    static func lineRange(_ line: Int, in text: String) -> NSRange? {
+        guard line > 0 else { return nil }
+        let ns = text as NSString
+        var index = 0, current = 1
+        while current < line {
+            let range = ns.range(of: "\n", range: NSRange(location: index, length: ns.length - index))
+            guard range.location != NSNotFound else { return nil }
+            index = range.location + 1
+            current += 1
+        }
+        let lineRange = ns.lineRange(for: NSRange(location: min(index, ns.length), length: 0))
+        var length = lineRange.length
+        if length > 0, ns.character(at: lineRange.location + length - 1) == 10 { length -= 1 }
+        return NSRange(location: lineRange.location, length: max(length, 1))
+    }
+
+    /// Format / Lint buttons from installed extensions that claim this
+    /// file's extension, plus the last result. Hidden when nothing applies.
+    @ViewBuilder
+    private func codeToolsRow(_ file: CodeProject.File) -> some View {
+        let formatters = state.extensions.registry.formatters(forPath: file.path)
+        let linters = state.extensions.registry.linters(forPath: file.path)
+        let findings = state.codeLintFindings[file.path] ?? []
+        if !formatters.isEmpty || !linters.isEmpty || !findings.isEmpty {
+            HStack(spacing: 8) {
+                ForEach(formatters, id: \.item.id) { owned in
+                    Button {
+                        state.onFormatCode?(owned.item.id, file.path)
+                    } label: {
+                        Label(owned.item.name, systemImage: "text.alignleft")
+                    }
+                    .buttonStyle(.plain)
+                    .help("Format with \(owned.item.name) (\(owned.extensionID))")
+                }
+                ForEach(linters, id: \.item.id) { owned in
+                    Button {
+                        state.onLintCode?(owned.item.id, file.path)
+                    } label: {
+                        Label(owned.item.name, systemImage: "checkmark.shield")
+                    }
+                    .buttonStyle(.plain)
+                    .help("Check with \(owned.item.name) (\(owned.extensionID))")
+                }
+                if state.codeToolBusy {
+                    ProgressView().controlSize(.mini)
+                }
+                Spacer(minLength: 8)
+                if !findings.isEmpty {
+                    Button {
+                        state.codeJumpToLine = findings[0].line
+                        state.codeJumpLineCount = 1
+                    } label: {
+                        Label("\(findings.count)", systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(findings.contains(where: { $0.severity == 1 }) ? .red : .orange)
+                    }
+                    .buttonStyle(.plain)
+                    .help(findings.map { "\($0.line): \($0.message)" }.joined(separator: "\n"))
+                    Button {
+                        state.codeLintFindings[file.path] = nil
+                        state.codeToolStatus = nil
+                    } label: {
+                        Image(systemName: "xmark").foregroundStyle(.white.opacity(0.4))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Clear findings")
+                } else if let status = state.codeToolStatus {
+                    Text(status)
+                        .foregroundStyle(.white.opacity(0.5))
+                        .lineLimit(1)
+                }
+            }
+            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+            .foregroundStyle(AssistantPhase.working.color)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+            .background(Color.white.opacity(0.03))
+        }
     }
 
     /// Slim pill on the bottom edge of the file preview: click to fill the
@@ -3512,6 +3627,7 @@ struct AssistantPanelView: View {
         switch state.tab {
         case .talk: ""
         case .terminal: "Type a command…"
+        case .extensions: "Search the marketplace…"
         case .code: state.codeProject == nil ? "Drop a project folder here, then ask…"
             : "Ask about \(state.codeFocusedFile.map { ($0 as NSString).lastPathComponent } ?? state.codeProject?.name ?? "your code")…"
         default: "Ask Peeky anything…"
@@ -3534,7 +3650,7 @@ struct AssistantPanelView: View {
         case .talk: "Say what you want Peeky to do"
         case .captureDictate: "Start dictation"
         case .code: "Ask about your code by voice"
-        case .terminal: "Switch to a tab with a mic"
+        case .terminal, .extensions: "Switch to a tab with a mic"
         }
         return Button {
             state.onToggleRecording?()
@@ -4674,6 +4790,7 @@ struct AssistantPanelView: View {
         case .talk: state.onDo?(text)
         case .code: state.onAskCode?(text)
         case .terminal: state.terminal.view.send(txt: text + "\n")
+        case .extensions: state.marketplace.query = text
         default: state.onSubmit?(text)
         }
     }
@@ -4686,7 +4803,25 @@ struct AssistantPanelView: View {
         case .talk: "talk"
         case .code: "code"
         case .terminal: "terminal"
+        case .extensions: "ext"
         }
+    }
+
+    /// A folder dropped on the Extensions tab is installed as an extension.
+    private func handleExtensionDrop(_ providers: [NSItemProvider]) -> Bool {
+        let fileProviders = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
+        guard !fileProviders.isEmpty else { return false }
+        for provider in fileProviders {
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                let url: URL? = (item as? URL) ?? (item as? Data).flatMap { URL(dataRepresentation: $0, relativeTo: nil) }
+                guard let url else { return }
+                Task { @MainActor in
+                    do { _ = try state.extensions.install(folder: url) }
+                    catch { state.extensions.lastMessage = error.localizedDescription }
+                }
+            }
+        }
+        return true
     }
 }
 

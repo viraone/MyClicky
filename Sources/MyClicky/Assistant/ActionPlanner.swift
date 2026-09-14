@@ -34,6 +34,8 @@ enum ActionPlanner {
         var toText: String?
         /// send_copied: who it goes to, named the way the user said it.
         var to: String?
+        /// Extension verbs: their declared parameters, by name.
+        var params: [String: String]?
     }
 
     struct Plan: Decodable {
@@ -65,9 +67,50 @@ enum ActionPlanner {
         var openConversation: (_ app: String, _ name: String) async -> String? = { _, _ in "not wired up" }
         /// Opens a blank Gmail draft addressed to a named person. nil = success.
         var composeEmail: (_ recipient: String) async -> String? = { _ in "not wired up" }
+        /// Verbs installed extensions contribute. The planner offers them to
+        /// the model alongside the built-ins and hands a chosen one back
+        /// through `runExtensionAction`, which returns the script's result
+        /// line, or throws with the reason it failed.
+        var extensionActions: [ExtensionRegistry.Owned<ExtensionManifest.Action>] = []
+        var runExtensionAction: (_ verb: String, _ params: [String: String]) async throws -> String = { verb, _ in
+            throw ExtensionScriptRunner.Failure.notFound(verb)
+        }
     }
 
-    private static let allowedVerbs: Set<String> = ["open", "click", "focus", "type", "press", "scroll", "create_event", "update_event", "copy_paragraph", "copy_range", "send_copied", "compose_email", "open_conversation", "done"]
+    private static let builtinVerbs: Set<String> = ["open", "click", "focus", "type", "press", "scroll", "create_event", "update_event", "copy_paragraph", "copy_range", "send_copied", "compose_email", "open_conversation", "done"]
+
+    /// The verbs a plan may use right now: built-ins plus whatever
+    /// extensions add. Built-in names always win a collision.
+    static func allowedVerbs(_ callbacks: Callbacks) -> Set<String> {
+        builtinVerbs.union(callbacks.extensionActions.map(\.item.verb))
+    }
+
+    /// The prompt section describing extension verbs, in the same shape as
+    /// the built-in list so the model treats them as equals.
+    static func extensionVerbPrompt(_ actions: [ExtensionRegistry.Owned<ExtensionManifest.Action>]) -> String {
+        let usable = actions.filter { !builtinVerbs.contains($0.item.verb) }
+        guard !usable.isEmpty else { return "" }
+        var lines = ["", "Additional verbs provided by the user's installed extensions (use them exactly like the built-ins; each is the whole job for what it describes — no click/type steps around it):"]
+        for owned in usable {
+            let action = owned.item
+            var line = "- \(action.verb): \(action.description)"
+            if let params = action.params, !params.isEmpty {
+                let described = params.map { p in
+                    "\"\(p.name)\"" + (p.required == true ? " (required)" : "") + (p.description.map { " — \($0)" } ?? "")
+                }.joined(separator: "; ")
+                line += " Params go in a \"params\" object: \(described)."
+            }
+            line += " " + (action.example ?? Self.defaultExample(for: action))
+            if action.irreversible == true { line += " This is irreversible — set \"irreversible\": true." }
+            lines.append(line)
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func defaultExample(for action: ExtensionManifest.Action) -> String {
+        let params = (action.params ?? []).map { "\"\($0.name)\":\"...\"" }.joined(separator: ",")
+        return params.isEmpty ? "{\"verb\":\"\(action.verb)\"}" : "{\"verb\":\"\(action.verb)\",\"params\":{\(params)}}"
+    }
 
     /// Backstops the model's own "irreversible" flag: these words in a
     /// click/press target force a confirmation even if it didn't say so.
@@ -76,7 +119,7 @@ enum ActionPlanner {
         "submit", "confirm", "order", "checkout", "discard", "unsubscribe",
     ]
 
-    private static let systemPrompt = """
+    private static let baseSystemPrompt = """
     You control a Mac on behalf of a person who can't easily use a mouse or \
     keyboard. Given their spoken request and a list of the interactive \
     elements currently visible on screen (role, label, value), return a short \
@@ -192,6 +235,12 @@ enum ActionPlanner {
     no extra text: {"steps": [ {"verb": "...", ...}, ... ]}
     """
 
+    static func systemPrompt(_ callbacks: Callbacks) -> String {
+        let extra = extensionVerbPrompt(callbacks.extensionActions)
+        guard !extra.isEmpty, let range = baseSystemPrompt.range(of: "\nRules:") else { return baseSystemPrompt }
+        return baseSystemPrompt.replacingCharacters(in: range, with: extra + "\n\nRules:")
+    }
+
     /// Plans and executes `utterance` on `targetApp` (the frontmost app if
     /// nil). Callers that show their own UI before calling this should pass
     /// the app that was frontmost *before* that — otherwise, if that UI ends
@@ -209,13 +258,14 @@ enum ActionPlanner {
         let hasCopied = callbacks.lastCopied().map { !$0.isEmpty } ?? false
         var plan: Plan
         do {
-            plan = try await requestPlan(utterance: utterance, elements: elements, claude: claude, hasCopied: hasCopied,
+            plan = try await requestPlan(utterance: utterance, elements: elements, claude: claude, hasCopied: hasCopied, callbacks: callbacks,
                                          includeScreenshot: elements.isEmpty, screenshot: screenshot)
         } catch {
             log.error("plan request failed: \(error.localizedDescription, privacy: .public)")
             callbacks.status("Couldn't work out how to do that — \(error.localizedDescription)")
             return
         }
+        let allowedVerbs = allowedVerbs(callbacks)
         guard !plan.steps.isEmpty, plan.steps.allSatisfy({ allowedVerbs.contains($0.verb) }) else {
             log.notice("refused plan with unsupported verb(s)")
             callbacks.status("That would need an action I don't support yet — stopped for safety.")
@@ -228,7 +278,7 @@ enum ActionPlanner {
         if isDeclined(plan), !elements.isEmpty {
             log.notice("AX-only plan declined — retrying with a screenshot for visual grounding")
             do {
-                let retryPlan = try await requestPlan(utterance: utterance, elements: elements, claude: claude, hasCopied: hasCopied,
+                let retryPlan = try await requestPlan(utterance: utterance, elements: elements, claude: claude, hasCopied: hasCopied, callbacks: callbacks,
                                                        includeScreenshot: true, screenshot: screenshot)
                 if isDeclined(retryPlan) {
                     log.notice("screenshot retry also declined: \(retryPlan.steps.first?.note ?? "(no note)", privacy: .public)")
@@ -270,7 +320,7 @@ enum ActionPlanner {
                 return
             }
             callbacks.status(step.note ?? describe(step))
-            if isIrreversible(step) {
+            if isIrreversible(step, callbacks: callbacks) {
                 log.notice("gating irreversible step: \(step.verb, privacy: .public) \(step.label ?? step.key ?? "", privacy: .public)")
                 guard await callbacks.confirm(step.note ?? describe(step)) else {
                     log.notice("irreversible step declined by user")
@@ -298,11 +348,15 @@ enum ActionPlanner {
         callbacks.status(outcome ?? "Done.")
     }
 
-    private static func isIrreversible(_ step: Step) -> Bool {
+    private static func isIrreversible(_ step: Step, callbacks: Callbacks) -> Bool {
         // send_copied asks for itself, naming the conversation that's actually
         // open — a second, vaguer prompt in front of it is just noise.
         if step.verb == "send_copied" || step.verb == "compose_email" { return false }
         if step.irreversible == true { return true }
+        // The extension author's word counts even when the model forgot to set the flag.
+        if let action = callbacks.extensionActions.first(where: { $0.item.verb == step.verb }), action.item.irreversible == true {
+            return true
+        }
         let haystack = [step.label, step.key].compactMap { $0 }.joined(separator: " ").lowercased()
         return irreversibleKeywords.contains { haystack.contains($0) }
     }
@@ -321,7 +375,7 @@ enum ActionPlanner {
         case "compose_email": "Starting an email to \(step.to ?? "them")…"
         case "create_event": "Adding \(step.title ?? "the event") to your calendar…"
         case "update_event": "Updating \(step.title ?? "the event") in your calendar…"
-        default: "Working…"
+        default: "Running \(step.verb.replacingOccurrences(of: "_", with: " "))…"
         }
     }
 
@@ -344,7 +398,8 @@ enum ActionPlanner {
         // of Calendar (observed live). Anything that delivers input must
         // confirm the intended app is actually in front first.
         // Messages verbs drive Messages, not the app the recording started in.
-        if !["open", "send_copied", "compose_email", "open_conversation"].contains(step.verb) { await ensureFrontmost(app) }
+        let isExtensionVerb = !builtinVerbs.contains(step.verb)
+        if !isExtensionVerb, !["open", "send_copied", "compose_email", "open_conversation"].contains(step.verb) { await ensureFrontmost(app) }
         switch step.verb {
         case "open":
             guard let name = step.app, let resolved = AppDriver.ensureRunning(appNamed: name) else { return false }
@@ -475,7 +530,15 @@ enum ActionPlanner {
                 return false
             }
         default:
-            return false
+            guard isExtensionVerb else { return false }
+            do {
+                outcome = try await callbacks.runExtensionAction(step.verb, step.params ?? [:])
+                return true
+            } catch {
+                log.error("extension verb \(step.verb, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+                outcome = error.localizedDescription
+                return false
+            }
         }
     }
 
@@ -544,7 +607,7 @@ enum ActionPlanner {
     }
 
     private static func requestPlan(utterance: String, elements: [AXElement], claude: AnthropicService, hasCopied: Bool,
-                                    includeScreenshot: Bool, screenshot: @escaping () async throws -> Data) async throws -> Plan {
+                                    callbacks: Callbacks, includeScreenshot: Bool, screenshot: @escaping () async throws -> Data) async throws -> Plan {
         let lines = elements.prefix(150).map { element -> String in
             var line = "\(element.role) \"\(element.label)\""
             if !element.value.isEmpty { line += " value=\"\(element.value)\"" }
@@ -571,7 +634,7 @@ enum ActionPlanner {
 
         // Plans are short JSON over a screenshot; the person is waiting on the
         // purple ring. Low effort still reasons enough to pick the right step.
-        let json = try await claude.requestJSON(system: systemPrompt, userText: userText, jpegImage: jpegImage, effort: "low")
+        let json = try await claude.requestJSON(system: systemPrompt(callbacks), userText: userText, jpegImage: jpegImage, effort: "low")
         let data = try JSONSerialization.data(withJSONObject: json)
         return try JSONDecoder().decode(Plan.self, from: data)
     }

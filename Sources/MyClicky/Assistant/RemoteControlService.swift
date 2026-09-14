@@ -16,6 +16,10 @@ import Network
 ///                    (TAB CAPTURE / TAB CAPTURE_DICTATE are aliases)
 ///   TAB CODE       – switch the panel to Peeky Code
 ///   TAB TERMINAL   – switch the panel to Terminal
+///   TAB EXTENSIONS – switch the panel to Extensions (TAB EXT is an alias)
+///   EXT <verb>[\t<key>=<value>\t…] – run an installed extension's action
+///                    verb directly, with optional parameters; the Mac
+///                    replies with EXT_STATUS OK|FAIL\t<message>
 ///   KEY ENTER      – press Return once in the currently focused Mac control
 ///   KEY PASTE      – press Command-V in the currently focused Mac control
 ///   BROWSER RELOAD – reload the active browser tab (like ⌘R)
@@ -122,6 +126,8 @@ final class RemoteControlService {
     var onConfirmResponse: ((String, Bool) -> Void)?
     var onChoiceResponse: ((String, Int?) -> Void)?
     var onRead: (() -> Void)?
+    /// `EXT <verb>` — run an extension action with the parsed params.
+    var onExtension: ((String, [String: String]) -> Void)?
     /// `SCREEN <n>`: put Peeky (panel and pointer) on display n, 1-based in
     /// the order macOS lists them — 1 is the built-in display when present.
     var onScreen: ((Int) -> Void)?
@@ -197,6 +203,22 @@ final class RemoteControlService {
         }
     }
 
+    /// `<verb>\tkey=value\tkey=value` → (verb, params). Values may hold
+    /// spaces; keys are whatever the extension's manifest names them.
+    static func parseExtensionCommand(_ rest: String) -> (String, [String: String]) {
+        let fields = rest.split(separator: "\t", omittingEmptySubsequences: true).map { String($0) }
+        guard let first = fields.first else { return ("", [:]) }
+        let verb = first.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        var params: [String: String] = [:]
+        for field in fields.dropFirst() {
+            guard let eq = field.firstIndex(of: "=") else { continue }
+            let key = field[..<eq].trimmingCharacters(in: .whitespaces)
+            guard !key.isEmpty else { continue }
+            params[key] = String(field[field.index(after: eq)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return (verb, params)
+    }
+
     func handle(_ line: String) {
         if line == "SHOW" {
             onShow?()
@@ -240,6 +262,9 @@ final class RemoteControlService {
         } else if line.hasPrefix("ASK ") {
             let question = String(line.dropFirst(4)).trimmingCharacters(in: .whitespacesAndNewlines)
             if !question.isEmpty { onAsk?(question) }
+        } else if line.hasPrefix("EXT ") {
+            let (verb, params) = Self.parseExtensionCommand(String(line.dropFirst(4)))
+            if !verb.isEmpty { onExtension?(verb, params) }
         } else if line.hasPrefix("DO ") {
             let utterance = String(line.dropFirst(3)).trimmingCharacters(in: .whitespacesAndNewlines)
             if !utterance.isEmpty { onDo?(utterance) }
