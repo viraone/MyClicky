@@ -34,6 +34,37 @@ final class TypeScriptLSPClientTests: XCTestCase {
         XCTAssertEqual(converted.map { (text as NSString).substring(with: $0) }, "missing")
     }
 
+    func testCompletionItemsSupportListsArraysAndTextEdits() {
+        let list: [String: Any] = [
+            "items": [
+                ["label": "answer", "detail": "const answer: number"],
+                ["label": "add", "insertText": "add"],
+                ["label": "mapped", "textEdit": ["newText": "map"]],
+            ],
+        ]
+
+        XCTAssertEqual(TypeScriptLSPClient.completionItems(from: list), [
+            .init(label: "answer", detail: "const answer: number", insertText: "answer"),
+            .init(label: "add", detail: nil, insertText: "add"),
+            .init(label: "mapped", detail: nil, insertText: "map"),
+        ])
+        XCTAssertEqual(TypeScriptLSPClient.completionItems(from: [["label": "value"]]),
+                       [.init(label: "value", detail: nil, insertText: "value")])
+    }
+
+    func testJavaScriptOnlyProjectSupportsLanguageServer() {
+        let project = CodeProject(root: URL(fileURLWithPath: "/tmp/peeky-javascript"),
+                                  name: "peeky-javascript",
+                                  files: [.init(path: "app.js", text: "const ready = true")],
+                                  profile: nil,
+                                  detectedStack: [],
+                                  skippedFolders: [],
+                                  skippedFiles: [],
+                                  truncated: false)
+
+        XCTAssertTrue(TypeScriptLSPClient.supports(project: project))
+    }
+
     func testLiveServerPublishesTypeScriptDiagnostics() async throws {
         guard ProcessInfo.processInfo.environment["RUN_LSP_INTEGRATION"] == "1" else {
             throw XCTSkip("Set RUN_LSP_INTEGRATION=1 to exercise npm and the real language server.")
@@ -44,7 +75,7 @@ final class TypeScriptLSPClientTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         try "{\"compilerOptions\":{\"strict\":true}}".write(
             to: root.appendingPathComponent("tsconfig.json"), atomically: true, encoding: .utf8)
-        let source = "import { add } from \"./math\"\nconst answer: string = add(1, 2)\n"
+        let source = "import { add } from \"./math\"\nconst answer: string = add(1, 2)\nad\n"
         try source.write(to: root.appendingPathComponent("index.ts"), atomically: true, encoding: .utf8)
         try "export function add(a: number, b: number) { return a + b }\n".write(
             to: root.appendingPathComponent("math.ts"), atomically: true, encoding: .utf8)
@@ -53,6 +84,8 @@ final class TypeScriptLSPClientTests: XCTestCase {
         let diagnosed = expectation(description: "type error published")
         let hovered = expectation(description: "hover information returned")
         let defined = expectation(description: "definition returned")
+        let completed = expectation(description: "completions returned")
+        let referenced = expectation(description: "references returned")
         var definition: CodeLSPLocation?
         let client = TypeScriptLSPClient()
         client.onStatus = { status in
@@ -61,6 +94,10 @@ final class TypeScriptLSPClientTests: XCTestCase {
                 let offset = (source as NSString).range(of: "add", options: .backwards).location + 1
                 client.hover(path: "index.ts", characterOffset: offset, text: source)
                 client.definition(path: "index.ts", characterOffset: offset, text: source)
+                client.completions(path: "index.ts",
+                                   characterOffset: (source as NSString).range(of: "ad", options: .backwards).location + 2,
+                                   text: source)
+                client.references(path: "index.ts", characterOffset: offset, text: source)
             }
             if case .failed(let detail) = status { XCTFail(detail) }
         }
@@ -76,10 +113,16 @@ final class TypeScriptLSPClientTests: XCTestCase {
             definition = location
             defined.fulfill()
         }
+        client.onCompletions = { items in
+            if items.contains(where: { $0.label == "add" }) { completed.fulfill() }
+        }
+        client.onReferences = { locations in
+            if !locations.isEmpty { referenced.fulfill() }
+        }
 
         client.start(for: project)
         client.focus(path: "index.ts", text: source)
-        await fulfillment(of: [ready, diagnosed, hovered, defined], timeout: 90)
+        await fulfillment(of: [ready, diagnosed, hovered, defined, completed, referenced], timeout: 90)
         XCTAssertEqual(definition?.path, "index.ts")
         XCTAssertEqual(definition?.range.start.line, 0)
         client.stop()

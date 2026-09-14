@@ -24,7 +24,7 @@ enum CodeLSPStatus: Equatable {
         case .inactive: return "No TypeScript project is active."
         case .disabled: return "Language server switched off — click to start it (≈300 MB of node processes)."
         case .starting(let detail): return detail
-        case .ready: return "Diagnostics, hover information, and go to definition are active. Click to switch off and free ≈300 MB."
+        case .ready: return "Diagnostics, completion, hover, definition, and references are active. Click to switch off and free ≈300 MB."
         case .failed(let detail): return detail
         }
     }
@@ -54,6 +54,14 @@ struct CodeLSPDiagnostic: Equatable, Identifiable {
 struct CodeLSPLocation: Equatable {
     let path: String
     let range: CodeLSPRange
+}
+
+struct CodeLSPCompletionItem: Equatable, Identifiable {
+    let label: String
+    let detail: String?
+    let insertText: String
+
+    var id: String { "\(label)\u{0}\(detail ?? "")\u{0}\(insertText)" }
 }
 
 struct LSPMessageFramer {
@@ -93,6 +101,8 @@ final class TypeScriptLSPClient {
     var onDiagnostics: ((String, [CodeLSPDiagnostic]) -> Void)?
     var onHover: ((String?) -> Void)?
     var onDefinition: ((CodeLSPLocation?) -> Void)?
+    var onCompletions: (([CodeLSPCompletionItem]) -> Void)?
+    var onReferences: (([CodeLSPLocation]) -> Void)?
 
     private struct Document {
         var text: String
@@ -116,12 +126,13 @@ final class TypeScriptLSPClient {
     private var pending: [Int: (Any?) -> Void] = [:]
     private var nextID = 1
     private var generation = 0
+    private var completionGeneration = 0
     private var ready = false
     private var stderr = ""
 
     func start(for project: CodeProject) {
         stop()
-        guard project.detectedStack.contains(where: { $0.name == "TypeScript" }) else {
+        guard Self.supports(project: project) else {
             onStatus?(.inactive)
             return
         }
@@ -204,6 +215,7 @@ final class TypeScriptLSPClient {
         pending = [:]
         framer = LSPMessageFramer()
         ready = false
+        completionGeneration += 1
         stderr = ""
         onStatus?(.inactive)
     }
@@ -220,6 +232,7 @@ final class TypeScriptLSPClient {
     func change(path: String, text: String) {
         guard Self.supports(path: path) else { return }
         guard let url = fileURL(for: path) else { return }
+        completionGeneration += 1
         var document = documents[url] ?? Document(text: text, version: 0)
         document.text = text
         document.version += 1
@@ -247,6 +260,36 @@ final class TypeScriptLSPClient {
         let position = Self.position(in: text, utf16Offset: characterOffset)
         request("textDocument/definition", params: textDocumentPosition(url, position)) { [weak self] result in
             self?.onDefinition?(self?.location(from: result, source: url))
+        }
+    }
+
+    func completions(path: String, characterOffset: Int, text: String) {
+        guard ready, Self.supports(path: path), let url = fileURL(for: path) else {
+            onCompletions?([])
+            return
+        }
+        focus(path: path, text: text)
+        completionGeneration += 1
+        let requestGeneration = completionGeneration
+        let position = Self.position(in: text, utf16Offset: characterOffset)
+        request("textDocument/completion", params: textDocumentPosition(url, position)) { [weak self] result in
+            guard let self, self.completionGeneration == requestGeneration else { return }
+            self.onCompletions?(Self.completionItems(from: result))
+        }
+    }
+
+    func references(path: String, characterOffset: Int, text: String) {
+        guard ready, Self.supports(path: path), let url = fileURL(for: path) else {
+            onReferences?([])
+            return
+        }
+        focus(path: path, text: text)
+        let position = Self.position(in: text, utf16Offset: characterOffset)
+        var params = textDocumentPosition(url, position)
+        params["context"] = ["includeDeclaration": true]
+        request("textDocument/references", params: params) { [weak self] result in
+            guard let self else { return }
+            self.onReferences?(self.locations(from: result))
         }
     }
 
@@ -282,6 +325,13 @@ final class TypeScriptLSPClient {
                     "publishDiagnostics": ["relatedInformation": true],
                     "hover": ["contentFormat": ["markdown", "plaintext"]],
                     "definition": ["linkSupport": true],
+                    "completion": [
+                        "completionItem": [
+                            "snippetSupport": false,
+                            "documentationFormat": ["markdown", "plaintext"],
+                        ],
+                    ],
+                    "references": ["dynamicRegistration": false],
                 ],
             ],
             "workspaceFolders": [["uri": root.absoluteString, "name": root.lastPathComponent]],
@@ -395,8 +445,27 @@ final class TypeScriptLSPClient {
     }
 
     private func location(from result: Any?, source: URL) -> CodeLSPLocation? {
+        let locations = locationValues(from: result)
+        return locations.first(where: { $0.0 != source.standardizedFileURL })?.1 ?? locations.first?.1
+    }
+
+    private func locations(from result: Any?) -> [CodeLSPLocation] {
+        var seen = Set<String>()
+        return locationValues(from: result)
+            .map(\.1)
+            .filter {
+                let key = "\($0.path):\($0.range.start.line):\($0.range.start.character)"
+                return seen.insert(key).inserted
+            }
+            .sorted {
+                ($0.path, $0.range.start.line, $0.range.start.character)
+                    < ($1.path, $1.range.start.line, $1.range.start.character)
+            }
+    }
+
+    private func locationValues(from result: Any?) -> [(URL, CodeLSPLocation)] {
         let values = result as? [[String: Any]] ?? (result as? [String: Any]).map { [$0] } ?? []
-        let locations = values.compactMap { value -> (URL, CodeLSPLocation)? in
+        return values.compactMap { value -> (URL, CodeLSPLocation)? in
             guard let uri = (value["targetUri"] ?? value["uri"]) as? String,
               let url = URL(string: uri),
               let path = relativePath(for: url),
@@ -404,7 +473,6 @@ final class TypeScriptLSPClient {
             else { return nil }
             return (url.standardizedFileURL, CodeLSPLocation(path: path, range: range))
         }
-        return locations.first(where: { $0.0 != source.standardizedFileURL })?.1 ?? locations.first?.1
     }
 
     nonisolated static func position(in text: String, utf16Offset: Int) -> CodeLSPPosition {
@@ -431,6 +499,10 @@ final class TypeScriptLSPClient {
 
     nonisolated static func supports(path: String) -> Bool {
         ["ts", "tsx", "js", "jsx", "mjs", "cjs"].contains((path as NSString).pathExtension.lowercased())
+    }
+
+    nonisolated static func supports(project: CodeProject) -> Bool {
+        project.files.contains { supports(path: $0.path) }
     }
 
     private static func languageID(for url: URL) -> String {
@@ -467,6 +539,25 @@ final class TypeScriptLSPClient {
     private static func hoverText(from result: Any?) -> String? {
         guard let result = result as? [String: Any] else { return nil }
         return markupText(result["contents"])
+    }
+
+    nonisolated static func completionItems(from result: Any?) -> [CodeLSPCompletionItem] {
+        let values: [[String: Any]]
+        if let list = result as? [String: Any] {
+            values = list["items"] as? [[String: Any]] ?? []
+        } else {
+            values = result as? [[String: Any]] ?? []
+        }
+        var seen = Set<String>()
+        return values.compactMap { value -> CodeLSPCompletionItem? in
+            guard let label = value["label"] as? String, !label.isEmpty else { return nil }
+            let textEdit = value["textEdit"] as? [String: Any]
+            let insertText = (textEdit?["newText"] as? String) ?? (value["insertText"] as? String) ?? label
+            let item = CodeLSPCompletionItem(label: label,
+                                             detail: value["detail"] as? String,
+                                             insertText: insertText)
+            return seen.insert(item.id).inserted ? item : nil
+        }
     }
 
     private static func markupText(_ value: Any?) -> String? {

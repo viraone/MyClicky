@@ -462,6 +462,8 @@ final class AssistantController {
             panel.state.codeProject = project
             panel.state.codeLSPDiagnostics = [:]
             panel.state.codeLSPHover = nil
+            panel.state.codeLSPCompletions = []
+            panel.state.codeLSPReferences = []
             startLSPIfEnabled(for: project)
             if let focused = panel.state.codeFocusedFile {
                 panel.state.codeDraft = project.file(at: focused)?.text ?? ""
@@ -505,6 +507,8 @@ final class AssistantController {
         panel.state.codeLastSaved = nil
         panel.state.codeLSPDiagnostics = [:]
         panel.state.codeLSPHover = nil
+        panel.state.codeLSPCompletions = []
+        panel.state.codeLSPReferences = []
         ActivityLog.recordAction("code-project-remove", [:])
     }
 
@@ -513,7 +517,7 @@ final class AssistantController {
     private func startLSPIfEnabled(for project: CodeProject) {
         if panel.state.codeLSPEnabled {
             typeScriptLSP.start(for: project)
-        } else if project.detectedStack.contains(where: { $0.name == "TypeScript" }) {
+        } else if TypeScriptLSPClient.supports(project: project) {
             panel.state.codeLSPStatus = .disabled
         } else {
             panel.state.codeLSPStatus = .inactive
@@ -529,6 +533,8 @@ final class AssistantController {
         state.codeLSPDiagnostics = [:]
         state.codeLSPHover = nil
         state.codeLSPDiagnosticPreview = nil
+        state.codeLSPCompletions = []
+        state.codeLSPReferences = []
         guard let project = state.codeProject else {
             state.codeLSPStatus = .inactive
             return
@@ -931,6 +937,25 @@ final class AssistantController {
                                             line: location.range.start.line + 1,
                                             lineCount: max(1, location.range.end.line - location.range.start.line + 1)))
         }
+        typeScriptLSP.onCompletions = { [weak self] items in
+            guard let self else { return }
+            self.panel.state.codeLSPCompletions = items
+            self.panel.state.codeLSPCompletionRequest += 1
+            if items.isEmpty {
+                self.hud.report("No completions found at the caret.", ok: false)
+            }
+        }
+        typeScriptLSP.onReferences = { [weak self] locations in
+            guard let self else { return }
+            let visible = locations.filter { self.panel.state.codeProject?.file(at: $0.path) != nil }
+            self.panel.state.codeLSPReferences = visible
+            if visible.isEmpty {
+                let message = locations.isEmpty
+                    ? "No references found for that symbol."
+                    : "References are outside the files loaded into Peeky."
+                self.hud.report(message, ok: false)
+            }
+        }
         panel.state.onSubmit = { [weak self] text in
             self?.handleQuestion(text)
         }
@@ -993,6 +1018,13 @@ final class AssistantController {
         }
         panel.state.onLSPDefinition = { [weak self] path, offset, text in
             self?.typeScriptLSP.definition(path: path, characterOffset: offset, text: text)
+        }
+        panel.state.onLSPCompletion = { [weak self] path, offset, text in
+            self?.typeScriptLSP.completions(path: path, characterOffset: offset, text: text)
+        }
+        panel.state.onLSPReferences = { [weak self] path, offset, text in
+            self?.panel.state.codeLSPReferences = []
+            self?.typeScriptLSP.references(path: path, characterOffset: offset, text: text)
         }
         panel.state.onToggleLSP = { [weak self] in self?.toggleLSP() }
         panel.state.onCodeProviderChanged = { [weak self] provider in

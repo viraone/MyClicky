@@ -17,6 +17,9 @@ struct CodeTextEditor: NSViewRepresentable {
     var onFind: (() -> Void)?
     var onEscape: (() -> Void)?
     var onSelectionChange: ((Int) -> Void)?
+    var onCompletion: ((Int) -> Void)?
+    var completions: [CodeLSPCompletionItem] = []
+    var completionRequest = 0
     var diagnostics: [CodeEditorDiagnosticHighlight] = []
     var language: SyntaxHighlighter.Language = .other
     /// Scroll to and select this 1-based line once, then call `onDidJump`.
@@ -73,6 +76,10 @@ struct CodeTextEditor: NSViewRepresentable {
 
         textView.onFind = { [weak coordinator = context.coordinator] in coordinator?.parent.onFind?() }
         textView.onEscape = { [weak coordinator = context.coordinator] in coordinator?.parent.onEscape?() }
+        textView.onCompletion = { [weak coordinator = context.coordinator, weak textView] in
+            guard let coordinator, let textView else { return }
+            coordinator.parent.onCompletion?(textView.selectedRange().location)
+        }
 
         scroll.documentView = textView
         scroll.hasVerticalRuler = true
@@ -105,7 +112,7 @@ struct CodeTextEditor: NSViewRepresentable {
                 textView.undoManager?.endUndoGrouping()
             }
             (scroll.verticalRulerView as? CodeLineNumberRuler)?.rebuildLines()
-            (textView as? FindableTextView)?.refreshBracketMatch()
+            textView.refreshBracketMatch()
             let end = (text as NSString).length
             textView.setSelectedRange(NSRange(location: min(selected.location, end), length: 0))
             if let storage = textView.textStorage {
@@ -117,6 +124,13 @@ struct CodeTextEditor: NSViewRepresentable {
         context.coordinator.language = language
         applyHighlights(to: textView, coordinator: context.coordinator)
         applyDiagnostics(to: textView, coordinator: context.coordinator)
+        if completionRequest != context.coordinator.completionRequest {
+            context.coordinator.completionRequest = completionRequest
+            let entries = completions
+            DispatchQueue.main.async { [weak textView] in
+                textView?.presentCompletions(entries)
+            }
+        }
         if let line = jumpToLine, line > 0 {
             let ns = textView.string as NSString
             var index = 0, current = 1
@@ -192,9 +206,10 @@ struct CodeTextEditor: NSViewRepresentable {
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: CodeTextEditor
-        weak var textView: NSTextView?
+        weak var textView: FindableTextView?
         var highlightKey = ""
         var diagnosticKey = ""
+        var completionRequest = 0
         var language: SyntaxHighlighter.Language = .other
         private var recolor: DispatchWorkItem?
         init(_ parent: CodeTextEditor) { self.parent = parent }
@@ -227,6 +242,12 @@ struct CodeTextEditor: NSViewRepresentable {
             recolor = work
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
         }
+
+        func textView(_ textView: NSTextView, completions words: [String],
+                      forPartialWordRange charRange: NSRange,
+                      indexOfSelectedItem index: UnsafeMutablePointer<Int>?) -> [String] {
+            (textView as? FindableTextView)?.completionCandidates(for: words) ?? words
+        }
     }
 }
 
@@ -236,6 +257,8 @@ struct CodeTextEditor: NSViewRepresentable {
 final class FindableTextView: NSTextView {
     var onFind: (() -> Void)?
     var onEscape: (() -> Void)?
+    var onCompletion: (() -> Void)?
+    private var completionItems: [CodeLSPCompletionItem] = []
     private var bracketPair: BracketMatcher.Pair?
     private var lastCaretLine: NSRange?
 
@@ -309,7 +332,25 @@ final class FindableTextView: NSTextView {
             onFind()
             return true
         }
+        if flags == [.control], event.charactersIgnoringModifiers == " " {
+            onCompletion?()
+            return true
+        }
         return super.performKeyEquivalent(with: event)
+    }
+
+    func presentCompletions(_ items: [CodeLSPCompletionItem]) {
+        completionItems = items
+        guard !items.isEmpty, window?.firstResponder === self else { return }
+        super.complete(nil)
+    }
+
+    override func complete(_ sender: Any?) {
+        onCompletion?()
+    }
+
+    func completionCandidates(for proposed: [String]) -> [String] {
+        completionItems.isEmpty ? proposed : completionItems.map(\.insertText)
     }
 
     override func cancelOperation(_ sender: Any?) {
