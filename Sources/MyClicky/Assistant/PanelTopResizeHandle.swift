@@ -66,3 +66,61 @@ struct PanelTopResizeHandle: NSViewRepresentable {
         }
     }
 }
+
+/// A split-view drag target that consumes mouse drags before a movable-by-background
+/// panel can interpret them as window movement.
+struct VerticalSplitResizeHandle: NSViewRepresentable {
+    var onDrag: (CGFloat?) -> Void
+
+    func makeNSView(context: Context) -> ResizeView {
+        let view = ResizeView()
+        view.onDrag = onDrag
+        return view
+    }
+
+    func updateNSView(_ view: ResizeView, context: Context) {
+        view.onDrag = onDrag
+    }
+
+    static func dismantleNSView(_ view: ResizeView, coordinator: ()) {
+        view.finishDrag()
+        view.discardCursorRects()
+        view.onDrag = nil
+    }
+
+    final class ResizeView: NSView {
+        var onDrag: ((CGFloat?) -> Void)?
+        private var startScreenY: CGFloat?
+
+        override var mouseDownCanMoveWindow: Bool { false }
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+        override func resetCursorRects() {
+            addCursorRect(visibleRect, cursor: .resizeUpDown)
+        }
+
+        override func mouseDown(with event: NSEvent) {
+            startScreenY = NSEvent.mouseLocation.y
+            onDrag?(0)
+        }
+
+        override func mouseDragged(with event: NSEvent) {
+            guard let startScreenY else { return }
+            onDrag?(startScreenY - NSEvent.mouseLocation.y)
+        }
+
+        override func mouseUp(with event: NSEvent) { finishDrag() }
+        override func cancelOperation(_ sender: Any?) { finishDrag() }
+        override func viewDidHide() { finishDrag() }
+        override func viewWillMove(toWindow newWindow: NSWindow?) {
+            if newWindow !== window { finishDrag() }
+            super.viewWillMove(toWindow: newWindow)
+        }
+
+        func finishDrag() {
+            guard startScreenY != nil else { return }
+            startScreenY = nil
+            onDrag?(nil)
+        }
+    }
+}

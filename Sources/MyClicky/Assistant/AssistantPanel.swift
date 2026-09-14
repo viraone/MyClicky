@@ -1447,7 +1447,10 @@ struct AssistantPanelView: View {
     @FocusState private var findFocused: Bool
     @State private var breathing = false
     @State private var resizeHoverCorner: PanelResizeCorner?
-    @State private var codeViewerExpandHovering = false
+    @State private var codePreviewFraction: CGFloat = 0.65
+    @State private var codePreviewDragStartFraction: CGFloat?
+    @State private var codeFileListHeight: CGFloat = 180
+    @State private var codeFileListDragStartHeight: CGFloat?
     @State private var captureCopyAgainHovering = false
     @State private var captureCopyAgainFlash = false
 
@@ -1675,27 +1678,12 @@ struct AssistantPanelView: View {
                     captureDictateTab
                 case .code:
                     if !state.codeImages.isEmpty { codeImagesRow }
-                    codeProjectCard
                     if state.codeProject != nil {
                         GitHubIntegrationView(model: state.github)
                     }
+                    codeProjectCard
                     if state.codeRunPhase != .idle || !state.codeBuildErrors.isEmpty { codeRunStrip }
-                    let viewerExpanded = state.codeViewerExpanded && !state.codeViewerCollapsed && state.codeFocusedFile != nil
-                    if state.codeShowingFiles, let project = state.codeProject {
-                        codeFileList(project)
-                            // Keep the browser from taking the expanded editor's space.
-                            .frame(maxHeight: state.codeFocusedFile == nil ? .infinity : 180)
-                    }
-                    if let path = state.codeFocusedFile, let file = state.codeProject?.file(at: path) {
-                        codeFileViewer(file)
-                            .frame(maxHeight: viewerExpanded ? .infinity : nil)
-                    }
-                    // With a file or the list up and nothing asked yet, the
-                    // empty log's hint would steal half the height. Expanded,
-                    // the preview fills the remaining space and the log is hidden.
-                    if !viewerExpanded, !state.codeLog.isEmpty || (!state.codeShowingFiles && state.codeFocusedFile == nil) {
-                        codeLogView
-                    }
+                    codeWorkspace
                 case .terminal:
                     terminalTab
                 case .extensions:
@@ -1756,7 +1744,7 @@ struct AssistantPanelView: View {
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(alignment: .trailing) {
             edgeChevron(expanded: true)
-                .padding(.trailing, 3)
+                .padding(.trailing, 14)
         }
         .overlay(alignment: .top) { topEdgeHandle }
         .overlay(alignment: .bottom) { bottomEdgeHandle }
@@ -1765,6 +1753,7 @@ struct AssistantPanelView: View {
         .overlay(alignment: .topTrailing) { resizeHandle(.topTrailing) }
         .overlay(alignment: .bottomLeading) { resizeHandle(.bottomLeading) }
         .overlay(alignment: .bottomTrailing) { resizeHandle(.bottomTrailing) }
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .compositingGroup()
         // Soft outer halo (Spotlight-style) drawn as a blurred rounded rect so
         // the corners stay round, plus a grounding drop shadow.
@@ -2769,6 +2758,140 @@ struct AssistantPanelView: View {
             )
     }
 
+    @ViewBuilder
+    private var codeWorkspace: some View {
+        let viewerExpanded = state.codeViewerExpanded
+            && !state.codeViewerCollapsed
+            && state.codeFocusedFile != nil
+        let showsPreview = state.codeShowingFiles || state.codeFocusedFile != nil
+        let showsLog = !viewerExpanded
+            && (!state.codeLog.isEmpty || (!state.codeShowingFiles && state.codeFocusedFile == nil))
+
+        if showsPreview, showsLog, let project = state.codeProject {
+            GeometryReader { geometry in
+                let dividerHeight: CGFloat = 14
+                let usableHeight = max(geometry.size.height - dividerHeight, 1)
+                let minimumPaneHeight = min(100, usableHeight / 2)
+                let previewHeight = state.codeShowingFiles && state.codeFocusedFile == nil
+                    ? min(max(codeFileListHeight, minimumPaneHeight), usableHeight - minimumPaneHeight)
+                    : min(
+                        max(usableHeight * codePreviewFraction, minimumPaneHeight),
+                        usableHeight - minimumPaneHeight
+                    )
+
+                VStack(spacing: 0) {
+                    codePreview(project, viewerExpanded: false)
+                        .frame(height: previewHeight)
+                    if state.codeShowingFiles && state.codeFocusedFile == nil {
+                        codeFileListResizeHandle(usableHeight: usableHeight,
+                                                 minimumPaneHeight: minimumPaneHeight)
+                            .frame(height: dividerHeight)
+                    } else {
+                        codePreviewResizeHandle(usableHeight: usableHeight,
+                                                minimumPaneHeight: minimumPaneHeight)
+                            .frame(height: dividerHeight)
+                    }
+                    codeLogView
+                        .frame(height: usableHeight - previewHeight)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            if showsPreview, let project = state.codeProject {
+                codePreview(project, viewerExpanded: viewerExpanded)
+            }
+            if showsLog {
+                codeLogView
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func codePreview(_ project: CodeProject, viewerExpanded: Bool) -> some View {
+        if state.codeShowingFiles,
+           let path = state.codeFocusedFile,
+           let file = project.file(at: path) {
+            GeometryReader { geometry in
+                let dividerHeight: CGFloat = 14
+                let usableHeight = max(geometry.size.height - dividerHeight, 1)
+                let minimumPaneHeight = min(80, usableHeight / 2)
+                let fileListHeight = min(
+                    max(codeFileListHeight, minimumPaneHeight),
+                    usableHeight - minimumPaneHeight
+                )
+
+                VStack(spacing: 0) {
+                    codeFileList(project)
+                        .frame(height: fileListHeight)
+                    codeFileListResizeHandle(usableHeight: usableHeight,
+                                             minimumPaneHeight: minimumPaneHeight)
+                        .frame(height: dividerHeight)
+                    codeFileViewer(file)
+                        .frame(height: usableHeight - fileListHeight)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                if state.codeShowingFiles {
+                    codeFileList(project)
+                }
+                if let path = state.codeFocusedFile, let file = project.file(at: path) {
+                    codeFileViewer(file)
+                        .frame(maxHeight: viewerExpanded ? .infinity : nil)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        }
+    }
+
+    private func codeFileListResizeHandle(usableHeight: CGFloat,
+                                          minimumPaneHeight: CGFloat) -> some View {
+        VerticalSplitResizeHandle { translation in
+            if let translation {
+                let start = codeFileListDragStartHeight ?? codeFileListHeight
+                codeFileListDragStartHeight = start
+                codeFileListHeight = min(
+                    max(start + translation, minimumPaneHeight),
+                    usableHeight - minimumPaneHeight
+                )
+            } else {
+                codeFileListDragStartHeight = nil
+            }
+        }
+        .overlay {
+            Capsule()
+                .fill(Color.white.opacity(0.3))
+                .frame(width: 52, height: 4)
+                .allowsHitTesting(false)
+        }
+        .help("Drag up or down to resize the file preview")
+    }
+
+    private func codePreviewResizeHandle(usableHeight: CGFloat,
+                                         minimumPaneHeight: CGFloat) -> some View {
+        VerticalSplitResizeHandle { translation in
+            if let translation {
+                let start = codePreviewDragStartFraction ?? codePreviewFraction
+                codePreviewDragStartFraction = start
+                let minimumFraction = minimumPaneHeight / usableHeight
+                codePreviewFraction = min(
+                    max(start + translation / usableHeight, minimumFraction),
+                    1 - minimumFraction
+                )
+            } else {
+                codePreviewDragStartFraction = nil
+            }
+        }
+        .overlay {
+            Capsule()
+                .fill(Color.white.opacity(0.3))
+                .frame(width: 52, height: 4)
+                .allowsHitTesting(false)
+        }
+        .help("Drag up or down to resize the file preview")
+    }
+
     /// Every file in the project, grouped under its folder — Finder's list
     /// view. Click one to open it in the preview.
     private func codeFileList(_ project: CodeProject) -> some View {
@@ -3070,9 +3193,6 @@ struct AssistantPanelView: View {
         }
         .frame(maxWidth: .infinity)
         .background(codeCardBackground)
-        .overlay(alignment: .bottom) {
-            if !state.codeViewerCollapsed { codeViewerExpandToggle }
-        }
         .id(file.path)
     }
 
@@ -3154,31 +3274,6 @@ struct AssistantPanelView: View {
             .padding(.vertical, 5)
             .background(Color.white.opacity(0.03))
         }
-    }
-
-    /// Slim pill on the bottom edge of the file preview: click to fill the
-    /// tab with the code preview (the log hidden), click again to restore
-    /// the usual split.
-    private var codeViewerExpandToggle: some View {
-        Button {
-            withAnimation(.easeInOut(duration: 0.18)) { state.codeViewerExpanded.toggle() }
-        } label: {
-            Image(systemName: state.codeViewerExpanded ? "chevron.up" : "chevron.down")
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(state.accent)
-                .frame(width: 44, height: 14)
-                .background(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(state.accent.opacity(0.18))
-                        .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .strokeBorder(state.accent.opacity(0.6), lineWidth: 1))
-                )
-        }
-        .buttonStyle(.plain)
-        .opacity(codeViewerExpandHovering ? 1 : 0.55)
-        .onHover { codeViewerExpandHovering = $0 }
-        .offset(y: 8)
-        .help(state.codeViewerExpanded ? "Restore the answer log" : "Expand the code preview")
     }
 
     /// Compact find bar for the file preview: a short field, `3 of 12`,
