@@ -124,6 +124,38 @@ final class TerminalShortcutTests: XCTestCase {
         XCTAssertFalse(session.view.mouseDownCanMoveWindow)
     }
 
+    func testTransparentPanelMarginPassesClicksThrough() {
+        let panel = panel()
+        panel.enableTransparentMarginPassthrough { point, bounds in
+            NSBezierPath(roundedRect: bounds.insetBy(dx: 24, dy: 24),
+                         xRadius: 22, yRadius: 22).contains(point)
+        }
+        panel.orderFrontRegardless()
+        defer { panel.close() }
+
+        panel.refreshMousePassthrough(at: panel.convertPoint(toScreen: NSPoint(x: 12, y: 150)))
+        XCTAssertTrue(panel.ignoresMouseEvents)
+
+        panel.refreshMousePassthrough(at: panel.convertPoint(toScreen: NSPoint(x: 300, y: 150)))
+        XCTAssertFalse(panel.ignoresMouseEvents)
+
+        panel.refreshMousePassthrough(at: panel.convertPoint(toScreen: NSPoint(x: 25, y: 25)))
+        XCTAssertTrue(panel.ignoresMouseEvents, "Rounded transparent corners should not intercept clicks")
+    }
+
+    func testPanelLowersForBackgroundAppAndRaisesWhenClickedAgain() {
+        let panel = panel()
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.orderFrontRegardless()
+        defer { panel.close() }
+
+        panel.lowerForBackgroundInteraction()
+        XCTAssertEqual(panel.level, .normal)
+
+        panel.raiseForPanelInteraction()
+        XCTAssertEqual(panel.level, .floating)
+    }
+
     func testFocusOnMountDoesNotStealLaterFieldFocus() async {
         let panel = panel()
         panel.orderFrontRegardless()
