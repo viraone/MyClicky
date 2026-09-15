@@ -1822,6 +1822,8 @@ final class AssistantController {
         let kind = recordKind
         let target = talkTargetApp
         recordKind = .ask
+        documentaryAskSilenceTask?.cancel()
+        documentaryAskSilenceTask = nil
         Task {
             let heard = await speech.finish()
             if (kind == .talk || kind == .ask || kind == .code), talkStreaming {
@@ -1895,6 +1897,24 @@ final class AssistantController {
         panel.state.transcript = text
         hud.attach(to: panel.screen ?? activeScreen)
         hud.hear(text)
+        if recordKind == .documentary { scheduleDocumentaryAskFinish(after: text) }
+    }
+
+    /// A documentary question ends itself: once the transcript has held still
+    /// for a beat the recording finishes and the question goes to Claude, so
+    /// nobody has to find the mic a second time (the film sat on "Listening…"
+    /// with REC still counting, observed live).
+    private var documentaryAskSilenceTask: Task<Void, Never>?
+    private func scheduleDocumentaryAskFinish(after transcript: String) {
+        documentaryAskSilenceTask?.cancel()
+        guard !transcript.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        documentaryAskSilenceTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_600_000_000)
+            guard !Task.isCancelled, let self, self.recordKind == .documentary,
+                  self.panel.state.status == .listening,
+                  self.panel.state.transcript == transcript else { return }
+            self.endListening()
+        }
     }
 
     /// Streaming dictation insert: while the user is talking to a Messages

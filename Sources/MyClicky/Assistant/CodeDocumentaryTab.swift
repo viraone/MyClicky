@@ -1136,7 +1136,7 @@ struct CodeDocumentaryView: View {
             case .listening:
                 HStack(spacing: 8) {
                     Image(systemName: "waveform").foregroundStyle(accent).symbolEffect(.pulse)
-                    Text("Listening… ask your question, then click the mic to finish.")
+                    Text("Listening… ask your question; it sends itself when you pause.")
                         .foregroundStyle(.white.opacity(0.75))
                     Spacer(minLength: 0)
                     Button("Cancel") { model.cancelAsk() }.buttonStyle(.bordered).controlSize(.small)
