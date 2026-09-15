@@ -4117,7 +4117,7 @@ struct AssistantPanelView: View {
 
     /// The Code tab's question box, down by the send button where a chat
     /// box is expected. It grows with what's in it — paste forty lines of
-    /// code and you see them (⌥↩ adds a line; ↩ sends).
+    /// code and you see them (⇧↩ adds a line; ↩ sends).
     private var bottomInputField: some View {
         ZStack(alignment: .topLeading) {
             if typedQuestion.isEmpty {
@@ -4148,7 +4148,14 @@ struct AssistantPanelView: View {
                 ))
                 .foregroundStyle(.white)
                 .focused($fieldFocused)
-                .onSubmit(submit)
+                .onSubmit {
+                    if NSEvent.modifierFlags.contains(.shift),
+                       let fieldEditor = NSApp.keyWindow?.firstResponder as? NSTextView {
+                        fieldEditor.insertNewlineIgnoringFieldEditor(nil)
+                    } else {
+                        submit()
+                    }
+                }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 10)
