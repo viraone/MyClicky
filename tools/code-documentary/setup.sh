@@ -42,4 +42,4 @@ if [ "$target" != "$HOME/code-documentary" ]; then
   echo "==> tell Peeky where it lives:"
   echo "    defaults write MyClicky documentaryPipelineDir \"$target\""
 fi
-echo "==> done. Open Peeky → Peeky Code Documentary."
+echo "==> done. Open Peeky → Peeky Code Doc."

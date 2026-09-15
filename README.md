@@ -116,7 +116,7 @@ On first use, allow **Screen Recording** in System Settings for MyClicky.
 
 Speak → text is cleaned up by Claude and copied to the clipboard. Shown in the
 panel's **Dictate** tab. The panel has seven tabs: Ask, Capture + Dictate, Talk,
-Peeky Code, Terminal, Peeky Code Documentary, Ext (extensions).
+Peeky Code, Terminal, Peeky Code Doc, Ext (extensions).
 
 ## Peeky Code (questions about a project)
 
@@ -257,9 +257,9 @@ same card. The manifest format, script environment and catalog schema are in
 [`docs/extensions.md`](docs/extensions.md); a runnable sample is in
 [`examples/extensions/hello-peeky/`](examples/extensions/hello-peeky/).
 
-### Peeky Code Documentary
+### Peeky Code Doc
 
-The **Doc** tab turns one code file into a 2–4 minute narrated, animated
+The **Peeky Code Doc** tab turns one code file into a 2–4 minute narrated, animated
 mini-documentary — the "explain it to me like a Netflix doc" way of reading
 code. Drop a file (or paste its path in the box), pick a voice and quality,
 press **Make documentary**. Claude writes a scene-by-scene script (title,
@@ -269,7 +269,7 @@ a pipeline of steps, before/after bars, a list narrowing under a search, two
 collaborators, a checklist, or a callout. Everything after the script is
 local: [Kokoro](https://github.com/hexgrad/kokoro) synthesizes the narration
 and [Manim](https://www.manim.community) renders the film to
-`~/code-documentary/projects/<file>-<stamp>/documentary.mp4`. Recent films
+`~/code-documentary/projects/<file>-<stamp>/documentary.mp4`. The film plays right inside the tab (with rewind, play/pause and skip controls); recent films
 are listed on the tab.
 
 One-time setup (Python 3.12 + Homebrew):

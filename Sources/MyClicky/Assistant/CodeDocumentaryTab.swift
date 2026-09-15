@@ -1,11 +1,13 @@
 import AppKit
+import AVFoundation
+import AVKit
 import SwiftUI
 import UniformTypeIdentifiers
 import os
 
 private let log = Logger(subsystem: "MyClicky", category: "documentary")
 
-/// The Peeky Code Documentary tab: pick a code file, Claude writes a short
+/// The Peeky Code Doc tab: pick a code file, Claude writes a short
 /// documentary script about it, and a local Manim + Kokoro pipeline turns
 /// that into a narrated, animated MP4. Only the script-writing step talks to
 /// Claude; narration and rendering happen on this Mac.
@@ -207,6 +209,74 @@ final class CodeDocumentaryModel: ObservableObject {
     }
 
     func open(_ url: URL) { NSWorkspace.shared.open(url) }
+
+    /// The film currently showing in the tab's built-in player. While set,
+    /// the setup UI is hidden — like ⌘K in a terminal — and the video takes
+    /// the whole tab.
+    @Published var nowPlaying: URL?
+    let player = AVPlayer()
+    @Published var isPlaying = false
+    @Published var playhead: Double = 0
+    @Published var duration: Double = 0
+    private var timeObserver: Any?
+    private var endObserver: NSObjectProtocol?
+
+    func play(_ url: URL) {
+        let item = AVPlayerItem(url: url)
+        player.replaceCurrentItem(with: item)
+        nowPlaying = url
+        playhead = 0
+        duration = 0
+        if timeObserver == nil {
+            timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
+                                                          queue: .main) { [weak self] t in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.playhead = t.seconds
+                    if let d = self.player.currentItem?.duration.seconds, d.isFinite { self.duration = d }
+                    self.isPlaying = self.player.rate != 0
+                }
+            }
+        }
+        if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
+        endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item,
+                                                             queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.isPlaying = false }
+        }
+        player.play()
+        isPlaying = true
+    }
+
+    func togglePlay() {
+        if player.rate != 0 { player.pause(); isPlaying = false }
+        else {
+            if duration > 0, playhead >= duration - 0.25 { player.seek(to: .zero) }
+            player.play(); isPlaying = true
+        }
+    }
+
+    func skip(_ seconds: Double) {
+        let target = max(0, min(playhead + seconds, max(duration, 0)))
+        player.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        playhead = target
+    }
+
+    func seek(to seconds: Double) {
+        player.seek(to: CMTime(seconds: seconds, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        playhead = seconds
+    }
+
+    func restart() { seek(to: 0); if player.rate == 0 { player.play(); isPlaying = true } }
+
+    /// Stop: pause, rewind, and return to the setup screen.
+    func stopPlaying() {
+        player.pause()
+        player.replaceCurrentItem(with: nil)
+        isPlaying = false
+        nowPlaying = nil
+        if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
+        endObserver = nil
+    }
 
     func reveal(_ url: URL) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
 
@@ -432,6 +502,26 @@ final class CodeDocumentaryModel: ObservableObject {
     }
 }
 
+// MARK: - Video surface
+
+/// AVPlayerView without its own controls — the transport bar below it is ours.
+private struct DocumentaryVideoSurface: NSViewRepresentable {
+    let player: AVPlayer
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let v = AVPlayerView()
+        v.player = player
+        v.controlsStyle = .none
+        v.videoGravity = .resizeAspect
+        v.showsFullScreenToggleButton = false
+        return v
+    }
+
+    func updateNSView(_ view: AVPlayerView, context: Context) {
+        if view.player !== player { view.player = player }
+    }
+}
+
 // MARK: - View
 
 /// Splits a byte stream into lines; used from the pipe's readability
@@ -464,6 +554,19 @@ struct CodeDocumentaryView: View {
     let accent: Color
 
     var body: some View {
+        Group {
+            if let url = model.nowPlaying {
+                playerScreen(url)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else {
+                setupScreen
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .animation(.easeInOut(duration: 0.3), value: model.nowPlaying)
+    }
+
+    private var setupScreen: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 header
@@ -488,6 +591,105 @@ struct CodeDocumentaryView: View {
             return true
         }
         .onAppear { model.refreshRecent() }
+    }
+
+    // MARK: Player
+
+    private func playerScreen(_ url: URL) -> some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 10) {
+                Button { model.stopPlaying() } label: {
+                    Label("Back", systemImage: "chevron.left")
+                        .font(.system(size: 12.5, weight: .semibold))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .keyboardShortcut(.escape, modifiers: [])
+                Text(model.recent.first(where: { $0.url == url })?.title ?? url.deletingLastPathComponent().lastPathComponent)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Button { model.reveal(url) } label: { Image(systemName: "folder") }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.white.opacity(0.5))
+                    .help("Show in Finder")
+                Button { model.open(url) } label: { Image(systemName: "arrow.up.forward.app") }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.white.opacity(0.5))
+                    .help("Open in QuickTime")
+            }
+            .padding(.horizontal, 4)
+
+            DocumentaryVideoSurface(player: model.player)
+                .aspectRatio(16 / 9, contentMode: .fit)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                )
+                .onTapGesture { model.togglePlay() }
+
+            transportBar
+        }
+        .padding(.horizontal, 16)
+        .padding(.bottom, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private var transportBar: some View {
+        VStack(spacing: 8) {
+            Slider(value: Binding(get: { model.playhead },
+                                  set: { model.seek(to: $0) }),
+                   in: 0...max(model.duration, 0.01))
+                .tint(accent)
+            HStack(spacing: 6) {
+                Text(timecode(model.playhead))
+                Spacer(minLength: 0)
+                transportButton("backward.end.fill", help: "Restart") { model.restart() }
+                transportButton("gobackward.10", help: "Back 10 seconds (←)") { model.skip(-10) }
+                    .keyboardShortcut(.leftArrow, modifiers: [])
+                Button { model.togglePlay() } label: {
+                    Image(systemName: model.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 20, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 48, height: 48)
+                        .background(Circle().fill(accent))
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.space, modifiers: [])
+                .help(model.isPlaying ? "Pause (space)" : "Play (space)")
+                transportButton("goforward.10", help: "Forward 10 seconds (→)") { model.skip(10) }
+                    .keyboardShortcut(.rightArrow, modifiers: [])
+                transportButton("stop.fill", help: "Stop and go back") { model.stopPlaying() }
+                Spacer(minLength: 0)
+                Text(timecode(model.duration))
+            }
+            .font(.system(size: 11.5, design: .monospaced))
+            .foregroundStyle(.white.opacity(0.55))
+        }
+        .padding(12)
+        .background(card)
+    }
+
+    private func transportButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.85))
+                .frame(width: 36, height: 36)
+                .background(Circle().fill(Color.white.opacity(0.08)))
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+
+    private func timecode(_ s: Double) -> String {
+        guard s.isFinite, s >= 0 else { return "0:00" }
+        let t = Int(s.rounded())
+        return String(format: "%d:%02d", t / 60, t % 60)
     }
 
     private var header: some View {
@@ -600,26 +802,24 @@ struct CodeDocumentaryView: View {
                 Button(role: .cancel) { model.cancel() } label: {
                     Label("Cancel", systemImage: "xmark")
                         .font(.system(size: 13, weight: .semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
                 }
                 .buttonStyle(.bordered)
             } else {
                 Button { model.generate() } label: {
-                    HStack(spacing: 10) {
+                    HStack(spacing: 8) {
                         Image(systemName: "play.fill")
-                        Text("MAKE DOCUMENTARY")
-                            .tracking(1)
+                        Text("Make documentary")
                     }
-                    .font(.system(size: 15, weight: .bold))
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 9)
                     .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
                             .fill(canGenerate ? Color(red: 0.90, green: 0.04, blue: 0.08) : Color.white.opacity(0.12))
                     )
-                    .shadow(color: canGenerate ? Color.red.opacity(0.35) : .clear, radius: 12, y: 4)
                 }
                 .buttonStyle(.plain)
                 .disabled(!canGenerate)
@@ -714,7 +914,7 @@ struct CodeDocumentaryView: View {
                     .truncationMode(.middle)
             }
             Spacer(minLength: 0)
-            Button { model.open(url) } label: { Label("Watch", systemImage: "play.rectangle.fill") }
+            Button { model.play(url) } label: { Label("Watch", systemImage: "play.rectangle.fill") }
                 .buttonStyle(.borderedProminent)
                 .tint(accent)
             Button { model.reveal(url) } label: { Image(systemName: "folder") }
@@ -756,7 +956,7 @@ struct CodeDocumentaryView: View {
                     Text(item.date, style: .relative)
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.35))
-                    Button { model.open(item.url) } label: { Image(systemName: "play.fill") }
+                    Button { model.play(item.url) } label: { Image(systemName: "play.fill") }
                         .buttonStyle(.plain)
                         .foregroundStyle(accent)
                     Button { model.reveal(item.url) } label: { Image(systemName: "folder") }

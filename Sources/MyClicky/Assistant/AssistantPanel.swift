@@ -99,7 +99,7 @@ enum AssistantTab: String, CaseIterable {
     case terminal = "Terminal"
     /// Pick a code file → Claude writes a documentary script → Manim +
     /// Kokoro render a narrated film locally. Only the script step is paid.
-    case documentary = "Peeky Code Documentary"
+    case documentary = "Peeky Code Doc"
     /// Installed extensions (languages, themes, formatters, linters,
     /// actions) and the marketplace to get more.
     case extensions = "Extensions"
