@@ -372,6 +372,10 @@ final class CodeDocumentaryModel: ObservableObject {
     var onSpeak: ((String) -> Void)?
     /// Start the Mac mic for a question about the paused frame.
     var onRequestMic: (() -> Void)?
+    /// Finish the Mac mic and send whatever was heard.
+    var onFinishMic: (() -> Void)?
+    /// Words heard so far while the Mac mic is open for a question.
+    @Published var liveTranscript = ""
     /// Hand the moment over to the full Peeky Ask tab.
     var onGoDeeper: ((String) -> Void)?
     /// A protocol line for the phone (DOC_STATE / DOC_ANSWER / DOC_RECENT).
@@ -414,9 +418,12 @@ final class CodeDocumentaryModel: ObservableObject {
     }
 
     /// Ask pressed (Mac or phone): pause, remember the moment, open the mic.
+    /// Pressed again while listening, it finishes the question.
     func beginAsk() {
         guard isShowingFilm else { return }
+        if askPhase == .listening { onFinishMic?(); return }
         pauseForAsk()
+        liveTranscript = ""
         askPhase = .listening
         onRequestMic?()
     }
@@ -431,6 +438,7 @@ final class CodeDocumentaryModel: ObservableObject {
     func cancelAsk() {
         askTask?.cancel()
         askTask = nil
+        liveTranscript = ""
         askPhase = .idle
     }
 
@@ -1136,12 +1144,19 @@ struct CodeDocumentaryView: View {
             case .listening:
                 HStack(spacing: 8) {
                     Image(systemName: "waveform").foregroundStyle(accent).symbolEffect(.pulse)
-                    Text("Listening… ask your question; it sends itself when you pause.")
-                        .foregroundStyle(.white.opacity(0.75))
+                    if model.liveTranscript.isEmpty {
+                        Text("Listening… ask your question. It sends itself when you pause (the first words take a moment to appear).")
+                            .foregroundStyle(.white.opacity(0.75))
+                    } else {
+                        Text("“\(model.liveTranscript)”")
+                            .italic().foregroundStyle(.white.opacity(0.9))
+                    }
                     Spacer(minLength: 0)
+                    Button("Done") { model.beginAsk() }.buttonStyle(.borderedProminent).tint(accent).controlSize(.small)
                     Button("Cancel") { model.cancelAsk() }.buttonStyle(.bordered).controlSize(.small)
                 }
                 .font(.system(size: 12.5))
+                .lineLimit(2)
                 suggestionChips
             case .thinking(let q):
                 HStack(spacing: 8) {

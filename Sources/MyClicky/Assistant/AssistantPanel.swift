@@ -1967,7 +1967,7 @@ struct AssistantPanelView: View {
                  ? "still listening — ask your next question, or press STOP"
                  : phase == .paused && (state.tab == .ask || state.tab == .code)
                  ? "pause and Peeky answers — keep asking, or press STOP"
-                 : phase.hint)
+                 : phaseHint)
                 .font(.system(size: 13.5, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.7))
                 .lineLimit(1)

@@ -1188,6 +1188,16 @@ final class AssistantController {
             self.showPanel()
             self.beginListening(kind: .documentary)
         }
+        documentary.onFinishMic = { [weak self] in
+            guard let self else { return }
+            if self.panel.state.status == .listening, self.recordKind == .documentary {
+                self.endListening()
+            } else {
+                // The phone holds the mic (or nothing does): take it on the Mac.
+                self.showPanel()
+                self.beginListening(kind: .documentary)
+            }
+        }
         documentary.onSpeak = { [weak self] text in
             guard let self, !self.panel.state.textOnlyMode else { return }
             self.speak(text)
@@ -1832,7 +1842,11 @@ final class AssistantController {
                 return
             }
             if heard.isEmpty {
-                if kind == .documentary { panel.state.documentary.cancelAsk() }
+                if kind == .documentary {
+                    panel.state.status = .idle
+                    panel.state.documentary.askPhase = .failed("Didn't catch that — press Ask and try again, or type your question below.")
+                    return
+                }
                 if panel.state.errorText == nil {
                     panel.state.status = .idle
                     // Goes in errorText, not transcript: the Capture + Dictate
@@ -1897,7 +1911,10 @@ final class AssistantController {
         panel.state.transcript = text
         hud.attach(to: panel.screen ?? activeScreen)
         hud.hear(text)
-        if recordKind == .documentary { scheduleDocumentaryAskFinish(after: text) }
+        if recordKind == .documentary {
+            panel.state.documentary.liveTranscript = text
+            scheduleDocumentaryAskFinish(after: text)
+        }
     }
 
     /// A documentary question ends itself: once the transcript has held still
