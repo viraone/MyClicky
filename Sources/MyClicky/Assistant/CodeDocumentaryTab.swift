@@ -592,35 +592,53 @@ struct CodeDocumentaryView: View {
         .frame(maxWidth: 220)
     }
 
+    private var canGenerate: Bool { model.sourceFile != nil && model.pipelineReady }
+
     private var runRow: some View {
-        HStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             if model.phase.isRunning {
                 Button(role: .cancel) { model.cancel() } label: {
                     Label("Cancel", systemImage: "xmark")
+                        .font(.system(size: 13, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
                 }
                 .buttonStyle(.bordered)
             } else {
                 Button { model.generate() } label: {
-                    Label("Make documentary", systemImage: "play.fill")
-                        .font(.system(size: 13, weight: .semibold))
-                        .padding(.horizontal, 6)
+                    HStack(spacing: 10) {
+                        Image(systemName: "play.fill")
+                        Text("MAKE DOCUMENTARY")
+                            .tracking(1)
+                    }
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(canGenerate ? Color(red: 0.90, green: 0.04, blue: 0.08) : Color.white.opacity(0.12))
+                    )
+                    .shadow(color: canGenerate ? Color.red.opacity(0.35) : .clear, radius: 12, y: 4)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(accent)
-                .disabled(model.sourceFile == nil || !model.pipelineReady)
+                .buttonStyle(.plain)
+                .disabled(!canGenerate)
                 .keyboardShortcut(.return, modifiers: .command)
+                .help(canGenerate ? "Write the script, narrate and render (⌘↩)" : "Choose a code file first")
             }
-            if let title = model.scriptTitle {
-                Text("“\(title)”")
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.7))
+            HStack {
+                if let title = model.scriptTitle {
+                    Text("“\(title)”")
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+                Text(canGenerate ? "⌘↩ · renders in 1–3 min" : "choose a code file above to enable")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.35))
                     .lineLimit(1)
             }
-            Spacer(minLength: 0)
-            Text("Renders in 1–3 min")
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.3))
-                .lineLimit(1)
         }
     }
 
