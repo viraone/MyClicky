@@ -544,19 +544,23 @@ struct CodeDocumentaryView: View {
                     Text("Drop a code file here")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.85))
-                    Text("or choose one, or paste a path in the box below")
+                    Text("or click to choose one, or paste a path in the box below")
                         .font(.system(size: 11.5))
                         .foregroundStyle(.white.opacity(0.4))
                 }
             }
-            Spacer(minLength: 0)
-            Button(model.sourceFile == nil ? "Choose file…" : "Change…") { model.pickFile() }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Button(model.sourceFile == nil ? "Choose…" : "Change…") { model.pickFile() }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .disabled(model.phase.isRunning)
+                .fixedSize()
         }
         .padding(14)
         .frame(maxWidth: .infinity)
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .onTapGesture { if !model.phase.isRunning { model.pickFile() } }
+        .help("Click to choose a file, or drop one here")
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: model.sourceFile == nil ? [6, 5] : []))
@@ -566,19 +570,26 @@ struct CodeDocumentaryView: View {
     }
 
     private var optionsRow: some View {
-        HStack(spacing: 14) {
-            Picker("Voice", selection: $model.voice) {
-                ForEach(CodeDocumentaryModel.voices) { Text($0.label).tag($0.id) }
-            }
-            .frame(maxWidth: 260)
-            Picker("Quality", selection: $model.quality) {
-                ForEach(CodeDocumentaryModel.Quality.allCases) { Text($0.label).tag($0) }
-            }
-            .frame(maxWidth: 220)
-            Spacer(minLength: 0)
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 14) { voicePicker; qualityPicker; Spacer(minLength: 0) }
+            VStack(alignment: .leading, spacing: 8) { voicePicker; qualityPicker }
         }
         .font(.system(size: 12))
         .disabled(model.phase.isRunning)
+    }
+
+    private var voicePicker: some View {
+        Picker("Voice", selection: $model.voice) {
+            ForEach(CodeDocumentaryModel.voices) { Text($0.label).tag($0.id) }
+        }
+        .frame(maxWidth: 260)
+    }
+
+    private var qualityPicker: some View {
+        Picker("Quality", selection: $model.quality) {
+            ForEach(CodeDocumentaryModel.Quality.allCases) { Text($0.label).tag($0) }
+        }
+        .frame(maxWidth: 220)
     }
 
     private var runRow: some View {
@@ -606,9 +617,10 @@ struct CodeDocumentaryView: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
-            Text("A 3-minute film takes about 1–3 minutes to render")
+            Text("Renders in 1–3 min")
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.3))
+                .lineLimit(1)
         }
     }
 
