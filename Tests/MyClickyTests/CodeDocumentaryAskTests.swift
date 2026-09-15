@@ -105,4 +105,23 @@ final class CodeDocumentaryAskTests: XCTestCase {
         XCTAssertEqual(CodeDocumentaryModel.timecode(134.4), "2:14")
         XCTAssertEqual(CodeDocumentaryModel.timecode(-3), "0:00")
     }
+
+    func testVoiceActivityRejectsRoomNoiseAndAcceptsSpeech() {
+        XCTAssertFalse(SpeechService.isLikelyVoice(rms: 0.002, peak: 0.01))
+        XCTAssertFalse(SpeechService.isLikelyVoice(rms: 0.01, peak: 0.02))
+        XCTAssertTrue(SpeechService.isLikelyVoice(rms: 0.008, peak: 0.025))
+        XCTAssertTrue(SpeechService.isLikelyVoice(rms: 0.03, peak: 0.15))
+    }
+
+    func testCancelListeningClosesMicrophone() {
+        let model = CodeDocumentaryModel()
+        var closedMic = false
+        model.onCancelMic = { closedMic = true }
+        model.askPhase = .listening
+
+        model.cancelAsk()
+
+        XCTAssertTrue(closedMic)
+        XCTAssertEqual(model.askPhase, .idle)
+    }
 }

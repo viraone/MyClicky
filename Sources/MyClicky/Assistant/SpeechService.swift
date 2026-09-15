@@ -24,6 +24,7 @@ final class SpeechService {
     private(set) var latestTranscript = ""
 
     var onPartial: ((String) -> Void)?
+    var onVoiceActivity: (() -> Void)?
 
     static func requestPermissions() async -> Bool {
         let speechAuthorized = await withCheckedContinuation { continuation in
@@ -50,8 +51,14 @@ final class SpeechService {
         let format = input.outputFormat(forBus: 0)
         guard format.sampleRate > 0 else { throw ServiceError.noMicrophone }
         let box = requestBox
+        let activityReporter = AudioActivityReporter { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.onVoiceActivity?()
+            }
+        }
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
             box.current?.append(buffer)
+            activityReporter.process(buffer)
         }
         engine.prepare()
         try engine.start()
@@ -177,6 +184,44 @@ final class SpeechService {
             get { lock.lock(); defer { lock.unlock() }; return value }
             set { lock.lock(); value = newValue; lock.unlock() }
         }
+    }
+
+    private final class AudioActivityReporter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var lastReport = ContinuousClock.now
+        private let report: @Sendable () -> Void
+
+        init(report: @escaping @Sendable () -> Void) {
+            self.report = report
+        }
+
+        func process(_ buffer: AVAudioPCMBuffer) {
+            guard let channels = buffer.floatChannelData, buffer.frameLength > 0 else { return }
+            let samples = channels[0]
+            var sumOfSquares: Float = 0
+            var peak: Float = 0
+            for index in 0..<Int(buffer.frameLength) {
+                let magnitude = abs(samples[index])
+                sumOfSquares += magnitude * magnitude
+                peak = max(peak, magnitude)
+            }
+            let rms = sqrt(sumOfSquares / Float(buffer.frameLength))
+            guard SpeechService.isLikelyVoice(rms: rms, peak: peak) else { return }
+
+            lock.lock()
+            let now = ContinuousClock.now
+            guard now - lastReport >= .milliseconds(100) else {
+                lock.unlock()
+                return
+            }
+            lastReport = now
+            lock.unlock()
+            report()
+        }
+    }
+
+    nonisolated static func isLikelyVoice(rms: Float, peak: Float) -> Bool {
+        rms >= 0.008 && peak >= 0.025
     }
 
     enum ServiceError: LocalizedError {

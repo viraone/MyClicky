@@ -375,6 +375,8 @@ final class CodeDocumentaryModel: ObservableObject {
     var onRequestMic: (() -> Void)?
     /// Finish the Mac mic and send whatever was heard.
     var onFinishMic: (() -> Void)?
+    /// Close the Mac mic without submitting the current recording.
+    var onCancelMic: (() -> Void)?
     /// Words heard so far while the Mac mic is open for a question.
     @Published var liveTranscript = ""
     /// Hand the moment over to the full Peeky Ask tab.
@@ -442,6 +444,7 @@ final class CodeDocumentaryModel: ObservableObject {
     }
 
     func cancelAsk() {
+        if askPhase == .listening { onCancelMic?() }
         askTask?.cancel()
         askTask = nil
         remoteAudioTask?.cancel()

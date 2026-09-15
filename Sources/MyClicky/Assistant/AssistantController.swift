@@ -1198,6 +1198,11 @@ final class AssistantController {
                 self.beginListening(kind: .documentary)
             }
         }
+        documentary.onCancelMic = { [weak self] in
+            guard let self, self.panel.state.status == .listening,
+                  self.recordKind == .documentary else { return }
+            self.stop()
+        }
         documentary.onSpeak = { [weak self] text in
             guard let self, !self.panel.state.textOnlyMode else { return }
             self.speak(text)
@@ -1812,18 +1817,36 @@ final class AssistantController {
         speech.onPartial = { [weak self] text in
             self?.applyPartial(text)
         }
+        speech.onVoiceActivity = { [weak self] in
+            self?.noteDocumentaryVoiceActivity()
+        }
         if kind == .talk || kind == .ask || kind == .code { beginTalkStreaming(questionsOnly: kind != .talk) }
 
         Task {
             guard await SpeechService.requestPermissions() else {
-                self.panel.state.errorText = "Microphone or speech recognition permission was denied. Enable both for MyClicky in System Settings → Privacy & Security."
+                guard self.panel.state.status == .listening, self.recordKind == kind else { return }
+                self.failListening(
+                    kind: kind,
+                    message: "Microphone or speech recognition permission was denied. Enable both for MyClicky in System Settings → Privacy & Security.")
                 return
             }
+            guard self.panel.state.status == .listening, self.recordKind == kind else { return }
             do {
                 try self.speech.start()
+                if kind == .documentary { self.scheduleDocumentaryAskWatchdog() }
             } catch {
-                self.panel.state.errorText = error.localizedDescription
+                self.failListening(kind: kind, message: error.localizedDescription)
             }
+        }
+    }
+
+    private func failListening(kind: RecordKind, message: String) {
+        speech.stop()
+        panel.state.status = .idle
+        if kind == .documentary {
+            panel.state.documentary.askPhase = .failed(message)
+        } else {
+            panel.state.errorText = message
         }
     }
 
@@ -1832,8 +1855,7 @@ final class AssistantController {
         let kind = recordKind
         let target = talkTargetApp
         recordKind = .ask
-        documentaryAskSilenceTask?.cancel()
-        documentaryAskSilenceTask = nil
+        cancelDocumentaryAskTimers()
         Task {
             let heard = await speech.finish()
             if (kind == .talk || kind == .ask || kind == .code), talkStreaming {
@@ -1913,25 +1935,48 @@ final class AssistantController {
         hud.hear(text)
         if recordKind == .documentary {
             panel.state.documentary.liveTranscript = text
-            scheduleDocumentaryAskFinish(after: text)
+            scheduleDocumentaryAskFinish(transcript: text)
         }
     }
 
-    /// A documentary question ends itself: once the transcript has held still
-    /// for a beat the recording finishes and the question goes to Claude, so
-    /// nobody has to find the mic a second time (the film sat on "Listening…"
-    /// with REC still counting, observed live).
+    /// A documentary question ends itself after the mic goes quiet. Raw audio
+    /// activity drives this too, because on-device recognition may not publish
+    /// a partial transcript until after a short question has already ended.
     private var documentaryAskSilenceTask: Task<Void, Never>?
-    private func scheduleDocumentaryAskFinish(after transcript: String) {
+    private var documentaryAskWatchdogTask: Task<Void, Never>?
+
+    private func noteDocumentaryVoiceActivity() {
+        guard recordKind == .documentary, panel.state.status == .listening else { return }
+        scheduleDocumentaryAskFinish(transcript: nil)
+    }
+
+    private func scheduleDocumentaryAskFinish(transcript: String?) {
         documentaryAskSilenceTask?.cancel()
-        guard !transcript.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        if let transcript, transcript.trimmingCharacters(in: .whitespaces).isEmpty { return }
         documentaryAskSilenceTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 1_600_000_000)
             guard !Task.isCancelled, let self, self.recordKind == .documentary,
-                  self.panel.state.status == .listening,
-                  self.panel.state.transcript == transcript else { return }
+                  self.panel.state.status == .listening else { return }
+            if let transcript, self.panel.state.transcript != transcript { return }
             self.endListening()
         }
+    }
+
+    private func scheduleDocumentaryAskWatchdog() {
+        documentaryAskWatchdogTask?.cancel()
+        documentaryAskWatchdogTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 12_000_000_000)
+            guard !Task.isCancelled, let self, self.recordKind == .documentary,
+                  self.panel.state.status == .listening else { return }
+            self.endListening()
+        }
+    }
+
+    private func cancelDocumentaryAskTimers() {
+        documentaryAskSilenceTask?.cancel()
+        documentaryAskSilenceTask = nil
+        documentaryAskWatchdogTask?.cancel()
+        documentaryAskWatchdogTask = nil
     }
 
     /// Streaming dictation insert: while the user is talking to a Messages
@@ -2840,6 +2885,7 @@ final class AssistantController {
     /// request, silences speech, and returns the panel to Ready.
     private func stop() {
         let wasStreaming = talkStreaming
+        cancelDocumentaryAskTimers()
         abandonWork()
         if wasStreaming, panel.state.status != .listening {
             remote.broadcast("STOP")
