@@ -97,6 +97,9 @@ enum AssistantTab: String, CaseIterable {
     /// A real shell, started in the Peeky Code project's folder. Local
     /// only — never talks to Claude.
     case terminal = "Terminal"
+    /// Pick a code file → Claude writes a documentary script → Manim +
+    /// Kokoro render a narrated film locally. Only the script step is paid.
+    case documentary = "Peeky Code Doc"
     /// Installed extensions (languages, themes, formatters, linters,
     /// actions) and the marketplace to get more.
     case extensions = "Extensions"
@@ -108,13 +111,14 @@ enum AssistantTab: String, CaseIterable {
         case .talk: "bolt.fill"
         case .code: "chevron.left.forwardslash.chevron.right"
         case .terminal: "terminal"
+        case .documentary: "film.stack"
         case .extensions: "puzzlepiece.extension"
         }
 
     }
 
-    /// Tabs with a mic: everything but the terminal and extensions.
-    var takesVoice: Bool { self != .terminal && self != .extensions }
+    /// Tabs with a mic: everything but the terminal, documentary and extensions.
+    var takesVoice: Bool { self != .terminal && self != .extensions && self != .documentary }
 
     /// One-word name for the half-width column's tab bar.
     var shortName: String {
@@ -124,6 +128,7 @@ enum AssistantTab: String, CaseIterable {
         case .talk: "Talk"
         case .code: "Code"
         case .terminal: "Term"
+        case .documentary: "Doc"
         case .extensions: "Ext"
         }
     }
@@ -523,6 +528,7 @@ final class AssistantState: ObservableObject {
     /// The shell behind the Terminal tab. Lives as long as the panel does,
     /// so switching tabs doesn't lose your session.
     let terminal = TerminalSession()
+    let documentary = CodeDocumentaryModel()
     var onRestartTerminal: (() -> Void)?
 
     /// The file as it currently is on disk (after any Peeky saves).
@@ -1763,6 +1769,8 @@ struct AssistantPanelView: View {
                     codeWorkspace
                 case .terminal:
                     terminalTab
+                case .documentary:
+                    CodeDocumentaryView(model: state.documentary, accent: state.accent)
                 case .extensions:
                     ExtensionsView(state: state)
                 }
@@ -3817,6 +3825,7 @@ struct AssistantPanelView: View {
         switch state.tab {
         case .talk: ""
         case .terminal: "Type a command…"
+        case .documentary: "Paste a file path, or drop a file above…"
         case .extensions: "Search the marketplace…"
         case .code: state.codeProject == nil ? "Drop a project folder here, then ask…"
             : "Ask about \(state.codeFocusedFile.map { ($0 as NSString).lastPathComponent } ?? state.codeProject?.name ?? "your code")…"
@@ -3840,7 +3849,7 @@ struct AssistantPanelView: View {
         case .talk: "Say what you want Peeky to do"
         case .captureDictate: "Start dictation"
         case .code: "Ask about your code by voice"
-        case .terminal, .extensions: "Switch to a tab with a mic"
+        case .terminal, .extensions, .documentary: "Switch to a tab with a mic"
         }
         return Button {
             state.onToggleRecording?()
@@ -4980,6 +4989,7 @@ struct AssistantPanelView: View {
         case .talk: state.onDo?(text)
         case .code: state.onAskCode?(text)
         case .terminal: state.terminal.view.send(txt: text + "\n")
+        case .documentary: _ = state.documentary.setSource(path: text)
         case .extensions: state.marketplace.query = text
         default: state.onSubmit?(text)
         }
@@ -4993,6 +5003,7 @@ struct AssistantPanelView: View {
         case .talk: "talk"
         case .code: "code"
         case .terminal: "terminal"
+        case .documentary: "doc"
         case .extensions: "ext"
         }
     }

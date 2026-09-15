@@ -1,0 +1,98 @@
+{
+  "title": "THE SEARCH BOX",
+  "subtitle": "A short documentary about job-search.spec.ts",
+  "source": "/Users/viradeth/Desktop/RemoteFreedomAutomation/tests/e2e/job-search.spec.ts",
+  "scenes": [
+    {
+      "id": "cold_open",
+      "kind": "title",
+      "narration": "Every day, new remote jobs go live. And between a job seeker and the role they want, there is one small thing. A search box. This is the story of the test that guards it."
+    },
+    {
+      "id": "cast",
+      "kind": "code",
+      "lines": [1, 2],
+      "heading": "The Cast",
+      "narration": "Our story has two main characters. Playwright, the browser automation framework that brings in expect and test. And JobsPage, a page object. It knows where every button and card lives, so the test never has to."
+    },
+    {
+      "id": "nonsense",
+      "kind": "code",
+      "lines": [4, 4],
+      "heading": "A Word That Matches Nothing",
+      "narration": "Then there is this. A string of pure nonsense. It exists for one reason: to guarantee that a search returns absolutely nothing. We will meet it again."
+    },
+    {
+      "id": "hero_function",
+      "kind": "code",
+      "lines": [6, 19],
+      "heading": "The Problem With Tomorrow",
+      "narration": "Here is the problem every end-to-end test faces. The data changes. If you hard-code the words Frontend Engineer at Acme, that job will vanish, and your test will fail for reasons that have nothing to do with your code. So this test refuses to trust tomorrow. It derives its search term from a job that is live right now."
+    },
+    {
+      "id": "hero_walkthrough",
+      "kind": "example",
+      "heading": "deriveSearchTerm, step by step",
+      "steps": [
+        ["Input", "\"Senior Frontend Engineer\""],
+        ["split on non-letters", "[\"Senior\", \"Frontend\", \"Engineer\"]"],
+        ["keep words with 4+ letters", "[\"Senior\", \"Frontend\", \"Engineer\"]"],
+        ["sort longest first", "[\"Frontend\", \"Engineer\", \"Senior\"]"],
+        ["take the first", "\"Frontend\""]
+      ],
+      "narration": "Watch how it works. Take a real job title. Split it wherever the letters stop. Throw away anything shorter than four characters, the small words that match everything. Sort the survivors, longest first, because longer words are more specific. And take the winner. Frontend. A search term that is guaranteed to exist, because it came from the page itself."
+    },
+    {
+      "id": "test_one_setup",
+      "kind": "code",
+      "lines": [21, 33],
+      "heading": "Act One: The Search Narrows",
+      "narration": "Act one. The test opens the jobs page and waits until it is fully loaded. It counts every job on the page. Then it derives a term from the very first title, and types it into the search box."
+    },
+    {
+      "id": "test_one_assert",
+      "kind": "code",
+      "lines": [35, 41],
+      "heading": "Direction, Not Numbers",
+      "narration": "Now, the first assertion. Notice what it does not say. It does not say there should be exactly twelve results. It says: more than zero, and fewer than before. The test checks direction, not a magic number. Numbers change. Direction does not."
+    },
+    {
+      "id": "test_one_mentions",
+      "kind": "code",
+      "lines": [43, 56],
+      "heading": "The Comment That Saves You",
+      "narration": "The final check of act one. Look at the first ten visible results. At least one of them must mention the term. Why only one? Because search also looks inside job descriptions. A card can match without showing the word on its face. Demanding all of them would fail against perfectly correct behaviour. The comment says so, right in the code."
+    },
+    {
+      "id": "test_two",
+      "kind": "code",
+      "lines": [59, 67],
+      "heading": "Act Two: The Empty State",
+      "narration": "Act two. Remember the nonsense word? Here it is. Search for it, and the page should not crash, or hang, or show stale results. It should show a clear, honest empty state. Nothing found."
+    },
+    {
+      "id": "test_three",
+      "kind": "code",
+      "lines": [69, 87],
+      "heading": "Act Three: Clearing the Search",
+      "narration": "Act three. Search, confirm the list shrank, then clear the box. The full list must come back. Once again, no exact number. Just: more than we had while filtered."
+    },
+    {
+      "id": "principles",
+      "kind": "list",
+      "heading": "What This Test Teaches",
+      "items": [
+        "Derive test data from what is live, never from memory",
+        "Assert direction and shape, not exact counts",
+        "Explain the non-obvious assertion in a comment",
+        "Hide the DOM behind a page object"
+      ],
+      "narration": "Three tests. Eighty-seven lines. And four ideas worth stealing. Derive your data from what is live. Assert direction, not exact counts. Explain the non-obvious choice right where you make it. And keep the DOM behind a page object, so the test reads like a story. Which, as it turns out, it is."
+    },
+    {
+      "id": "credits",
+      "kind": "credits",
+      "narration": "The Search Box. Based on job-search.spec.ts. Narrated, animated, and rendered on your machine."
+    }
+  ]
+}

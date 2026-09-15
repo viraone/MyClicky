@@ -115,8 +115,8 @@ On first use, allow **Screen Recording** in System Settings for MyClicky.
 ## Dictate (hold Option–Command–V)
 
 Speak → text is cleaned up by Claude and copied to the clipboard. Shown in the
-panel's **Dictate** tab. The panel has six tabs: Ask, Capture + Dictate, Talk,
-Peeky Code, Terminal, Ext (extensions).
+panel's **Dictate** tab. The panel has seven tabs: Ask, Capture + Dictate, Talk,
+Peeky Code, Terminal, Peeky Code Doc, Ext (extensions).
 
 ## Peeky Code (questions about a project)
 
@@ -256,6 +256,32 @@ its folder on the tab, pasting a git URL, or picking it from the built-in
 same card. The manifest format, script environment and catalog schema are in
 [`docs/extensions.md`](docs/extensions.md); a runnable sample is in
 [`examples/extensions/hello-peeky/`](examples/extensions/hello-peeky/).
+
+### Peeky Code Doc
+
+The **Peeky Code Doc** tab turns one code file into a 2–4 minute narrated, animated
+mini-documentary — the "explain it to me like a Netflix doc" way of reading
+code. Drop a file (or paste its path in the box), pick a voice and quality,
+press **Make documentary**. Claude writes a scene-by-scene script (title,
+code walkthroughs with a highlight sweeping the lines, a worked example,
+takeaways, credits) and picks a themed illustration for each code scene —
+a pipeline of steps, before/after bars, a list narrowing under a search, two
+collaborators, a checklist, or a callout. Everything after the script is
+local: [Kokoro](https://github.com/hexgrad/kokoro) synthesizes the narration
+and [Manim](https://www.manim.community) renders the film to
+`~/code-documentary/projects/<file>-<stamp>/documentary.mp4`. The film plays right inside the tab (with rewind, play/pause and skip controls); recent films
+are listed on the tab.
+
+One-time setup (Python 3.12 + Homebrew):
+
+```sh
+tools/code-documentary/setup.sh          # creates ~/code-documentary with a .venv
+```
+
+The pipeline is plain Python in [`tools/code-documentary/`](tools/code-documentary/)
+and runs by hand too: write a `script.json` in a folder and run
+`.venv/bin/python make_doc.py <folder>`. To keep it somewhere else,
+`defaults write MyClicky documentaryPipelineDir /path`.
 
 ## Peeky Remote (iOS app)
 
