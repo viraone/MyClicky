@@ -44,13 +44,16 @@ struct CodeAnswerCards: View {
         let location = state.codeLocate(code: code, find: previous, tagged: tagged)
         let target: String? = location?.path ?? state.codeFocusedFile
         let alreadyThere = target.map { state.codeBlockIsAlreadyInFile(code, path: $0) } ?? false
+        let canApply = target.map {
+            CodeBlockApplicability.canApply(language: language, to: $0, hasMatchedPrevious: previous != nil)
+        } ?? false
         let live = target.flatMap { state.codeLiveText(of: $0) }
         let rewrite = live.map { CodeBlockApplier.apply(code, replacing: nil, in: $0).1 == .rewroteFile } ?? false
         let old = !alreadyThere && target != nil ? (previous ?? (rewrite ? live : nil)) : nil
         let changes = old.map { LineDiff.diff($0, code) }
         return VStack(alignment: .leading, spacing: 0) {
             codeBlockHeader(language: language, code: code, previous: previous, location: location, target: target,
-                            index: index, changes: changes)
+                            canApply: canApply, index: index, changes: changes)
             if previous != nil, let changes, !codeRawBlocks.contains(index) {
                 codeDiffBody(changes)
             } else {
@@ -75,7 +78,7 @@ struct CodeAnswerCards: View {
 
     private func codeBlockHeader(language: String, code: String, previous: String?,
                                  location: CodeBlockLocator.Location?, target: String?,
-                                 index: Int, changes: [LineDiff.Line]?) -> some View {
+                                 canApply: Bool, index: Int, changes: [LineDiff.Line]?) -> some View {
         let targetName: String? = target.map { ($0 as NSString).lastPathComponent }
         let alreadyThere: Bool = target.map { state.codeBlockIsAlreadyInFile(code, path: $0) } ?? false
         return HStack(spacing: 8) {
@@ -119,16 +122,18 @@ struct CodeAnswerCards: View {
                             .help("Toggle diff / replacement code")
                         }
                     }
-                    Button {
-                        state.onApplyCodeBlock?(code, previous, target)
-                    } label: {
-                        Label("Apply to \(name)", systemImage: "arrow.down.doc")
+                    if canApply {
+                        Button {
+                            state.onApplyCodeBlock?(code, previous, target)
+                        } label: {
+                            Label("Apply to \(name)", systemImage: "arrow.down.doc")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(AssistantPhase.done.color)
+                        .help(previous == nil
+                              ? "Put this code into \(target)"
+                              : "Replace the code shown before it with this, in \(target)")
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(AssistantPhase.done.color)
-                    .help(previous == nil
-                          ? "Put this code into \(target)"
-                          : "Replace the code shown before it with this, in \(target)")
                 }
             }
         }

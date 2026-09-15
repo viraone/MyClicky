@@ -2764,19 +2764,22 @@ struct AssistantPanelView: View {
             && !state.codeViewerCollapsed
             && state.codeFocusedFile != nil
         let showsPreview = state.codeShowingFiles || state.codeFocusedFile != nil
+        let previewIsResizable = state.codeShowingFiles
+            || (state.codeFocusedFile != nil && !state.codeViewerCollapsed)
         let showsLog = !viewerExpanded
             && (!state.codeLog.isEmpty || (!state.codeShowingFiles && state.codeFocusedFile == nil))
 
-        if showsPreview, showsLog, let project = state.codeProject {
+        if previewIsResizable, showsLog, let project = state.codeProject {
             GeometryReader { geometry in
                 let dividerHeight: CGFloat = 14
                 let usableHeight = max(geometry.size.height - dividerHeight, 1)
-                let minimumPaneHeight = min(100, usableHeight / 2)
+                let minimumPreviewHeight = min(100, usableHeight / 2)
+                let minimumLogHeight = min(36, usableHeight / 2)
                 let previewHeight = state.codeShowingFiles && state.codeFocusedFile == nil
-                    ? min(max(codeFileListHeight, minimumPaneHeight), usableHeight - minimumPaneHeight)
+                    ? min(max(codeFileListHeight, minimumPreviewHeight), usableHeight - minimumPreviewHeight)
                     : min(
-                        max(usableHeight * codePreviewFraction, minimumPaneHeight),
-                        usableHeight - minimumPaneHeight
+                        max(usableHeight * codePreviewFraction, minimumPreviewHeight),
+                        usableHeight - minimumLogHeight
                     )
 
                 VStack(spacing: 0) {
@@ -2784,11 +2787,12 @@ struct AssistantPanelView: View {
                         .frame(height: previewHeight)
                     if state.codeShowingFiles && state.codeFocusedFile == nil {
                         codeFileListResizeHandle(usableHeight: usableHeight,
-                                                 minimumPaneHeight: minimumPaneHeight)
+                                                 minimumPaneHeight: minimumPreviewHeight)
                             .frame(height: dividerHeight)
                     } else {
                         codePreviewResizeHandle(usableHeight: usableHeight,
-                                                minimumPaneHeight: minimumPaneHeight)
+                                                minimumPreviewHeight: minimumPreviewHeight,
+                                                minimumLogHeight: minimumLogHeight)
                             .frame(height: dividerHeight)
                     }
                     codeLogView
@@ -2808,7 +2812,19 @@ struct AssistantPanelView: View {
 
     @ViewBuilder
     private func codePreview(_ project: CodeProject, viewerExpanded: Bool) -> some View {
-        if state.codeShowingFiles,
+        if state.codeViewerCollapsed {
+            VStack(alignment: .leading, spacing: 10) {
+                if state.codeShowingFiles {
+                    codeFileList(project)
+                }
+                if let path = state.codeFocusedFile, let file = project.file(at: path) {
+                    codeFileViewer(file)
+                }
+            }
+            .frame(maxWidth: .infinity,
+                   maxHeight: state.codeShowingFiles ? .infinity : nil,
+                   alignment: .top)
+        } else if state.codeShowingFiles,
            let path = state.codeFocusedFile,
            let file = project.file(at: path) {
             GeometryReader { geometry in
@@ -2869,15 +2885,17 @@ struct AssistantPanelView: View {
     }
 
     private func codePreviewResizeHandle(usableHeight: CGFloat,
-                                         minimumPaneHeight: CGFloat) -> some View {
+                                         minimumPreviewHeight: CGFloat,
+                                         minimumLogHeight: CGFloat) -> some View {
         VerticalSplitResizeHandle { translation in
             if let translation {
                 let start = codePreviewDragStartFraction ?? codePreviewFraction
                 codePreviewDragStartFraction = start
-                let minimumFraction = minimumPaneHeight / usableHeight
+                let minimumFraction = minimumPreviewHeight / usableHeight
+                let maximumFraction = 1 - minimumLogHeight / usableHeight
                 codePreviewFraction = min(
                     max(start + translation / usableHeight, minimumFraction),
-                    1 - minimumFraction
+                    maximumFraction
                 )
             } else {
                 codePreviewDragStartFraction = nil
