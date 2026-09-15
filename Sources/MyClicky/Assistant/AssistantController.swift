@@ -2039,7 +2039,7 @@ final class AssistantController {
         case .ask: .ask
         case .captureDictate: .dictate
         case .talk: .talk
-        case .code, .terminal, .extensions: .code
+        case .code, .terminal, .extensions, .documentary: .code
         }
         if panel.state.status == .listening || talkStreaming {
             if recordKind == kind {
