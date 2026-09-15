@@ -42,8 +42,9 @@ final class CodeDocumentaryAskTests: XCTestCase {
     func testAnswerParsingFallsBackToChapterLines() {
         let a = CodeDocumentaryModel.parseAnswer(
             ["answer": "It picks the longest word.", "verified": true, "lines": [12, 14]],
-            question: "Why?", fallbackLines: 6...19)
+            question: "Why?", fallbackLines: 6...19, excerpt: "  12  let longest = words.max()")
         XCTAssertEqual(a.lines, 12...14)
+        XCTAssertEqual(a.excerpt, "  12  let longest = words.max()")
         XCTAssertTrue(a.verified)
         XCTAssertTrue(a.steps.isEmpty)
 

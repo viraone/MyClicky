@@ -335,6 +335,8 @@ final class CodeDocumentaryModel: ObservableObject {
         let text: String
         /// Lines of the source the answer is about — highlighted under the film.
         let lines: ClosedRange<Int>?
+        /// Code that was visible when this question was asked.
+        let excerpt: String
         /// False when Claude is inferring rather than reading it off the code.
         let verified: Bool
         /// "Show me" mode: an ordered walkthrough rendered as animated steps.
@@ -478,7 +480,8 @@ final class CodeDocumentaryModel: ObservableObject {
                     userText: Self.askUserText(moment: m, question: q, mode: mode),
                     maxTokens: 1_200, timeout: 60, effort: "medium")
                 guard let self, !Task.isCancelled else { return }
-                let answer = Self.parseAnswer(json, question: q, fallbackLines: m.chapter?.lines)
+                let answer = Self.parseAnswer(
+                    json, question: q, fallbackLines: m.chapter?.lines, excerpt: m.excerpt)
                 self.askHistory.append(answer)
                 self.askPhase = .answered(answer)
                 self.onRemoteLine?("DOC_ANSWER " + answer.text.replacingOccurrences(of: "\n", with: "\u{2028}"))
@@ -766,7 +769,12 @@ final class CodeDocumentaryModel: ObservableObject {
         return s
     }
 
-    static func parseAnswer(_ json: [String: Any], question: String, fallbackLines: ClosedRange<Int>?) -> Answer {
+    static func parseAnswer(
+        _ json: [String: Any],
+        question: String,
+        fallbackLines: ClosedRange<Int>?,
+        excerpt: String = ""
+    ) -> Answer {
         let text = (json["answer"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         var lines = fallbackLines
         if let r = json["lines"] as? [Any], r.count == 2,
@@ -775,7 +783,8 @@ final class CodeDocumentaryModel: ObservableObject {
         }
         let steps = (json["steps"] as? [Any])?.compactMap { $0 as? String }.filter { !$0.isEmpty } ?? []
         return Answer(question: question, text: text.isEmpty ? "I couldn't work that out from what's on screen." : text,
-                      lines: lines, verified: (json["verified"] as? Bool) ?? true, steps: steps)
+                      lines: lines, excerpt: excerpt,
+                      verified: (json["verified"] as? Bool) ?? true, steps: steps)
     }
 
     /// Back to the home screen with a clean slate, ready for another code file.
@@ -1220,10 +1229,49 @@ struct CodeDocumentaryView: View {
                         .foregroundStyle(.white.opacity(0.5))
                 }
             }
+
+            ScrollViewReader { proxy in
+                ScrollView(.vertical) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(Array(model.askHistory.enumerated()), id: \.offset) { index, answer in
+                            answerBody(answer, key: "history-\(index)")
+                        }
+                        currentAskContent
+                        Color.clear.frame(height: 1).id("documentary-ask-bottom")
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.trailing, 6)
+                }
+                .scrollIndicators(.visible)
+                .frame(maxHeight: 460)
+                .onAppear {
+                    proxy.scrollTo("documentary-ask-bottom", anchor: .bottom)
+                }
+                .onChange(of: model.askHistory.count) {
+                    withAnimation { proxy.scrollTo("documentary-ask-bottom", anchor: .bottom) }
+                }
+                .onChange(of: model.askPhase) {
+                    withAnimation { proxy.scrollTo("documentary-ask-bottom", anchor: .bottom) }
+                }
+            }
+
             switch model.askPhase {
-            case .idle:
+            case .answered, .failed:
+                answerActions
+            default:
                 EmptyView()
-            case .listening:
+            }
+        }
+        .padding(12)
+        .background(card)
+    }
+
+    @ViewBuilder private var currentAskContent: some View {
+        switch model.askPhase {
+        case .idle, .answered:
+            EmptyView()
+        case .listening:
+            VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 8) {
                     Image(systemName: "waveform").foregroundStyle(accent).symbolEffect(.pulse)
                     if model.liveTranscript.isEmpty {
@@ -1240,28 +1288,22 @@ struct CodeDocumentaryView: View {
                 .font(.system(size: 14))
                 .lineLimit(2)
                 suggestionChips
-            case .thinking(let q):
-                questionBubble(q)
-                HStack(spacing: 10) {
-                    ProgressView().controlSize(.small)
-                    Text("Peeky is answering from the code on screen…")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.75))
-                }
-                .padding(12)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(responseBubbleBackground)
-            case .answered(let a):
-                answerBody(a)
-                answerActions
-            case .failed(let message):
-                Label(message, systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: 14)).foregroundStyle(.orange)
-                answerActions
             }
+        case .thinking(let q):
+            questionBubble(q, key: "current")
+            HStack(spacing: 10) {
+                ProgressView().controlSize(.small)
+                Text("Peeky is answering from the code on screen…")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.75))
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(responseBubbleBackground)
+        case .failed(let message):
+            Label(message, systemImage: "exclamationmark.triangle.fill")
+                .font(.system(size: 14)).foregroundStyle(.orange)
         }
-        .padding(12)
-        .background(card)
     }
 
     private var suggestionChips: some View {
@@ -1281,9 +1323,9 @@ struct CodeDocumentaryView: View {
         }
     }
 
-    private func answerBody(_ a: CodeDocumentaryModel.Answer) -> some View {
+    private func answerBody(_ a: CodeDocumentaryModel.Answer, key: String) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            questionBubble(a.question)
+            questionBubble(a.question, key: key)
             VStack(alignment: .leading, spacing: 9) {
                 HStack(spacing: 6) {
                     Image(systemName: "sparkles")
@@ -1298,7 +1340,7 @@ struct CodeDocumentaryView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
                 if !a.steps.isEmpty { stepsView(a.steps) }
-                if let lines = a.lines, let excerpt = highlightedExcerpt(lines) { excerpt }
+                if let lines = a.lines, let excerpt = highlightedExcerpt(lines, excerpt: a.excerpt) { excerpt }
                 HStack(spacing: 6) {
                     Image(systemName: a.verified ? "checkmark.seal.fill" : "questionmark.circle")
                     Text(a.verified ? "Read from the code on screen" : "Peeky's interpretation — not verified in the code shown")
@@ -1307,7 +1349,7 @@ struct CodeDocumentaryView: View {
                 .foregroundStyle(a.verified ? Color.green.opacity(0.8) : Color.orange.opacity(0.85))
                 HStack {
                     Spacer()
-                    copyAnswerButton(a.text, key: "response", help: "Copy Peeky's response")
+                    copyAnswerButton(a.text, key: "\(key)-response", help: "Copy Peeky's response")
                 }
             }
             .padding(13)
@@ -1316,7 +1358,7 @@ struct CodeDocumentaryView: View {
         }
     }
 
-    private func questionBubble(_ question: String) -> some View {
+    private func questionBubble(_ question: String, key: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Image(systemName: "person.fill")
@@ -1331,7 +1373,7 @@ struct CodeDocumentaryView: View {
                 .textSelection(.enabled)
             HStack {
                 Spacer()
-                copyAnswerButton(question, key: "question", help: "Copy your question")
+                copyAnswerButton(question, key: "\(key)-question", help: "Copy your question")
             }
         }
         .padding(12)
@@ -1415,8 +1457,7 @@ struct CodeDocumentaryView: View {
     }
 
     /// The chapter's code with the answer's lines lit in the accent colour.
-    private func highlightedExcerpt(_ lines: ClosedRange<Int>) -> AnyView? {
-        let excerpt = model.moment.excerpt
+    private func highlightedExcerpt(_ lines: ClosedRange<Int>, excerpt: String) -> AnyView? {
         guard !excerpt.isEmpty else { return nil }
         let rows = excerpt.components(separatedBy: "\n")
         return AnyView(
