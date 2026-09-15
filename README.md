@@ -288,7 +288,11 @@ The Peeky Remote's **PEEKY DOC** cartridge is the same session on the phone:
 its **Ask Peeky** button pauses the Mac and records on the phone, the answer
 and the Show me / Go deeper / Resume controls appear there too, and the
 transport (restart, ±10s, play/pause, stop, scrubber) drives the film. With
-nothing playing it lists recent films to start with one tap.
+nothing playing it lists recent films to start with one tap. Phone answer
+read-out is **off by default**. Turn on **Read answers aloud** in the PEEKY DOC
+cartridge when wanted; the Mac renders the answer with the documentary's
+saved narrator voice and sends that audio to the phone instead of using
+iOS's robotic system voice.
 
 One-time setup (Python 3.12 + Homebrew):
 

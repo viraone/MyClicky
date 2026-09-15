@@ -100,6 +100,7 @@ final class CodeDocumentaryModel: ObservableObject {
 
     static var pythonURL: URL { pipelineDir.appendingPathComponent(".venv/bin/python") }
     static var makeDocURL: URL { pipelineDir.appendingPathComponent("make_doc.py") }
+    static var narrateURL: URL { pipelineDir.appendingPathComponent("narrate.py") }
     static var projectsDir: URL { pipelineDir.appendingPathComponent("projects") }
 
     var pipelineReady: Bool {
@@ -382,6 +383,11 @@ final class CodeDocumentaryModel: ObservableObject {
     var onRemoteLine: ((String) -> Void)?
     private var lastPublishedSecond = -1
     private var askTask: Task<Void, Never>?
+    private var remoteAudioTask: Task<Void, Never>?
+    private(set) var remoteReadoutEnabled = false
+    private var activeNarratorEngine = "kokoro"
+    private var activeNarratorVoice = "am_michael"
+    private var activeNarratorSpeed = "0.95"
 
     var isShowingFilm: Bool { nowPlaying != nil }
 
@@ -438,6 +444,8 @@ final class CodeDocumentaryModel: ObservableObject {
     func cancelAsk() {
         askTask?.cancel()
         askTask = nil
+        remoteAudioTask?.cancel()
+        remoteAudioTask = nil
         liveTranscript = ""
         askPhase = .idle
     }
@@ -459,6 +467,7 @@ final class CodeDocumentaryModel: ObservableObject {
         askPhase = .thinking(q)
         ActivityLog.recordAction("doc-ask", ["q": q, "t": m.timecode])
         askTask?.cancel()
+        remoteAudioTask?.cancel()
         askTask = Task { [weak self] in
             do {
                 let json = try await AnthropicService(apiKey: apiKey).requestJSON(
@@ -470,7 +479,12 @@ final class CodeDocumentaryModel: ObservableObject {
                 self.askHistory.append(answer)
                 self.askPhase = .answered(answer)
                 self.onRemoteLine?("DOC_ANSWER " + answer.text.replacingOccurrences(of: "\n", with: "\u{2028}"))
-                self.onSpeak?(answer.steps.isEmpty ? answer.text : answer.steps.joined(separator: ". "))
+                let spoken = answer.steps.isEmpty ? answer.text : answer.steps.joined(separator: ". ")
+                if self.remoteReadoutEnabled {
+                    self.sendNarratorAudio(spoken)
+                } else {
+                    self.onSpeak?(spoken)
+                }
             } catch is CancellationError {
             } catch {
                 guard let self else { return }
@@ -548,6 +562,55 @@ final class CodeDocumentaryModel: ObservableObject {
         publishState()
     }
 
+    /// Render an interactive answer with the film's narrator, then send the
+    /// small WAV to the phone. Audio is opt-in on the phone and stays local.
+    private func sendNarratorAudio(_ text: String) {
+        remoteAudioTask?.cancel()
+        let python = Self.pythonURL
+        let narrate = Self.narrateURL
+        let engine = activeNarratorEngine
+        let voice = activeNarratorVoice
+        let speed = activeNarratorSpeed
+        let pipeline = Self.pipelineDir
+        remoteAudioTask = Task { [weak self] in
+            let audio: Data? = await Task.detached(priority: .userInitiated) {
+                let temp = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("peeky-doc-answer-\(UUID().uuidString)", isDirectory: true)
+                let input = temp.appendingPathComponent("answer.txt")
+                let output = temp.appendingPathComponent("answer.m4a")
+                defer { try? FileManager.default.removeItem(at: temp) }
+                do {
+                    try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+                    try text.write(to: input, atomically: true, encoding: .utf8)
+                    let proc = Process()
+                    proc.executableURL = python
+                    proc.arguments = [narrate.path, "--text-file", input.path, "--output", output.path]
+                    proc.currentDirectoryURL = pipeline
+                    var env = ProcessInfo.processInfo.environment
+                    env["TTS_ENGINE"] = engine
+                    switch engine {
+                    case "elevenlabs": env["ELEVENLABS_VOICE_ID"] = voice
+                    case "say": env["SAY_VOICE"] = voice
+                    default:
+                        env["KOKORO_VOICE"] = voice
+                        env["KOKORO_SPEED"] = speed
+                    }
+                    env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin")
+                    proc.environment = env
+                    try proc.run()
+                    proc.waitUntilExit()
+                    guard proc.terminationStatus == 0, !Task.isCancelled else { return nil }
+                    return try Data(contentsOf: output)
+                } catch {
+                    log.error("Could not render documentary answer audio: \(error.localizedDescription, privacy: .public)")
+                    return nil
+                }
+            }.value
+            guard !Task.isCancelled, let self, self.remoteReadoutEnabled, let audio else { return }
+            self.onRemoteLine?("DOC_AUDIO \(audio.base64EncodedString())")
+        }
+    }
+
     /// Phone-side `DOC <action>` commands.
     func handleRemote(_ command: String) {
         let parts = command.split(separator: " ", maxSplits: 1).map(String.init)
@@ -565,6 +628,12 @@ final class CodeDocumentaryModel: ObservableObject {
         case "SUGGEST": askSuggested(Int(rest) ?? 0)
         case "SHOW_ME": showMe()
         case "DEEPER": goDeeper()
+        case "READOUT":
+            remoteReadoutEnabled = rest.uppercased() == "ON"
+            if !remoteReadoutEnabled {
+                remoteAudioTask?.cancel()
+                remoteAudioTask = nil
+            }
         case "STOP": stopPlaying()
         case "PLAY_RECENT":
             refreshRecent()
@@ -583,6 +652,15 @@ final class CodeDocumentaryModel: ObservableObject {
         filmTitle = recent.first(where: { $0.url == film })?.title ?? dir.lastPathComponent
         sourcePath = ""
         sourceLines = []
+        activeNarratorEngine = "kokoro"
+        activeNarratorVoice = voice
+        activeNarratorSpeed = "0.95"
+        if let vdata = FileManager.default.contents(atPath: dir.appendingPathComponent("audio/voice.json").path),
+           let metadata = try? JSONSerialization.jsonObject(with: vdata) as? [String: Any] {
+            activeNarratorEngine = metadata["engine"] as? String ?? activeNarratorEngine
+            activeNarratorVoice = metadata["voice"] as? String ?? activeNarratorVoice
+            if let speed = metadata["speed"] as? NSNumber { activeNarratorSpeed = speed.stringValue }
+        }
         guard let data = FileManager.default.contents(atPath: dir.appendingPathComponent("script.json").path),
               let script = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
         if let t = script["title"] as? String, !t.isEmpty { filmTitle = t }

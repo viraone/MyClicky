@@ -23,7 +23,8 @@ import Network
 ///                    ASK <question> or DOC ASK_TEXT <question>), STOP_ASK,
 ///                    PLAYPAUSE, SKIP <±seconds>, SEEK <seconds>, RESTART,
 ///                    RESUME (after an answer), SUGGEST <i> (one of the
-///                    suggested questions), SHOW_ME, DEEPER, STOP,
+///                    suggested questions), SHOW_ME, DEEPER,
+///                    READOUT ON|OFF (phone narrator audio; defaults off), STOP,
 ///                    PLAY_RECENT <i> (start the i-th recent film)
 ///   EXT <verb>[\t<key>=<value>\t…] – run an installed extension's action
 ///                    verb directly, with optional parameters; the Mac
@@ -110,6 +111,8 @@ import Network
 ///   DOC_STATE <title>\t<NONE|PLAYING|PAUSED>\t<pos>\t<dur>\t<chapter>\t<file:lines>\t<IDLE|LISTENING|THINKING|ANSWERED|FAILED>\t<q|q|q>
 ///                  – the film on Peeky Code Doc, sent on every change and once a second while playing
 ///   DOC_ANSWER <text> – Peeky's answer to a question about the paused frame (newlines as U+2028)
+///   DOC_AUDIO <base64 M4A> – the same answer rendered with the film's narrator;
+///                    sent only after the phone opts in with DOC READOUT ON
 ///   DOC_RECENT <title>|<title>… – films available to DOC PLAY_RECENT, newest first
 @MainActor
 final class RemoteControlService {
@@ -142,7 +145,7 @@ final class RemoteControlService {
     var onExtension: ((String, [String: String]) -> Void)?
     /// `DOC <action>` — Peeky Code Doc: ASK, ASK_TEXT <q>, STOP_ASK, PLAYPAUSE,
     /// SKIP <±s>, SEEK <s>, RESTART, RESUME, SUGGEST <i>, SHOW_ME, DEEPER,
-    /// STOP, PLAY_RECENT <i>.
+    /// READOUT ON|OFF, STOP, PLAY_RECENT <i>.
     var onDocumentary: ((String) -> Void)?
     /// `SCREEN <n>`: put Peeky (panel and pointer) on display n, 1-based in
     /// the order macOS lists them — 1 is the built-in display when present.

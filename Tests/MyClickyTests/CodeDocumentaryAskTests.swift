@@ -91,6 +91,15 @@ final class CodeDocumentaryAskTests: XCTestCase {
         XCTAssertNil(model.nowPlaying)
     }
 
+    func testRemoteReadoutIsOptIn() {
+        let model = CodeDocumentaryModel()
+        XCTAssertFalse(model.remoteReadoutEnabled)
+        model.handleRemote("READOUT ON")
+        XCTAssertTrue(model.remoteReadoutEnabled)
+        model.handleRemote("READOUT OFF")
+        XCTAssertFalse(model.remoteReadoutEnabled)
+    }
+
     func testTimecode() {
         XCTAssertEqual(CodeDocumentaryModel.timecode(0), "0:00")
         XCTAssertEqual(CodeDocumentaryModel.timecode(134.4), "2:14")

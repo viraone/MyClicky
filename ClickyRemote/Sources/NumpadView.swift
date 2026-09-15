@@ -55,6 +55,8 @@ struct NumpadView: View {
     @State private var mode: RemoteMode = .remote
     /// Playlist the Spotify "Add to playlist" button targets; editable by tapping the label.
     @AppStorage("spotifyPlaylist") private var spotifyPlaylist = "Playlist 2027"
+    /// Documentary answers are silent on the phone unless the user opts in.
+    @AppStorage("documentaryReadoutEnabled") private var documentaryReadoutEnabled = false
     @State private var editingPlaylist = false
     @State private var playlistDraft = ""
     /// The pending single-tap Open, held back until the double-tap window
@@ -194,6 +196,9 @@ struct NumpadView: View {
             client.resume()
         }
         .onChange(of: client.status) { _, status in
+            if status == .connected, mode == .doc {
+                client.setDocumentaryReadout(documentaryReadoutEnabled)
+            }
             // The Mac went away mid-recording (relaunched, slept, dropped off
             // Wi-Fi). Left alone, the recorder keeps banking words and the next
             // TALK tap — a *stop* — would fire the whole stale transcript at a
@@ -435,6 +440,7 @@ struct NumpadView: View {
             if newMode == .doc {
                 client.show()
                 client.tab("DOC")
+                client.setDocumentaryReadout(documentaryReadoutEnabled)
             }
         }
 
@@ -1458,6 +1464,32 @@ struct NumpadView: View {
                 }
             }
             .padding(.horizontal, 4)
+
+            HStack(spacing: 8) {
+                Image(systemName: documentaryReadoutEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                    .foregroundStyle(documentaryReadoutEnabled ? Snes.doc : .white.opacity(0.45))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Read answers aloud")
+                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                    Text(documentaryReadoutEnabled ? "Documentary narrator" : "Off by default")
+                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+                Spacer()
+                Toggle("", isOn: $documentaryReadoutEnabled)
+                    .labelsHidden()
+                    .tint(Snes.doc)
+                    .onChange(of: documentaryReadoutEnabled) { _, enabled in
+                        client.setDocumentaryReadout(enabled)
+                        statusText = enabled
+                            ? "Documentary narrator will read answers"
+                            : "Answer read-out is off"
+                    }
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(RoundedRectangle(cornerRadius: 12).fill(.white.opacity(0.06)))
 
             if d.showing {
                 docAskCard(d)

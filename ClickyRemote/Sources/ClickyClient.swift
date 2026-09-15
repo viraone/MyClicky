@@ -96,6 +96,8 @@ final class ClickyClient: ObservableObject {
     private var heartbeat: Task<Void, Never>?
     private var waitingTimeout: Task<Void, Never>?
     private let speechSynthesizer = AVSpeechSynthesizer()
+    private var documentaryAudioPlayer: AVAudioPlayer?
+    private var documentaryReadoutEnabled = false
 
     func start() {
         let params = NWParameters()
@@ -223,7 +225,11 @@ final class ClickyClient: ObservableObject {
                         } else if line.hasPrefix("DOC_ANSWER ") {
                             let text = String(line.dropFirst(11)).replacingOccurrences(of: "\u{2028}", with: "\n")
                             self.docAnswer = text
-                            self.speak(text)
+                        } else if line.hasPrefix("DOC_AUDIO ") {
+                            let encoded = String(line.dropFirst(10))
+                            if self.documentaryReadoutEnabled, let audio = Data(base64Encoded: encoded) {
+                                self.playDocumentaryAudio(audio)
+                            }
                         } else if line.hasPrefix("DOC_RECENT ") {
                             self.docRecent = line.dropFirst(11).split(separator: "|").map(String.init).filter { !$0.isEmpty }
                         } else if line.hasPrefix("YOUTUBE_STATE ") {
@@ -381,6 +387,28 @@ final class ClickyClient: ObservableObject {
     private func speak(_ text: String) {
         guard !text.isEmpty else { return }
         speechSynthesizer.speak(AVSpeechUtterance(string: text))
+    }
+
+    /// Documentary answers use the film's rendered narrator, never the
+    /// phone's system TTS voice. This is opt-in and defaults to silent.
+    func setDocumentaryReadout(_ enabled: Bool) {
+        documentaryReadoutEnabled = enabled
+        if !enabled {
+            documentaryAudioPlayer?.stop()
+            documentaryAudioPlayer = nil
+        }
+        doc("READOUT \(enabled ? "ON" : "OFF")")
+    }
+
+    private func playDocumentaryAudio(_ data: Data) {
+        do {
+            documentaryAudioPlayer?.stop()
+            documentaryAudioPlayer = try AVAudioPlayer(data: data)
+            documentaryAudioPlayer?.prepareToPlay()
+            documentaryAudioPlayer?.play()
+        } catch {
+            documentaryAudioPlayer = nil
+        }
     }
 
     /// TALK mode: universal voice command — the Mac plans and executes it.

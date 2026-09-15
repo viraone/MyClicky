@@ -5,6 +5,10 @@ Engines (pick with TTS_ENGINE=kokoro|elevenlabs|say):
   - elevenlabs : used automatically when ELEVENLABS_API_KEY is set
   - say        : macOS built-in fallback
 Writes audio/<scene_id>.wav and audio/durations.json.
+
+The desktop app also uses this module to render one interactive-answer clip
+with the same engine and voice:
+  narrate.py --text-file /tmp/answer.txt --output /tmp/answer.wav
 """
 
 from __future__ import annotations
@@ -76,10 +80,43 @@ def duration(path: Path) -> float:
     return float(out)
 
 
+def selected_engine():
+    return {"elevenlabs": eleven_labs, "kokoro": kokoro_tts, "say": mac_say}[ENGINE]
+
+
+def voice_metadata() -> dict:
+    if ENGINE == "elevenlabs":
+        return {"engine": ENGINE, "voice": ELEVEN_VOICE}
+    if ENGINE == "say":
+        return {"engine": ENGINE, "voice": SAY_VOICE}
+    return {"engine": ENGINE, "voice": KOKORO_VOICE, "speed": KOKORO_SPEED}
+
+
 def main() -> None:
+    if "--text-file" in sys.argv or "--output" in sys.argv:
+        if "--text-file" not in sys.argv or "--output" not in sys.argv:
+            raise SystemExit("--text-file and --output must be used together")
+        text_path = Path(sys.argv[sys.argv.index("--text-file") + 1])
+        out = Path(sys.argv[sys.argv.index("--output") + 1])
+        text = text_path.read_text().strip()
+        if not text:
+            raise SystemExit("answer text is empty")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        rendered = out if out.suffix.lower() == ".wav" else out.with_suffix(".wav")
+        selected_engine()(text, rendered)
+        if rendered != out:
+            subprocess.run(
+                ["ffmpeg", "-y", "-loglevel", "error", "-i", rendered,
+                 "-c:a", "aac", "-b:a", "96k", out],
+                check=True,
+            )
+            rendered.unlink()
+        print(out)
+        return
+
     script = json.loads((PROJECT / "script.json").read_text())
     AUDIO.mkdir(exist_ok=True)
-    engine = {"elevenlabs": eleven_labs, "kokoro": kokoro_tts, "say": mac_say}[ENGINE]
+    engine = selected_engine()
     label = {"elevenlabs": "ElevenLabs", "kokoro": f"Kokoro ({KOKORO_VOICE})", "say": f"macOS say ({SAY_VOICE})"}[ENGINE]
     print(f"narration engine: {label}")
 
@@ -92,6 +129,7 @@ def main() -> None:
         print(f"  {scene['id']:<20} {durations[scene['id']]:6.2f}s")
 
     (AUDIO / "durations.json").write_text(json.dumps(durations, indent=2))
+    (AUDIO / "voice.json").write_text(json.dumps(voice_metadata(), indent=2))
     print(f"total narration: {sum(durations.values()):.1f}s")
 
 
