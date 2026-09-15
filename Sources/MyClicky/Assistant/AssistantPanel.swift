@@ -1245,6 +1245,20 @@ final class AssistantPanelController {
         panel.isMovableByWindowBackground = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.setContentSize(Self.expandedSize)
+        panel.enableTransparentMarginPassthrough(
+            interactiveRegion: { [weak state] point, bounds in
+                guard let state else { return true }
+                if state.collapsed {
+                    return true
+                }
+                let card = bounds.insetBy(dx: Self.glowMargin, dy: Self.glowMargin)
+                let radius: CGFloat = state.strip ? 16 : 22
+                return NSBezierPath(roundedRect: card, xRadius: radius, yRadius: radius).contains(point)
+            },
+            shouldLowerForBackgroundClick: { [weak state] in
+                state?.collapsed == false
+            }
+        )
         state.onDismiss = { [weak self] in self?.hide() }
         state.onRelaunch = { Self.relaunch() }
         state.onQuit = { NSApp.terminate(nil) }
@@ -1370,6 +1384,11 @@ final class AssistantPanelController {
 
 final class KeyablePanel: NSPanel {
     override var canBecomeKey: Bool { true }
+    private var mouseInteractionRegion: ((NSPoint, NSRect) -> Bool)?
+    private var shouldLowerForBackgroundClick: (() -> Bool)?
+    private var localMouseMonitor: Any?
+    private var globalMouseMonitor: Any?
+    private var mousePassthroughTimer: Timer?
     /// Return true to consume Esc (e.g. to stop an in-flight answer) instead of closing.
     var onCancel: (() -> Bool)?
     /// ⌘V anywhere in the panel. Return true for terminal paste or a Code
@@ -1384,6 +1403,64 @@ final class KeyablePanel: NSPanel {
     var onToggleCodeExpand: (() -> Bool)?
     /// ⌘+/⌘-/⌘0 in the Code editor. Positive/negative values zoom; zero resets.
     var onCodeZoom: ((Int) -> Bool)?
+
+    func enableTransparentMarginPassthrough(
+        interactiveRegion: @escaping (NSPoint, NSRect) -> Bool,
+        shouldLowerForBackgroundClick: @escaping () -> Bool = { true }
+    ) {
+        mouseInteractionRegion = interactiveRegion
+        self.shouldLowerForBackgroundClick = shouldLowerForBackgroundClick
+        acceptsMouseMovedEvents = true
+        let mouseEvents: NSEvent.EventTypeMask = [
+            .mouseMoved, .leftMouseDown, .rightMouseDown, .otherMouseDown,
+        ]
+        localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: mouseEvents) { [weak self] event in
+            if event.type == .mouseMoved {
+                self?.refreshMousePassthrough()
+            } else {
+                self?.raiseForPanelInteraction()
+            }
+            return event
+        }
+        globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: mouseEvents) { [weak self] event in
+            if event.type == .mouseMoved {
+                self?.refreshMousePassthrough()
+            } else {
+                self?.lowerForBackgroundInteraction()
+            }
+        }
+        let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.refreshMousePassthrough()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        mousePassthroughTimer = timer
+        refreshMousePassthrough()
+    }
+
+    func refreshMousePassthrough(at screenPoint: NSPoint = NSEvent.mouseLocation) {
+        guard let mouseInteractionRegion, isVisible else { return }
+        let point = convertPoint(fromScreen: screenPoint)
+        ignoresMouseEvents = !mouseInteractionRegion(point, contentView?.bounds ?? .zero)
+    }
+
+    func raiseForPanelInteraction() {
+        level = .floating
+        orderFrontRegardless()
+    }
+
+    func lowerForBackgroundInteraction() {
+        guard isVisible, shouldLowerForBackgroundClick?() == true else { return }
+        level = .normal
+        orderBack(nil)
+    }
+
+    deinit {
+        if let localMouseMonitor { NSEvent.removeMonitor(localMouseMonitor) }
+        if let globalMouseMonitor { NSEvent.removeMonitor(globalMouseMonitor) }
+        mousePassthroughTimer?.invalidate()
+    }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
