@@ -3930,7 +3930,7 @@ struct AssistantPanelView: View {
                     } else if state.tab == .code {
                         codeProviderMenu
                     }
-                    if state.tab == .code || state.tab == .terminal {
+                    if state.tab == .code || state.tab == .terminal || state.tab == .documentary {
                         bottomInputField
                     } else {
                         promptReadout
@@ -4122,8 +4122,12 @@ struct AssistantPanelView: View {
         ZStack(alignment: .topLeading) {
             if typedQuestion.isEmpty {
                 Text(inputPlaceholder)
-                    .font(.system(size: 14, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.45))
+                    .font(.system(
+                        size: state.tab == .documentary ? 15 : 14,
+                        weight: .medium,
+                        design: state.tab == .documentary ? .default : .monospaced
+                    ))
+                    .foregroundStyle(.white.opacity(state.tab == .documentary ? 0.7 : 0.45))
                     .lineLimit(1)
                     .allowsHitTesting(false)
                     .padding(.leading, 2)
@@ -4137,7 +4141,11 @@ struct AssistantPanelView: View {
                     fieldFocused = true
                     state.codePrefillQuestion = nil
                 }
-                .font(.system(size: 14, weight: .medium, design: .monospaced))
+                .font(.system(
+                    size: state.tab == .documentary ? 15 : 14,
+                    weight: .medium,
+                    design: state.tab == .documentary ? .default : .monospaced
+                ))
                 .foregroundStyle(.white)
                 .focused($fieldFocused)
                 .onSubmit(submit)
@@ -4145,9 +4153,15 @@ struct AssistantPanelView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.06)))
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(state.tab == .documentary ? state.accent.opacity(0.10) : Color.white.opacity(0.06)))
         .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .strokeBorder(Color.white.opacity(fieldFocused ? 0.22 : 0.10), lineWidth: 1))
+            .strokeBorder(
+                state.tab == .documentary
+                    ? state.accent.opacity(fieldFocused ? 0.85 : 0.45)
+                    : Color.white.opacity(fieldFocused ? 0.22 : 0.10),
+                lineWidth: state.tab == .documentary ? 1.5 : 1
+            ))
     }
 
     private var promptReadout: some View {
