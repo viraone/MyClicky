@@ -33,8 +33,18 @@ PAD = 0.6
 
 class Documentary(Scene):
     def construct(self) -> None:
+        # Wall-clock range of every scene, so a host app can map a paused
+        # timestamp back to the chapter, its code lines and narration.
+        timeline = []
         for scene in SCRIPT["scenes"]:
+            start = self._clock()
             getattr(self, f"scene_{scene['kind']}")(scene)
+            timeline.append({"id": scene["id"], "start": round(start, 2), "end": round(self._clock(), 2)})
+        (PROJECT / "timeline.json").write_text(json.dumps({"scenes": timeline}, indent=2))
+
+    def _clock(self) -> float:
+        t = getattr(self.renderer, "time", None)
+        return float(t if t is not None else getattr(self, "time", 0.0))
 
     # ---- helpers ---------------------------------------------------------
 

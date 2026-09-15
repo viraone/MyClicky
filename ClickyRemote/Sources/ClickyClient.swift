@@ -31,6 +31,40 @@ final class ClickyClient: ObservableObject {
     /// Current Mac panel layout, acknowledged after a remote layout command.
     @Published var peekyLayout = "HIDDEN"
 
+    /// The film on the Mac's Peeky Code Doc tab, mirrored from DOC_STATE.
+    struct DocState: Equatable {
+        var title = ""
+        /// NONE, PLAYING or PAUSED.
+        var state = "NONE"
+        var position = 0.0
+        var duration = 0.0
+        var chapter = ""
+        var codeRef = ""
+        /// IDLE, LISTENING, THINKING, ANSWERED or FAILED.
+        var askPhase = "IDLE"
+        var suggestions: [String] = []
+
+        var showing: Bool { state != "NONE" }
+        var playing: Bool { state == "PLAYING" }
+        var timecode: String {
+            let t = Int(position.rounded())
+            return String(format: "%d:%02d", t / 60, t % 60)
+        }
+        var durationCode: String {
+            let t = Int(duration.rounded())
+            return String(format: "%d:%02d", t / 60, t % 60)
+        }
+        var momentLabel: String {
+            let what = chapter.isEmpty ? title : chapter
+            return what.isEmpty ? timecode : "\(timecode) · \(what)"
+        }
+    }
+    @Published var doc = DocState()
+    /// Peeky's last answer about the paused frame.
+    @Published var docAnswer = ""
+    /// Films the Mac can start with DOC PLAY_RECENT <index>, newest first.
+    @Published var docRecent: [String] = []
+
     /// Progress of an in-flight DO command, or a READ description — shown in
     /// large text and spoken aloud by TALK mode.
     @Published var talkMessage = ""
@@ -169,6 +203,29 @@ final class ClickyClient: ObservableObject {
                             }
                         } else if line.hasPrefix("PEEKY_LAYOUT ") {
                             self.peekyLayout = String(line.dropFirst(13))
+                        } else if line.hasPrefix("DOC_STATE ") {
+                            let f = line.dropFirst(10).split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+                            if f.count >= 8 {
+                                var d = DocState()
+                                d.title = f[0]
+                                d.state = f[1]
+                                d.position = Double(f[2]) ?? 0
+                                d.duration = Double(f[3]) ?? 0
+                                d.chapter = f[4]
+                                d.codeRef = f[5]
+                                d.askPhase = f[6]
+                                d.suggestions = f[7].split(separator: "|").map(String.init).filter { !$0.isEmpty }
+                                if d.askPhase == "IDLE" || d.askPhase == "LISTENING" || d.askPhase == "THINKING", !d.showing || self.doc.title != d.title {
+                                    self.docAnswer = ""
+                                }
+                                self.doc = d
+                            }
+                        } else if line.hasPrefix("DOC_ANSWER ") {
+                            let text = String(line.dropFirst(11)).replacingOccurrences(of: "\u{2028}", with: "\n")
+                            self.docAnswer = text
+                            self.speak(text)
+                        } else if line.hasPrefix("DOC_RECENT ") {
+                            self.docRecent = line.dropFirst(11).split(separator: "|").map(String.init).filter { !$0.isEmpty }
                         } else if line.hasPrefix("YOUTUBE_STATE ") {
                             self.youtubeCollapsed = line.dropFirst(14).trimmingCharacters(in: .whitespaces) == "COLLAPSED"
                         } else if line.hasPrefix("STATUS ") {
@@ -366,6 +423,8 @@ final class ClickyClient: ObservableObject {
     func savePhoto(_ base64JPEG: String) { send("SAVE_PHOTO \(base64JPEG)") }
     func browserReload() { send("BROWSER RELOAD") }
     func ask(_ question: String) { send("ASK \(question)") }
+    /// Peeky Code Doc: transport and Ask for the film on the Mac.
+    func doc(_ action: String) { send("DOC \(action.replacingOccurrences(of: "\n", with: " "))") }
     func dictate(_ text: String) { send("DICTATE \(text)") }
     /// Streams in-progress speech so the Mac panel shows words as you talk.
     func partial(_ text: String) {

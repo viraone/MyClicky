@@ -19,7 +19,7 @@ struct NumpadView: View {
     /// True after tapping "1"/"3": speech goes to the Mac clipboard, not a question.
     @State private var dictateMode = false
     /// Which target the current recording is for.
-    enum RecordTarget { case ask, dictate, whatsapp, talk }
+    enum RecordTarget { case ask, dictate, whatsapp, talk, doc }
     @State private var recordTarget: RecordTarget = .ask
     /// Which WhatsApp chat the current dictation is for.
     @State private var whatsappChat: WhatsAppChat = .test
@@ -60,12 +60,15 @@ struct NumpadView: View {
     /// The pending single-tap Open, held back until the double-tap window
     /// closes; a second tap cancels it and sends Quit instead.
     @State private var youtubeOpenTap: DispatchWorkItem?
+    /// Where the Doc scrubber is being dragged to; sent as one SEEK on release.
+    @State private var docScrub: Double?
 
     enum RemoteMode: String, CaseIterable {
         /// The keypad. Talk isn't a mode: its button rides in the corner of
         /// every pad (see `cornerTalkButton`), so it needs no cartridge.
         case remote = "Mobile Peeky"
         case code = "PEEKY CODE"
+        case doc = "PEEKY DOC"
         case spotify = "SPOTIFY"
         case whatsapp = "WHATSAPP"
         case youtube = "YOUTUBE"
@@ -74,6 +77,7 @@ struct NumpadView: View {
             switch self {
             case .remote: ""
             case .code: "chevron.left.forwardslash.chevron.right"
+            case .doc: "film.stack"
             case .spotify: "music.note"
             case .whatsapp: "bubble.left.and.bubble.right.fill"
             case .youtube: "play.rectangle.fill"
@@ -86,6 +90,7 @@ struct NumpadView: View {
             switch self {
             case .remote: "PEEKY"
             case .code: "PEEKY CODE"
+            case .doc: "DOC"
             default: rawValue
             }
         }
@@ -94,6 +99,7 @@ struct NumpadView: View {
             switch self {
             case .remote: Snes.purple
             case .code: Snes.red
+            case .doc: Snes.doc
             case .spotify: Snes.spotify
             case .whatsapp: Snes.whatsapp
             case .youtube: Snes.youtube
@@ -104,6 +110,7 @@ struct NumpadView: View {
             switch self {
             case .remote: "Tap PEEKY to move it to the corner, or ON to bring it back"
             case .code: "Peeky Code mode — Terminal and Enter control Peeky on your Mac"
+            case .doc: "Peeky Doc — play a documentary, then Ask Peeky about the moment on screen"
             case .spotify: "Spotify mode — buttons control the Spotify app on your Mac"
             case .whatsapp: "WhatsApp mode — buttons control the WhatsApp app on your Mac"
             case .youtube: "YouTube mode — buttons control the YouTube tab open in your browser"
@@ -219,6 +226,7 @@ struct NumpadView: View {
         [
             RemoteMode.remote.rawValue,
             RemoteMode.code.rawValue,
+            RemoteMode.doc.rawValue,
             "REFRESH",
             RemoteMode.spotify.rawValue,
             RemoteMode.whatsapp.rawValue,
@@ -233,6 +241,7 @@ struct NumpadView: View {
             switch mode {
             case .remote: keypad
             case .code: keypad
+            case .doc: docPad
             case .spotify: spotifyPad
             case .whatsapp: whatsappPad
             case .youtube: youtubePad
@@ -247,7 +256,7 @@ struct NumpadView: View {
             // The trailing padding is what holds it off the right
             // edge — raise it to move Talk further left, lower it to
             // push it back toward the corner.
-            if mode != .remote && mode != .code { cornerTalkButton.padding(.trailing, 44) }
+            if mode != .remote && mode != .code && mode != .doc { cornerTalkButton.padding(.trailing, 44) }
         }
         // A confirmation is the one thing that must not be missed —
         // it used to live on the Talk pad, so it now covers whichever
@@ -423,9 +432,13 @@ struct NumpadView: View {
                 client.show()
                 client.tab("CODE")
             }
+            if newMode == .doc {
+                client.show()
+                client.tab("DOC")
+            }
         }
 
-        guard recorder.isListening, newMode == .code || mode == .code else {
+        guard recorder.isListening, newMode == .code || mode == .code || newMode == .doc || mode == .doc else {
             applySelection()
             return
         }
@@ -1419,6 +1432,258 @@ struct NumpadView: View {
         }
     }
 
+    // MARK: - Peeky Doc pad (second screen for the film on Peeky Code Doc)
+
+    private var docRecording: Bool { recorder.isListening && recordTarget == .doc }
+
+    private var docPad: some View {
+        let d = client.doc
+        return VStack(spacing: 8) {
+            // Header: what's on the Mac right now.
+            HStack(spacing: 8) {
+                Circle().fill(Snes.doc).frame(width: 8, height: 8)
+                Text("Ask Peeky")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                Text(d.showing ? d.momentLabel : "no documentary playing")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .lineLimit(1)
+                Spacer()
+                if !d.codeRef.isEmpty {
+                    Text(d.codeRef)
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.45))
+                        .lineLimit(1)
+                }
+            }
+            .padding(.horizontal, 4)
+
+            if d.showing {
+                docAskCard(d)
+                docTransport(d)
+                if !d.suggestions.isEmpty, d.askPhase == "IDLE" || d.askPhase == "LISTENING" {
+                    docSuggestions(d)
+                }
+            } else {
+                docLibrary
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 20)
+                .fill(LinearGradient(colors: [Color(red: 0.13, green: 0.13, blue: 0.14),
+                                              Color(red: 0.07, green: 0.07, blue: 0.08)],
+                                     startPoint: .top, endPoint: .bottom))
+                .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.white.opacity(0.08), lineWidth: 1))
+                .shadow(color: .black.opacity(0.35), radius: 6, y: 4)
+        )
+        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: d.askPhase)
+    }
+
+    /// The big Ask Peeky button, the thinking spinner, or the answer with its
+    /// follow-ups — whichever the Mac says the session is in.
+    @ViewBuilder private func docAskCard(_ d: ClickyClient.DocState) -> some View {
+        VStack(spacing: 10) {
+            switch d.askPhase {
+            case "THINKING":
+                HStack(spacing: 10) {
+                    ProgressView().tint(.white)
+                    Text("Peeky is looking at \(d.timecode)…")
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.85))
+                }
+                .frame(maxWidth: .infinity, minHeight: 90)
+            case "ANSWERED", "FAILED":
+                ScrollView {
+                    Text(client.docAnswer.isEmpty ? (d.askPhase == "FAILED" ? "Peeky couldn't answer that one." : "…") : client.docAnswer)
+                        .font(.system(size: 15, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                }
+                .frame(maxHeight: 190)
+                .background(spotifyCard)
+                HStack(spacing: 8) {
+                    spotifyTile("list.number", "Show me", accent: Snes.doc) { docTapped("SHOW_ME") }
+                    spotifyTile("arrow.up.right.square", "Go deeper") { docTapped("DEEPER") }
+                    spotifyTile("mic.fill", "Ask another", accent: Snes.doc) { docAskTapped() }
+                }
+                .frame(height: 62)
+                Button { docTapped("RESUME") } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "play.fill")
+                        Text("Resume documentary")
+                    }
+                    .font(.system(size: 15, weight: .black, design: .rounded))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 50)
+                    .background(Capsule().fill(Snes.doc))
+                    .shadow(color: Snes.doc.opacity(0.5), radius: 10, y: 3)
+                }
+                .buttonStyle(SpotifyPressStyle())
+            default:
+                Button { docAskTapped() } label: {
+                    VStack(spacing: 6) {
+                        if docRecording {
+                            WaveformView(level: recorder.level, color: .white)
+                                .frame(height: 30)
+                        } else {
+                            Image(systemName: "mic.fill").font(.system(size: 28, weight: .black))
+                        }
+                        Text(docRecording ? "Listening… tap to send" : "ASK PEEKY")
+                            .font(.system(size: 17, weight: .black, design: .rounded))
+                        Text(docRecording ? recorder.transcript.isEmpty ? "say your question" : recorder.transcript
+                             : "pauses the film and listens")
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .opacity(0.8)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.center)
+                    }
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 110)
+                    .background(
+                        RoundedRectangle(cornerRadius: 18)
+                            .fill(LinearGradient(colors: [Snes.doc.lighter(0.15), Snes.doc],
+                                                 startPoint: .top, endPoint: .bottom))
+                            .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(.white.opacity(docRecording ? 0.8 : 0.2), lineWidth: docRecording ? 2 : 1))
+                            .shadow(color: Snes.doc.opacity(docRecording ? 0.8 : 0.45), radius: docRecording ? 18 : 10, y: 4)
+                    )
+                }
+                .buttonStyle(SpotifyPressStyle())
+                .modifier(KeyRecordingPulse(recording: docRecording))
+            }
+        }
+    }
+
+    /// Restart · −10 · PLAY/PAUSE · +10 · Stop, with a scrubber underneath.
+    private func docTransport(_ d: ClickyClient.DocState) -> some View {
+        VStack(spacing: 4) {
+            HStack(spacing: 0) {
+                spotifyIcon("backward.end.fill", size: 18) { docTapped("RESTART") }
+                spotifyIcon("gobackward.10", size: 22) { docTapped("SKIP -10") }
+                Button { docTapped("PLAYPAUSE") } label: {
+                    Image(systemName: d.playing ? "pause.fill" : "play.fill")
+                        .font(.system(size: 26, weight: .black))
+                        .foregroundStyle(.white)
+                        .frame(width: 62, height: 62)
+                        .background(Circle().fill(Snes.doc))
+                        .shadow(color: Snes.doc.opacity(0.55), radius: 12, y: 4)
+                }
+                .buttonStyle(SpotifyPressStyle())
+                spotifyIcon("goforward.10", size: 22) { docTapped("SKIP 10") }
+                spotifyIcon("stop.fill", size: 18, dim: true) { docTapped("STOP") }
+            }
+            .frame(height: 70)
+            Slider(value: Binding(get: { min(d.position, max(d.duration, 0.01)) },
+                                  set: { docScrub = $0 }),
+                   in: 0...max(d.duration, 0.01)) { editing in
+                if !editing, let t = docScrub {
+                    docTapped("SEEK \(Int(t))")
+                    docScrub = nil
+                }
+            }
+            .tint(Snes.doc)
+            HStack {
+                Text(d.timecode)
+                Spacer()
+                Text(d.durationCode)
+            }
+            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+            .foregroundStyle(.white.opacity(0.5))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(spotifyCard)
+    }
+
+    private func docSuggestions(_ d: ClickyClient.DocState) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(Array(d.suggestions.enumerated()), id: \.offset) { i, q in
+                    Button {
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        client.doc("SUGGEST \(i)")
+                        statusText = "Asked: “\(q)”"
+                    } label: {
+                        Text(q)
+                            .font(.system(size: 13, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 12).padding(.vertical, 8)
+                            .background(Capsule().fill(.white.opacity(0.1)))
+                            .overlay(Capsule().strokeBorder(.white.opacity(0.15), lineWidth: 1))
+                    }
+                    .buttonStyle(SpotifyPressStyle())
+                }
+            }
+            .padding(.horizontal, 2)
+        }
+    }
+
+    /// Nothing playing: the Mac's recent films, one tap to start any of them.
+    private var docLibrary: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(client.docRecent.isEmpty ? "No documentaries yet — make one on your Mac's Peeky Code Doc tab."
+                                          : "Recent documentaries — tap to play on your Mac")
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.6))
+            ScrollView {
+                VStack(spacing: 6) {
+                    ForEach(Array(client.docRecent.prefix(12).enumerated()), id: \.offset) { i, title in
+                        Button {
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            client.doc("PLAY_RECENT \(i)")
+                            statusText = "Playing “\(title)” on your Mac"
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "play.circle.fill")
+                                    .font(.system(size: 22))
+                                    .foregroundStyle(Snes.doc)
+                                Text(title)
+                                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(.white)
+                                    .lineLimit(2)
+                                    .multilineTextAlignment(.leading)
+                                Spacer()
+                            }
+                            .padding(.horizontal, 12).padding(.vertical, 10)
+                            .background(spotifyCard)
+                        }
+                        .buttonStyle(SpotifyPressStyle())
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    /// Ask Peeky: pauses the film on the Mac and records here; a second tap sends.
+    private func docAskTapped() {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        if blockedByActiveRecording(.doc) { return }
+        if !recorder.isListening {
+            recordTarget = .doc
+            dictateMode = false
+        }
+        toggleListening()
+    }
+
+    private func docTapped(_ command: String) {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        client.doc(command)
+        switch command {
+        case "PLAYPAUSE": statusText = client.doc.playing ? "Paused on your Mac" : "Playing on your Mac"
+        case "RESUME": statusText = "Resuming the documentary from \(client.doc.timecode)"
+        case "SHOW_ME": statusText = "Peeky is drawing it out step by step…"
+        case "DEEPER": statusText = "Opened in Peeky Ask on your Mac — the film stays parked here"
+        case "RESTART": statusText = "From the top"
+        case "STOP": statusText = "Stopped — back to the Peeky Code Doc home screen"
+        default: break
+        }
+    }
+
     // MARK: - YouTube pad (controls the active YouTube tab in the browser)
 
     private var youtubePad: some View {
@@ -1870,6 +2135,7 @@ struct NumpadView: View {
         case .talk: running = "TALK"
         case .dictate: running = "DICTATE"
         case .ask: running = "ASK"
+        case .doc: running = "Ask Peeky (Doc)"
         case .whatsapp: running = "the WhatsApp reply"
         }
         showRecordingNotice("\(running) is still recording — stop it first")
@@ -2000,12 +2266,17 @@ struct NumpadView: View {
                 case _ where text.isEmpty:
                     // The Mac is still in its listening state for ask/dictate/talk
                     // (WhatsApp records locally only) — tell it to stand down.
-                    if recordTarget != .whatsapp { client.stopListening() }
+                    if recordTarget == .doc { client.doc("STOP_ASK") }
+                    else if recordTarget != .whatsapp { client.stopListening() }
                     switch recordTarget {
                     case .whatsapp: statusText = "Didn't catch that — tap Reply and try again"
                     case .talk: statusText = "Didn't catch that — press TALK and try again"
+                    case .doc: statusText = "Didn't catch that — tap Ask Peeky and try again"
                     default: statusText = "Didn't catch that — tap \(dictateMode ? "DICTATE" : "ASK") and try again"
                     }
+                case .doc:
+                    client.doc("ASK_TEXT \(text)")
+                    statusText = "Asked about \(client.doc.momentLabel): “\(text)”"
                 case .whatsapp:
                     client.whatsapp("TYPE_TEXT_IN \(whatsappChat.name)\t\(text.replacingOccurrences(of: "\n", with: " "))")
                     statusText = "Typed in \(whatsappChat.label) on your Mac — tap Send if it looks right: “\(text)”"
@@ -2028,12 +2299,14 @@ struct NumpadView: View {
                 switch recordTarget {
                 case .whatsapp: break
                 case .talk: client.listenTalk()
+                case .doc: client.doc("ASK")
                 default: client.listen()
                 }
                 switch recordTarget {
                 case .whatsapp: statusText = "Listening… speak your reply, then tap Stop"
                 case .dictate: statusText = "Listening… speak, then tap STOP to copy to your Mac"
                 case .ask: statusText = "Listening… speak, then tap STOP to ask"
+                case .doc: statusText = "Paused at \(client.doc.momentLabel) — ask your question, then tap Stop"
                 case .talk: statusText = "Listening… say a command, pause and Peeky does it, keep going, then tap Stop"
                 }
             } catch {
@@ -2310,6 +2583,8 @@ enum Snes {
     static let spotify = Color(red: 0.11, green: 0.66, blue: 0.33)
     static let whatsapp = Color(red: 0.07, green: 0.55, blue: 0.40)
     static let youtube = Color(red: 0.94, green: 0.13, blue: 0.13)
+    /// Peeky Code Doc's streaming-service red.
+    static let doc = Color(red: 0.90, green: 0.04, blue: 0.08)
     static let talk = Color(red: 0.98, green: 0.55, blue: 0.05)
 }
 

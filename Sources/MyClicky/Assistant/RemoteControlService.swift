@@ -17,6 +17,14 @@ import Network
 ///   TAB CODE       – switch the panel to Peeky Code
 ///   TAB TERMINAL   – switch the panel to Terminal
 ///   TAB EXTENSIONS – switch the panel to Extensions (TAB EXT is an alias)
+///   TAB DOC        – switch the panel to Peeky Code Doc
+///   DOC <action>   – Peeky Code Doc, the film playing in the tab: ASK (pause
+///                    and show "Ask about <time>"; the phone then sends
+///                    ASK <question> or DOC ASK_TEXT <question>), STOP_ASK,
+///                    PLAYPAUSE, SKIP <±seconds>, SEEK <seconds>, RESTART,
+///                    RESUME (after an answer), SUGGEST <i> (one of the
+///                    suggested questions), SHOW_ME, DEEPER, STOP,
+///                    PLAY_RECENT <i> (start the i-th recent film)
 ///   EXT <verb>[\t<key>=<value>\t…] – run an installed extension's action
 ///                    verb directly, with optional parameters; the Mac
 ///                    replies with EXT_STATUS OK|FAIL\t<message>
@@ -99,6 +107,10 @@ import Network
 ///                    CHOOSE_OK <id>\t<index> or CHOOSE_NO <id>
 ///   CHOOSE_DONE <id> – a CHOOSE was resolved or timed out; clear the prompt
 ///   READ <text>    – Claude's description of the frontmost window, for READ
+///   DOC_STATE <title>\t<NONE|PLAYING|PAUSED>\t<pos>\t<dur>\t<chapter>\t<file:lines>\t<IDLE|LISTENING|THINKING|ANSWERED|FAILED>\t<q|q|q>
+///                  – the film on Peeky Code Doc, sent on every change and once a second while playing
+///   DOC_ANSWER <text> – Peeky's answer to a question about the paused frame (newlines as U+2028)
+///   DOC_RECENT <title>|<title>… – films available to DOC PLAY_RECENT, newest first
 @MainActor
 final class RemoteControlService {
     var onShow: (() -> Void)?
@@ -128,6 +140,10 @@ final class RemoteControlService {
     var onRead: (() -> Void)?
     /// `EXT <verb>` — run an extension action with the parsed params.
     var onExtension: ((String, [String: String]) -> Void)?
+    /// `DOC <action>` — Peeky Code Doc: ASK, ASK_TEXT <q>, STOP_ASK, PLAYPAUSE,
+    /// SKIP <±s>, SEEK <s>, RESTART, RESUME, SUGGEST <i>, SHOW_ME, DEEPER,
+    /// STOP, PLAY_RECENT <i>.
+    var onDocumentary: ((String) -> Void)?
     /// `SCREEN <n>`: put Peeky (panel and pointer) on display n, 1-based in
     /// the order macOS lists them — 1 is the built-in display when present.
     var onScreen: ((Int) -> Void)?
@@ -250,6 +266,8 @@ final class RemoteControlService {
             onYouTube?(String(line.dropFirst(8)))
         } else if line.hasPrefix("WHATSAPP ") {
             onWhatsApp?(String(line.dropFirst(9)))
+        } else if line.hasPrefix("DOC ") {
+            onDocumentary?(String(line.dropFirst(4)).trimmingCharacters(in: .whitespaces))
         } else if line.hasPrefix("SAVE_PHOTO ") {
             if let data = Data(base64Encoded: String(line.dropFirst(11)).trimmingCharacters(in: .whitespaces)) {
                 onSavePhoto?(data)

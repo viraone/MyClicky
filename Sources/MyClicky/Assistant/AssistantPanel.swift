@@ -118,7 +118,7 @@ enum AssistantTab: String, CaseIterable {
     }
 
     /// Tabs with a mic: everything but the terminal, documentary and extensions.
-    var takesVoice: Bool { self != .terminal && self != .extensions && self != .documentary }
+    var takesVoice: Bool { self != .terminal && self != .extensions }
 
     /// One-word name for the half-width column's tab bar.
     var shortName: String {
@@ -3814,7 +3814,12 @@ struct AssistantPanelView: View {
     }()
 
     private var phaseHint: String {
-        switch state.phase {
+        if state.tab == .documentary, state.documentary.isShowingFilm {
+            return state.documentary.askPhase == .idle
+                ? "Ask about \(state.documentary.moment.label) — press Ask, the mic, or type below"
+                : "Ask about \(state.documentary.moment.label)"
+        }
+        return switch state.phase {
         case .paused: "say a command, or press STOP"
         case .done where state.chaining: "done — say the next command, or press STOP"
         default: state.phase.hint
@@ -3825,7 +3830,7 @@ struct AssistantPanelView: View {
         switch state.tab {
         case .talk: ""
         case .terminal: "Type a command…"
-        case .documentary: "Paste a file path, or drop a file above…"
+        case .documentary: state.documentary.isShowingFilm ? "Ask about this moment…" : "Paste a file path, or drop a file above…"
         case .extensions: "Search the marketplace…"
         case .code: state.codeProject == nil ? "Drop a project folder here, then ask…"
             : "Ask about \(state.codeFocusedFile.map { ($0 as NSString).lastPathComponent } ?? state.codeProject?.name ?? "your code")…"
@@ -3849,7 +3854,8 @@ struct AssistantPanelView: View {
         case .talk: "Say what you want Peeky to do"
         case .captureDictate: "Start dictation"
         case .code: "Ask about your code by voice"
-        case .terminal, .extensions, .documentary: "Switch to a tab with a mic"
+        case .documentary: state.documentary.isShowingFilm ? "Ask about this moment by voice" : "Play a documentary first, then ask about it"
+        case .terminal, .extensions: "Switch to a tab with a mic"
         }
         return Button {
             state.onToggleRecording?()
@@ -4989,7 +4995,9 @@ struct AssistantPanelView: View {
         case .talk: state.onDo?(text)
         case .code: state.onAskCode?(text)
         case .terminal: state.terminal.view.send(txt: text + "\n")
-        case .documentary: _ = state.documentary.setSource(path: text)
+        case .documentary:
+            if state.documentary.isShowingFilm { state.documentary.ask(text) }
+            else { _ = state.documentary.setSource(path: text) }
         case .extensions: state.marketplace.query = text
         default: state.onSubmit?(text)
         }
