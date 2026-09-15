@@ -1017,8 +1017,12 @@ final class AssistantController {
     }
 
     /// What the current listening session will do with what it hears.
-    private enum RecordKind { case ask, dictate, talk, code }
+    private enum RecordKind { case ask, dictate, talk, code, documentary }
     private var recordKind: RecordKind = .ask
+    /// A film is up on Peeky Code Doc: Ask, from either device, is about it.
+    private var documentaryShowing: Bool {
+        panel.state.tab == .documentary && panel.state.documentary.isShowingFilm
+    }
     /// The app a Talk command should act on, captured when recording starts —
     /// Peeky's own panel is non-activating, so this stays the real target.
     private var talkTargetApp: NSRunningApplication?
@@ -1176,6 +1180,36 @@ final class AssistantController {
         captureFileWatcher.onChange = { [weak self] image in self?.handleCaptureEdited(image) }
         panel.state.onReadAloud = { [weak self] in self?.replayAnswer() }
         panel.state.onToggleRecording = { [weak self] in self?.toggleRecording() }
+        // Peeky Code Doc: Ask about the paused frame, on the Mac and mirrored to the phone.
+        let documentary = panel.state.documentary
+        documentary.onRequestMic = { [weak self] in
+            guard let self else { return }
+            if self.panel.state.status == .listening || self.talkStreaming { self.stop() }
+            self.showPanel()
+            self.beginListening(kind: .documentary)
+        }
+        documentary.onFinishMic = { [weak self] in
+            guard let self else { return }
+            if self.panel.state.status == .listening, self.recordKind == .documentary {
+                self.endListening()
+            } else {
+                // The phone holds the mic (or nothing does): take it on the Mac.
+                self.showPanel()
+                self.beginListening(kind: .documentary)
+            }
+        }
+        documentary.onSpeak = { [weak self] text in
+            guard let self, !self.panel.state.textOnlyMode else { return }
+            self.speak(text)
+        }
+        documentary.onGoDeeper = { [weak self] prompt in
+            guard let self else { return }
+            if self.busy { self.abandonWork() }
+            self.panel.state.tab = .ask
+            self.showPanel(full: true)
+            self.handleQuestion(prompt)
+        }
+        documentary.onRemoteLine = { [weak self] line in self?.remote.broadcast(line) }
         panel.onHide = { [weak self] in self?.stop() }
         synthesizer.delegate = speechDelegate
         speechDelegate.onSpeakingChanged = { [weak self] speaking in
@@ -1204,6 +1238,14 @@ final class AssistantController {
         }
         remote.onListen = { [weak self] in
             guard let self else { return }
+            // A film is up on Peeky Code Doc: the phone's Ask is about the
+            // paused frame. Pause and show the listening state; the phone's
+            // ASK <question> lands in the documentary flow below.
+            if self.documentaryShowing {
+                self.showPanel(full: true)
+                self.panel.state.documentary.beginAskFromRemote()
+                return
+            }
             // Phone ASK: open the full card while the user is still speaking,
             // so the answer never lands in a corner dot or the one-line strip.
             // The phone has its own TALK key, so a LISTEN is always a question:
@@ -1244,7 +1286,13 @@ final class AssistantController {
             self.beginTalkStreaming(questionsOnly: false)
         }
         // Streaming silence is tracked independently of the answer UI state.
-        remote.onStop = { [weak self] in self?.stop() }
+        remote.onStop = { [weak self] in
+            guard let self else { return }
+            if self.documentaryShowing, self.panel.state.documentary.askPhase == .listening {
+                self.panel.state.documentary.cancelAsk()
+            }
+            self.stop()
+        }
         remote.onCollapse = { [weak self] in
             guard let self else { return }
             // Enter toggles: collapse if expanded, bring back if collapsed/hidden.
@@ -1279,6 +1327,8 @@ final class AssistantController {
             // The phone's ASK key sends TAB ASK before it listens. With a
             // project open on Peeky Code, that ask is about the code — stay.
             case "ASK" where self.codeTabPinned: break
+            case "ASK" where self.documentaryShowing: break
+            case "DOC": self.panel.state.tab = .documentary
             default: self.panel.state.tab = .ask
             }
         }
@@ -1465,6 +1515,11 @@ final class AssistantController {
         }
         remote.onAsk = { [weak self] question in
             guard let self else { return }
+            if self.documentaryShowing {
+                self.showPanel(full: true)
+                self.panel.state.documentary.ask(question)
+                return
+            }
             // Keep a user-selected Terminal or Capture + Dictate tab in place.
             // A Talk still running would make handleQuestion drop the question,
             // so the phone's ASK wins.
@@ -1540,11 +1595,24 @@ final class AssistantController {
         remote.onExtension = { [weak self] verb, params in
             self?.runExtensionAction(verb: verb, params: params, from: "remote")
         }
+        remote.onDocumentary = { [weak self] command in
+            guard let self else { return }
+            let doc = self.panel.state.documentary
+            // Anything that starts or asks brings the tab up; transport on a
+            // film that's already showing leaves the panel as the user has it.
+            if command.hasPrefix("ASK") || command.hasPrefix("PLAY_RECENT") || command.hasPrefix("SUGGEST")
+                || command == "SHOW_ME" || command == "DEEPER" {
+                self.panel.state.tab = .documentary
+                self.showPanel(full: true)
+            }
+            doc.handleRemote(command)
+        }
         remote.greeting = { [weak self] in
             ["WHATSAPP_UNREAD \(self?.whatsappUnread.count ?? 0)",
              "GMAIL_UNREAD \(self?.gmailUnread.count ?? 0)",
              self?.screensLine() ?? "SCREENS 1 1",
              self?.peekyLayoutLine() ?? "PEEKY_LAYOUT HIDDEN"]
+            + (self?.panel.state.documentary.remoteGreeting() ?? [])
         }
         remote.onScreen = { [weak self] index in self?.switchScreen(to: index) }
         panel.onScreenChange = { [weak self] _ in
@@ -1733,6 +1801,7 @@ final class AssistantController {
         case .dictate: .captureDictate
         case .talk: .talk
         case .code: .code
+        case .documentary: .documentary
         }
         panel.state.status = .listening
         panel.state.transcript = ""
@@ -1763,6 +1832,8 @@ final class AssistantController {
         let kind = recordKind
         let target = talkTargetApp
         recordKind = .ask
+        documentaryAskSilenceTask?.cancel()
+        documentaryAskSilenceTask = nil
         Task {
             let heard = await speech.finish()
             if (kind == .talk || kind == .ask || kind == .code), talkStreaming {
@@ -1771,6 +1842,11 @@ final class AssistantController {
                 return
             }
             if heard.isEmpty {
+                if kind == .documentary {
+                    panel.state.status = .idle
+                    panel.state.documentary.askPhase = .failed("Didn't catch that — press Ask and try again, or type your question below.")
+                    return
+                }
                 if panel.state.errorText == nil {
                     panel.state.status = .idle
                     // Goes in errorText, not transcript: the Capture + Dictate
@@ -1789,6 +1865,9 @@ final class AssistantController {
             case .ask: handleQuestion(heard)
             case .talk: handleDo(heard, targetApp: target)
             case .code: handleCodeQuestion(heard)
+            case .documentary:
+                panel.state.status = .idle
+                panel.state.documentary.ask(heard)
             }
         }
     }
@@ -1832,6 +1911,27 @@ final class AssistantController {
         panel.state.transcript = text
         hud.attach(to: panel.screen ?? activeScreen)
         hud.hear(text)
+        if recordKind == .documentary {
+            panel.state.documentary.liveTranscript = text
+            scheduleDocumentaryAskFinish(after: text)
+        }
+    }
+
+    /// A documentary question ends itself: once the transcript has held still
+    /// for a beat the recording finishes and the question goes to Claude, so
+    /// nobody has to find the mic a second time (the film sat on "Listening…"
+    /// with REC still counting, observed live).
+    private var documentaryAskSilenceTask: Task<Void, Never>?
+    private func scheduleDocumentaryAskFinish(after transcript: String) {
+        documentaryAskSilenceTask?.cancel()
+        guard !transcript.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        documentaryAskSilenceTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_600_000_000)
+            guard !Task.isCancelled, let self, self.recordKind == .documentary,
+                  self.panel.state.status == .listening,
+                  self.panel.state.transcript == transcript else { return }
+            self.endListening()
+        }
     }
 
     /// Streaming dictation insert: while the user is talking to a Messages
@@ -2039,7 +2139,19 @@ final class AssistantController {
         case .ask: .ask
         case .captureDictate: .dictate
         case .talk: .talk
-        case .code, .terminal, .extensions, .documentary: .code
+        case .documentary: .documentary
+        case .code, .terminal, .extensions: .code
+        }
+        if kind == .documentary {
+            let doc = panel.state.documentary
+            guard doc.isShowingFilm else {
+                hud.report("Play a documentary first, then press Ask to talk about it.", ok: false)
+                return
+            }
+            if panel.state.status == .listening, recordKind == .documentary { endListening(); return }
+            if panel.state.status == .listening || talkStreaming { stop() }
+            doc.beginAsk()
+            return
         }
         if panel.state.status == .listening || talkStreaming {
             if recordKind == kind {

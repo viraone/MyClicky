@@ -100,6 +100,7 @@ final class CodeDocumentaryModel: ObservableObject {
 
     static var pythonURL: URL { pipelineDir.appendingPathComponent(".venv/bin/python") }
     static var makeDocURL: URL { pipelineDir.appendingPathComponent("make_doc.py") }
+    static var narrateURL: URL { pipelineDir.appendingPathComponent("narrate.py") }
     static var projectsDir: URL { pipelineDir.appendingPathComponent("projects") }
 
     var pipelineReady: Bool {
@@ -224,9 +225,14 @@ final class CodeDocumentaryModel: ObservableObject {
     func play(_ url: URL) {
         let item = AVPlayerItem(url: url)
         player.replaceCurrentItem(with: item)
+        askTask?.cancel()
+        askPhase = .idle
+        askHistory = []
         nowPlaying = url
         playhead = 0
         duration = 0
+        lastPublishedSecond = -1
+        loadTimeline(for: url)
         if timeObserver == nil {
             timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.25, preferredTimescale: 600),
                                                           queue: .main) { [weak self] t in
@@ -234,36 +240,44 @@ final class CodeDocumentaryModel: ObservableObject {
                     guard let self else { return }
                     self.playhead = t.seconds
                     if let d = self.player.currentItem?.duration.seconds, d.isFinite { self.duration = d }
-                    self.isPlaying = self.player.rate != 0
+                    let playing = self.player.rate != 0
+                    if playing != self.isPlaying { self.isPlaying = playing; self.publishState() }
+                    else if playing { self.publishTick() }
                 }
             }
         }
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item,
                                                              queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.isPlaying = false }
+            MainActor.assumeIsolated { self?.isPlaying = false; self?.publishState() }
         }
         player.play()
         isPlaying = true
+        publishState()
     }
 
     func togglePlay() {
         if player.rate != 0 { player.pause(); isPlaying = false }
         else {
             if duration > 0, playhead >= duration - 0.25 { player.seek(to: .zero) }
+            if askPhase != .idle { askTask?.cancel(); askPhase = .idle }
             player.play(); isPlaying = true
         }
+        publishState()
     }
 
     func skip(_ seconds: Double) {
         let target = max(0, min(playhead + seconds, max(duration, 0)))
         player.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
         playhead = target
+        publishState()
     }
 
     func seek(to seconds: Double) {
-        player.seek(to: CMTime(seconds: seconds, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
-        playhead = seconds
+        let target = max(0, min(seconds, max(duration, 0)))
+        player.seek(to: CMTime(seconds: target, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        playhead = target
+        publishState()
     }
 
     func restart() { seek(to: 0); if player.rate == 0 { player.play(); isPlaying = true } }
@@ -274,8 +288,491 @@ final class CodeDocumentaryModel: ObservableObject {
         player.replaceCurrentItem(with: nil)
         isPlaying = false
         nowPlaying = nil
+        askTask?.cancel()
+        askPhase = .idle
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         endObserver = nil
+        publishState()
+    }
+
+    // MARK: Ask about this moment
+
+    /// One scene of the film with the wall-clock range it occupies in the
+    /// MP4, so a timestamp maps back to code lines and narration.
+    struct Chapter: Equatable {
+        let id: String
+        let kind: String
+        let heading: String
+        let lines: ClosedRange<Int>?
+        let narration: String
+        let start: Double
+        let end: Double
+    }
+
+    /// Everything Peeky knows about the paused frame — what the Ask is grounded in.
+    struct Moment: Equatable {
+        let title: String
+        let time: Double
+        let chapter: Chapter?
+        let sourcePath: String
+        let excerpt: String
+
+        var timecode: String { CodeDocumentaryModel.timecode(time) }
+        var label: String {
+            var s = timecode
+            if let h = chapter?.heading, !h.isEmpty { s += " · \(h)" } else if !title.isEmpty { s += " · \(title)" }
+            return s
+        }
+        var codeRef: String {
+            guard let lines = chapter?.lines else { return "" }
+            let name = (sourcePath as NSString).lastPathComponent
+            return lines.count == 1 ? "\(name):\(lines.lowerBound)" : "\(name):\(lines.lowerBound)-\(lines.upperBound)"
+        }
+    }
+
+    struct Answer: Equatable {
+        let question: String
+        let text: String
+        /// Lines of the source the answer is about — highlighted under the film.
+        let lines: ClosedRange<Int>?
+        /// False when Claude is inferring rather than reading it off the code.
+        let verified: Bool
+        /// "Show me" mode: an ordered walkthrough rendered as animated steps.
+        let steps: [String]
+    }
+
+    enum AskPhase: Equatable {
+        case idle
+        case listening
+        case thinking(String)
+        case answered(Answer)
+        case failed(String)
+
+        var remoteWord: String {
+            switch self {
+            case .idle: "IDLE"
+            case .listening: "LISTENING"
+            case .thinking: "THINKING"
+            case .answered: "ANSWERED"
+            case .failed: "FAILED"
+            }
+        }
+    }
+
+    @Published var askPhase: AskPhase = .idle {
+        didSet { if askPhase != oldValue { publishState() } }
+    }
+    @Published private(set) var chapters: [Chapter] = []
+    @Published private(set) var filmTitle = ""
+    private var sourcePath = ""
+    private var sourceLines: [String] = []
+    /// Questions asked about this film, oldest first.
+    @Published private(set) var askHistory: [Answer] = []
+
+    /// Host hooks (wired by AssistantController).
+    var onSpeak: ((String) -> Void)?
+    /// Start the Mac mic for a question about the paused frame.
+    var onRequestMic: (() -> Void)?
+    /// Finish the Mac mic and send whatever was heard.
+    var onFinishMic: (() -> Void)?
+    /// Words heard so far while the Mac mic is open for a question.
+    @Published var liveTranscript = ""
+    /// Hand the moment over to the full Peeky Ask tab.
+    var onGoDeeper: ((String) -> Void)?
+    /// A protocol line for the phone (DOC_STATE / DOC_ANSWER / DOC_RECENT).
+    var onRemoteLine: ((String) -> Void)?
+    private var lastPublishedSecond = -1
+    private var askTask: Task<Void, Never>?
+    private var remoteAudioTask: Task<Void, Never>?
+    private(set) var remoteReadoutEnabled = false
+    private var activeNarratorEngine = "kokoro"
+    private var activeNarratorVoice = "am_michael"
+    private var activeNarratorSpeed = "0.95"
+
+    var isShowingFilm: Bool { nowPlaying != nil }
+
+    var currentChapter: Chapter? { chapter(at: playhead) }
+
+    func chapter(at t: Double) -> Chapter? {
+        chapters.last(where: { $0.start <= t + 0.05 }) ?? chapters.first
+    }
+
+    var moment: Moment {
+        let ch = currentChapter
+        var excerpt = ""
+        if let lines = ch?.lines, !sourceLines.isEmpty {
+            let lo = max(1, lines.lowerBound), hi = min(sourceLines.count, lines.upperBound)
+            if lo <= hi {
+                excerpt = (lo...hi).map { String(format: "%4d  %@", $0, sourceLines[$0 - 1]) }.joined(separator: "\n")
+            }
+        }
+        return Moment(title: filmTitle, time: playhead, chapter: ch, sourcePath: sourcePath, excerpt: excerpt)
+    }
+
+    /// What a viewer is most likely to want to know here.
+    var suggestedQuestions: [String] {
+        switch currentChapter?.kind {
+        case "code":
+            ["Why is this needed?", "Show the failure path", "What could break here?", "Explain this more simply"]
+        case "example":
+            ["Walk me through this again", "What if the input were empty?", "Where is this tested?"]
+        case "list":
+            ["Which of these matters most?", "Show me an example", "How would I apply this?"]
+        default:
+            ["What is this file for?", "Who calls this code?", "Explain this like I'm new to it"]
+        }
+    }
+
+    /// Ask pressed (Mac or phone): pause, remember the moment, open the mic.
+    /// Pressed again while listening, it finishes the question.
+    func beginAsk() {
+        guard isShowingFilm else { return }
+        if askPhase == .listening { onFinishMic?(); return }
+        pauseForAsk()
+        liveTranscript = ""
+        askPhase = .listening
+        onRequestMic?()
+    }
+
+    /// Ask pressed from the phone: the phone holds the mic, we just pause and show the state.
+    func beginAskFromRemote() {
+        guard isShowingFilm else { return }
+        pauseForAsk()
+        askPhase = .listening
+    }
+
+    func cancelAsk() {
+        askTask?.cancel()
+        askTask = nil
+        remoteAudioTask?.cancel()
+        remoteAudioTask = nil
+        liveTranscript = ""
+        askPhase = .idle
+    }
+
+    private func pauseForAsk() {
+        if player.rate != 0 { player.pause(); isPlaying = false }
+    }
+
+    /// A question about the paused frame, typed or spoken, from either device.
+    func ask(_ question: String, mode: String = "answer") {
+        let q = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isShowingFilm, !q.isEmpty else { return }
+        pauseForAsk()
+        guard let apiKey = KeychainService.anthropicAPIKey(), !apiKey.isEmpty else {
+            askPhase = .failed("No Anthropic API key in Keychain.")
+            return
+        }
+        let m = moment
+        askPhase = .thinking(q)
+        ActivityLog.recordAction("doc-ask", ["q": q, "t": m.timecode])
+        askTask?.cancel()
+        remoteAudioTask?.cancel()
+        askTask = Task { [weak self] in
+            do {
+                let json = try await AnthropicService(apiKey: apiKey).requestJSON(
+                    system: Self.askSystemPrompt(mode: mode),
+                    userText: Self.askUserText(moment: m, question: q, mode: mode),
+                    maxTokens: 1_200, timeout: 60, effort: "medium")
+                guard let self, !Task.isCancelled else { return }
+                let answer = Self.parseAnswer(json, question: q, fallbackLines: m.chapter?.lines)
+                self.askHistory.append(answer)
+                self.askPhase = .answered(answer)
+                self.onRemoteLine?("DOC_ANSWER " + answer.text.replacingOccurrences(of: "\n", with: "\u{2028}"))
+                let spoken = answer.steps.isEmpty ? answer.text : answer.steps.joined(separator: ". ")
+                if self.remoteReadoutEnabled {
+                    self.sendNarratorAudio(spoken)
+                } else {
+                    self.onSpeak?(spoken)
+                }
+            } catch is CancellationError {
+            } catch {
+                guard let self else { return }
+                self.askPhase = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    func askSuggested(_ index: Int) {
+        let qs = suggestedQuestions
+        guard qs.indices.contains(index) else { return }
+        ask(qs[index])
+    }
+
+    /// "Show me": re-answer the last question as an animated step walkthrough.
+    func showMe() {
+        let q: String = switch askPhase {
+        case .answered(let a): a.question
+        case .thinking(let q): q
+        default: "Walk me through what happens in this code, step by step."
+        }
+        ask(q.isEmpty ? "Walk me through this step by step." : "Show me, step by step: \(q)", mode: "steps")
+    }
+
+    /// "Go deeper": open the full Ask tab with the moment attached; playback stays parked here.
+    func goDeeper() {
+        let m = moment
+        var prompt = "I'm watching the code documentary \"\(m.title)\" at \(m.timecode)"
+        if let h = m.chapter?.heading, !h.isEmpty { prompt += " (chapter: \(h))" }
+        if !m.codeRef.isEmpty { prompt += ", looking at \(m.codeRef)" }
+        prompt += "."
+        if case .answered(let a) = askPhase {
+            prompt += " I asked: \"\(a.question)\" and got: \"\(a.text)\". Go deeper on that."
+        } else {
+            prompt += " Explain this part of the code in depth."
+        }
+        if !m.excerpt.isEmpty { prompt += "\n\n```\n\(m.excerpt)\n```" }
+        onGoDeeper?(prompt)
+    }
+
+    /// Resume the film from the exact frame the question paused it on.
+    func resumeDocumentary() {
+        askTask?.cancel()
+        askPhase = .idle
+        if isShowingFilm, player.rate == 0 { player.play(); isPlaying = true }
+    }
+
+    // MARK: Remote sync
+
+    /// `DOC_STATE <title>\t<NONE|PLAYING|PAUSED>\t<pos>\t<dur>\t<chapter>\t<code ref>\t<ask phase>\t<q|q|q>`
+    func remoteStateLine() -> String {
+        func f(_ s: String) -> String { s.replacingOccurrences(of: "\t", with: " ").replacingOccurrences(of: "\n", with: " ") }
+        guard isShowingFilm else { return "DOC_STATE \tNONE\t0\t0\t\t\tIDLE\t" }
+        let m = moment
+        let state = isPlaying ? "PLAYING" : "PAUSED"
+        return "DOC_STATE " + [f(filmTitle), state, String(format: "%.1f", playhead), String(format: "%.1f", duration),
+                               f(m.chapter?.heading ?? ""), f(m.codeRef), askPhase.remoteWord,
+                               suggestedQuestions.map(f).joined(separator: "|")].joined(separator: "\t")
+    }
+
+    func remoteRecentLine() -> String {
+        "DOC_RECENT " + recent.map { $0.title.replacingOccurrences(of: "|", with: "/") }.joined(separator: "|")
+    }
+
+    /// Lines the phone should get the moment it connects.
+    func remoteGreeting() -> [String] { [remoteRecentLine(), remoteStateLine()] }
+
+    private func publishState() { onRemoteLine?(remoteStateLine()) }
+
+    /// Called from the player's time observer: at most once a second while playing.
+    private func publishTick() {
+        let s = Int(playhead)
+        guard s != lastPublishedSecond else { return }
+        lastPublishedSecond = s
+        publishState()
+    }
+
+    /// Render an interactive answer with the film's narrator, then send the
+    /// small WAV to the phone. Audio is opt-in on the phone and stays local.
+    private func sendNarratorAudio(_ text: String) {
+        remoteAudioTask?.cancel()
+        let python = Self.pythonURL
+        let narrate = Self.narrateURL
+        let engine = activeNarratorEngine
+        let voice = activeNarratorVoice
+        let speed = activeNarratorSpeed
+        let pipeline = Self.pipelineDir
+        remoteAudioTask = Task { [weak self] in
+            let audio: Data? = await Task.detached(priority: .userInitiated) {
+                let temp = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("peeky-doc-answer-\(UUID().uuidString)", isDirectory: true)
+                let input = temp.appendingPathComponent("answer.txt")
+                let output = temp.appendingPathComponent("answer.m4a")
+                defer { try? FileManager.default.removeItem(at: temp) }
+                do {
+                    try FileManager.default.createDirectory(at: temp, withIntermediateDirectories: true)
+                    try text.write(to: input, atomically: true, encoding: .utf8)
+                    let proc = Process()
+                    proc.executableURL = python
+                    proc.arguments = [narrate.path, "--text-file", input.path, "--output", output.path]
+                    proc.currentDirectoryURL = pipeline
+                    var env = ProcessInfo.processInfo.environment
+                    env["TTS_ENGINE"] = engine
+                    switch engine {
+                    case "elevenlabs": env["ELEVENLABS_VOICE_ID"] = voice
+                    case "say": env["SAY_VOICE"] = voice
+                    default:
+                        env["KOKORO_VOICE"] = voice
+                        env["KOKORO_SPEED"] = speed
+                    }
+                    env["PATH"] = "/opt/homebrew/bin:/usr/local/bin:" + (env["PATH"] ?? "/usr/bin:/bin")
+                    proc.environment = env
+                    try proc.run()
+                    proc.waitUntilExit()
+                    guard proc.terminationStatus == 0, !Task.isCancelled else { return nil }
+                    return try Data(contentsOf: output)
+                } catch {
+                    log.error("Could not render documentary answer audio: \(error.localizedDescription, privacy: .public)")
+                    return nil
+                }
+            }.value
+            guard !Task.isCancelled, let self, self.remoteReadoutEnabled, let audio else { return }
+            self.onRemoteLine?("DOC_AUDIO \(audio.base64EncodedString())")
+        }
+    }
+
+    /// Phone-side `DOC <action>` commands.
+    func handleRemote(_ command: String) {
+        let parts = command.split(separator: " ", maxSplits: 1).map(String.init)
+        let verb = parts.first?.uppercased() ?? ""
+        let rest = parts.count > 1 ? parts[1] : ""
+        switch verb {
+        case "ASK": beginAskFromRemote()
+        case "ASK_TEXT": ask(rest)
+        case "STOP_ASK": cancelAsk()
+        case "PLAYPAUSE": if isShowingFilm { togglePlay() }
+        case "SKIP": skip(Double(rest) ?? 10)
+        case "SEEK": seek(to: Double(rest) ?? playhead)
+        case "RESTART": restart()
+        case "RESUME": resumeDocumentary()
+        case "SUGGEST": askSuggested(Int(rest) ?? 0)
+        case "SHOW_ME": showMe()
+        case "DEEPER": goDeeper()
+        case "READOUT":
+            remoteReadoutEnabled = rest.uppercased() == "ON"
+            if !remoteReadoutEnabled {
+                remoteAudioTask?.cancel()
+                remoteAudioTask = nil
+            }
+        case "STOP": stopPlaying()
+        case "PLAY_RECENT":
+            refreshRecent()
+            if let i = Int(rest), recent.indices.contains(i) { play(recent[i].url) }
+        default: break
+        }
+    }
+
+    // MARK: Timeline
+
+    /// Reads script.json (+ timeline.json when the pipeline wrote one) from
+    /// the film's project folder so timestamps map back to code.
+    private func loadTimeline(for film: URL) {
+        let dir = film.deletingLastPathComponent()
+        chapters = []
+        filmTitle = recent.first(where: { $0.url == film })?.title ?? dir.lastPathComponent
+        sourcePath = ""
+        sourceLines = []
+        activeNarratorEngine = "kokoro"
+        activeNarratorVoice = voice
+        activeNarratorSpeed = "0.95"
+        if let vdata = FileManager.default.contents(atPath: dir.appendingPathComponent("audio/voice.json").path),
+           let metadata = try? JSONSerialization.jsonObject(with: vdata) as? [String: Any] {
+            activeNarratorEngine = metadata["engine"] as? String ?? activeNarratorEngine
+            activeNarratorVoice = metadata["voice"] as? String ?? activeNarratorVoice
+            if let speed = metadata["speed"] as? NSNumber { activeNarratorSpeed = speed.stringValue }
+        }
+        guard let data = FileManager.default.contents(atPath: dir.appendingPathComponent("script.json").path),
+              let script = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+        if let t = script["title"] as? String, !t.isEmpty { filmTitle = t }
+        if let src = script["source"] as? String {
+            sourcePath = src
+            if let text = try? String(contentsOfFile: src, encoding: .utf8) {
+                sourceLines = text.components(separatedBy: "\n")
+            }
+        }
+        var timeline: [String: (Double, Double)] = [:]
+        if let tdata = FileManager.default.contents(atPath: dir.appendingPathComponent("timeline.json").path),
+           let tjson = try? JSONSerialization.jsonObject(with: tdata) as? [String: Any],
+           let entries = tjson["scenes"] as? [[String: Any]] {
+            for e in entries {
+                if let id = e["id"] as? String, let s = e["start"] as? Double, let en = e["end"] as? Double {
+                    timeline[id] = (s, en)
+                }
+            }
+        }
+        var durations: [String: Double] = [:]
+        if let ddata = FileManager.default.contents(atPath: dir.appendingPathComponent("audio/durations.json").path),
+           let d = try? JSONSerialization.jsonObject(with: ddata) as? [String: Double] {
+            durations = d
+        }
+        chapters = Self.buildChapters(script: script, timeline: timeline, durations: durations)
+    }
+
+    /// Exact times when the renderer logged them; otherwise an estimate from
+    /// narration lengths (+ the pipeline's pad and per-scene animation time).
+    static func buildChapters(script: [String: Any], timeline: [String: (Double, Double)],
+                              durations: [String: Double]) -> [Chapter] {
+        guard let scenes = script["scenes"] as? [[String: Any]] else { return [] }
+        var out: [Chapter] = []
+        var cursor = 0.0
+        for s in scenes {
+            guard let id = s["id"] as? String else { continue }
+            let kind = s["kind"] as? String ?? ""
+            let heading = (s["heading"] as? String) ?? (kind == "title" ? (script["title"] as? String ?? "") : kind.capitalized)
+            var lines: ClosedRange<Int>? = nil
+            if let r = s["lines"] as? [Any], r.count == 2,
+               let a = (r[0] as? NSNumber)?.intValue, let b = (r[1] as? NSNumber)?.intValue, a <= b {
+                lines = a...b
+            }
+            let start: Double, end: Double
+            if let exact = timeline[id] {
+                (start, end) = exact
+            } else {
+                let overhead: Double = kind == "title" ? 3.8 : kind == "code" ? 2.2 : 1.6
+                start = cursor
+                end = cursor + (durations[id] ?? 8) + 0.6 + overhead
+            }
+            cursor = end
+            out.append(Chapter(id: id, kind: kind, heading: heading, lines: lines,
+                               narration: s["narration"] as? String ?? "", start: start, end: end))
+        }
+        return out
+    }
+
+    nonisolated static func timecode(_ s: Double) -> String {
+        guard s.isFinite, s >= 0 else { return "0:00" }
+        let t = Int(s.rounded())
+        return String(format: "%d:%02d", t / 60, t % 60)
+    }
+
+    // MARK: Ask prompts
+
+    static func askSystemPrompt(mode: String) -> String {
+        let common = """
+        You are Peeky, a senior engineer sitting next to a developer who paused a short documentary \
+        about one source file. Answer ONLY from the code excerpt and narration you are given; when you \
+        must infer something not visible in the excerpt, say so plainly and set "verified": false. \
+        Plain, spoken English — this is read aloud. Never paste code back; refer to line numbers. \
+        Respond with ONE JSON object and nothing else.
+        """
+        if mode == "steps" {
+            return common + """
+
+            Schema: {"answer": "<one-sentence summary>", "steps": ["<step 1>", "<step 2>", ...], \
+            "lines": [start, end], "verified": true|false}
+            3–6 steps, each one short sentence describing what happens in order (data in, branch taken, \
+            result out). "lines" is the 1-based inclusive range of the excerpt the walkthrough covers.
+            """
+        }
+        return common + """
+
+        Schema: {"answer": "<2–4 sentences>", "lines": [start, end] | null, "verified": true|false}
+        "lines" is the 1-based inclusive line range of the excerpt your answer is mostly about (null if none).
+        """
+    }
+
+    static func askUserText(moment m: Moment, question: String, mode: String) -> String {
+        var s = "Documentary: \"\(m.title)\"\nPaused at \(m.timecode)"
+        if let ch = m.chapter {
+            s += "\nChapter: \(ch.heading) (\(ch.kind))"
+            if !ch.narration.isEmpty { s += "\nNarration at this moment: \"\(ch.narration)\"" }
+        }
+        if !m.sourcePath.isEmpty { s += "\nFile: \((m.sourcePath as NSString).lastPathComponent)" }
+        if !m.excerpt.isEmpty { s += "\n\nCode on screen:\n\(m.excerpt)" } else { s += "\n\n(No code is on screen in this chapter.)" }
+        s += "\n\nViewer's question: \(question)"
+        return s
+    }
+
+    static func parseAnswer(_ json: [String: Any], question: String, fallbackLines: ClosedRange<Int>?) -> Answer {
+        let text = (json["answer"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        var lines = fallbackLines
+        if let r = json["lines"] as? [Any], r.count == 2,
+           let a = (r[0] as? NSNumber)?.intValue, let b = (r[1] as? NSNumber)?.intValue, a <= b {
+            lines = a...b
+        }
+        let steps = (json["steps"] as? [Any])?.compactMap { $0 as? String }.filter { !$0.isEmpty } ?? []
+        return Answer(question: question, text: text.isEmpty ? "I couldn't work that out from what's on screen." : text,
+                      lines: lines, verified: (json["verified"] as? Bool) ?? true, steps: steps)
     }
 
     /// Back to the home screen with a clean slate, ready for another code file.
@@ -310,6 +807,7 @@ final class CodeDocumentaryModel: ObservableObject {
             return Recent(id: mp4, title: title, date: date)
         }
         .sorted { $0.date > $1.date }
+        onRemoteLine?(remoteRecentLine())
     }
 
     // MARK: Internals
@@ -562,6 +1060,7 @@ private final class LineSplitter: @unchecked Sendable {
 struct CodeDocumentaryView: View {
     @ObservedObject var model: CodeDocumentaryModel
     let accent: Color
+    @State private var copiedAnswerPart: String?
 
     var body: some View {
         Group {
@@ -654,13 +1153,309 @@ struct CodeDocumentaryView: View {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
                 )
+                .overlay(alignment: .bottomLeading) { momentBadge.padding(10) }
                 .onTapGesture { model.togglePlay() }
+
+            if model.askPhase != .idle {
+                askCard
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
 
             transportBar
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .animation(.easeInOut(duration: 0.25), value: model.askPhase)
+    }
+
+    // MARK: Ask about this moment
+
+    /// Timestamp + chapter, always visible on the film so Ask has an obvious anchor.
+    private var momentBadge: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "questionmark.bubble.fill").font(.system(size: 11.5, weight: .bold))
+            Text(model.askPhase == .idle ? "Ask about \(model.moment.label)" : model.moment.label)
+                .lineLimit(1)
+        }
+        .font(.system(size: 13, weight: .semibold))
+        .foregroundStyle(.white.opacity(0.9))
+        .padding(.horizontal, 9).padding(.vertical, 5)
+        .background(Capsule().fill(Color.black.opacity(0.55)))
+        .allowsHitTesting(false)
+    }
+
+    private var askButton: some View {
+        Button { model.beginAsk() } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "mic.fill")
+                Text("Ask")
+            }
+            .font(.system(size: 13, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(height: 36)
+            .padding(.horizontal, 14)
+            .background(Capsule().fill(accent))
+        }
+        .buttonStyle(.plain)
+        .help("Pause and ask about this moment (⌘/)")
+        .keyboardShortcut("/", modifiers: .command)
+    }
+
+    @ViewBuilder private var askCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "questionmark.bubble.fill").foregroundStyle(accent)
+                Text("Ask about \(model.moment.label)")
+                    .font(.system(size: 15, weight: .bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                if !model.moment.codeRef.isEmpty {
+                    Text(model.moment.codeRef)
+                        .font(.system(size: 12.5, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+            }
+            switch model.askPhase {
+            case .idle:
+                EmptyView()
+            case .listening:
+                HStack(spacing: 8) {
+                    Image(systemName: "waveform").foregroundStyle(accent).symbolEffect(.pulse)
+                    if model.liveTranscript.isEmpty {
+                        Text("Listening… ask your question. It sends itself when you pause (the first words take a moment to appear).")
+                            .foregroundStyle(.white.opacity(0.75))
+                    } else {
+                        Text("“\(model.liveTranscript)”")
+                            .italic().foregroundStyle(.white.opacity(0.9))
+                    }
+                    Spacer(minLength: 0)
+                    Button("Done") { model.beginAsk() }.buttonStyle(.borderedProminent).tint(accent).controlSize(.small)
+                    Button("Cancel") { model.cancelAsk() }.buttonStyle(.bordered).controlSize(.small)
+                }
+                .font(.system(size: 14))
+                .lineLimit(2)
+                suggestionChips
+            case .thinking(let q):
+                questionBubble(q)
+                HStack(spacing: 10) {
+                    ProgressView().controlSize(.small)
+                    Text("Peeky is answering from the code on screen…")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.75))
+                }
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(responseBubbleBackground)
+            case .answered(let a):
+                answerBody(a)
+                answerActions
+            case .failed(let message):
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 14)).foregroundStyle(.orange)
+                answerActions
+            }
+        }
+        .padding(12)
+        .background(card)
+    }
+
+    private var suggestionChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(Array(model.suggestedQuestions.enumerated()), id: \.offset) { i, q in
+                    Button { model.askSuggested(i) } label: {
+                        Text(q)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.9))
+                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            .background(Capsule().fill(Color.white.opacity(0.1)))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private func answerBody(_ a: CodeDocumentaryModel.Answer) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            questionBubble(a.question)
+            VStack(alignment: .leading, spacing: 9) {
+                HStack(spacing: 6) {
+                    Image(systemName: "sparkles")
+                    Text("PEEKY · RESPONSE")
+                }
+                .font(.system(size: 11.5, weight: .bold))
+                .foregroundStyle(.green.opacity(0.9))
+                Text(a.text)
+                    .font(.system(size: 17, weight: .regular))
+                    .lineSpacing(3)
+                    .foregroundStyle(.white)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                if !a.steps.isEmpty { stepsView(a.steps) }
+                if let lines = a.lines, let excerpt = highlightedExcerpt(lines) { excerpt }
+                HStack(spacing: 6) {
+                    Image(systemName: a.verified ? "checkmark.seal.fill" : "questionmark.circle")
+                    Text(a.verified ? "Read from the code on screen" : "Peeky's interpretation — not verified in the code shown")
+                }
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(a.verified ? Color.green.opacity(0.8) : Color.orange.opacity(0.85))
+                HStack {
+                    Spacer()
+                    copyAnswerButton(a.text, key: "response", help: "Copy Peeky's response")
+                }
+            }
+            .padding(13)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(responseBubbleBackground)
+        }
+    }
+
+    private func questionBubble(_ question: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "person.fill")
+                Text("YOU · ASKED")
+            }
+            .font(.system(size: 11.5, weight: .bold))
+            .foregroundStyle(accent)
+            Text(question)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.white.opacity(0.95))
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            HStack {
+                Spacer()
+                copyAnswerButton(question, key: "question", help: "Copy your question")
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: 900, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .fill(accent.opacity(0.12))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .strokeBorder(accent.opacity(0.45), lineWidth: 1)
+                )
+                .overlay(alignment: .trailing) {
+                    RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        .fill(accent.opacity(0.9))
+                        .frame(width: 3)
+                        .padding(.vertical, 7)
+                        .padding(.trailing, 3)
+                }
+        )
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    private var responseBubbleBackground: some View {
+        RoundedRectangle(cornerRadius: 11, style: .continuous)
+            .fill(Color.white.opacity(0.055))
+            .overlay(
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .strokeBorder(Color.green.opacity(0.25), lineWidth: 1)
+            )
+            .overlay(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(Color.green.opacity(0.8))
+                    .frame(width: 3)
+                    .padding(.vertical, 7)
+                    .padding(.leading, 3)
+            }
+    }
+
+    private func copyAnswerButton(_ text: String, key: String, help: String) -> some View {
+        let copied = copiedAnswerPart == key
+        return Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            copiedAnswerPart = key
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                if copiedAnswerPart == key { copiedAnswerPart = nil }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                if copied { Text("Copied") }
+            }
+            .font(.system(size: 11.5, weight: .semibold))
+            .foregroundStyle(copied ? Color.green : .white.opacity(0.55))
+            .padding(.horizontal, 7)
+            .frame(height: 24)
+            .background(Capsule().fill(Color.black.opacity(0.22)))
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+
+    /// "Show me": the walkthrough lands one step at a time.
+    private func stepsView(_ steps: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(Array(steps.enumerated()), id: \.offset) { i, step in
+                HStack(alignment: .top, spacing: 8) {
+                    Text("\(i + 1)")
+                        .font(.system(size: 12, weight: .black, design: .monospaced))
+                        .foregroundStyle(.white)
+                        .frame(width: 20, height: 20)
+                        .background(Circle().fill(accent))
+                    Text(step).font(.system(size: 15, weight: .regular)).foregroundStyle(.white.opacity(0.9))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .transition(.move(edge: .leading).combined(with: .opacity))
+                .animation(.easeOut(duration: 0.35).delay(Double(i) * 0.25), value: steps.count)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    /// The chapter's code with the answer's lines lit in the accent colour.
+    private func highlightedExcerpt(_ lines: ClosedRange<Int>) -> AnyView? {
+        let excerpt = model.moment.excerpt
+        guard !excerpt.isEmpty else { return nil }
+        let rows = excerpt.components(separatedBy: "\n")
+        return AnyView(
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    let n = Int(row.prefix(4).trimmingCharacters(in: .whitespaces)) ?? -1
+                    let hot = lines.contains(n)
+                    Text(row)
+                        .font(.system(size: 13.5, design: .monospaced))
+                        .foregroundStyle(hot ? .white : .white.opacity(0.45))
+                        .padding(.horizontal, 8).padding(.vertical, 1.5)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(hot ? accent.opacity(0.22) : .clear)
+                        .overlay(alignment: .leading) {
+                            if hot { Rectangle().fill(accent).frame(width: 3) }
+                        }
+                }
+            }
+            .padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.5)))
+        )
+    }
+
+    private var answerActions: some View {
+        HStack(spacing: 8) {
+            Button { model.resumeDocumentary() } label: {
+                Label("Resume documentary", systemImage: "play.fill")
+                    .font(.system(size: 13.5, weight: .bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12).padding(.vertical, 7)
+                    .background(Capsule().fill(accent))
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut(.return, modifiers: [])
+            Button { model.showMe() } label: { Label("Show me", systemImage: "list.number") }
+            Button { model.goDeeper() } label: { Label("Go deeper", systemImage: "arrow.up.right.square") }
+            Button { model.beginAsk() } label: { Label("Ask another", systemImage: "mic.fill") }
+            Spacer(minLength: 0)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .font(.system(size: 13))
     }
 
     private var transportBar: some View {
@@ -689,6 +1484,7 @@ struct CodeDocumentaryView: View {
                     .keyboardShortcut(.rightArrow, modifiers: [])
                 transportButton("stop.fill", help: "Stop and go back") { model.stopPlaying() }
                 Spacer(minLength: 0)
+                askButton
                 Text(timecode(model.duration))
             }
             .font(.system(size: 11.5, design: .monospaced))

@@ -272,6 +272,28 @@ and [Manim](https://www.manim.community) renders the film to
 `~/code-documentary/projects/<file>-<stamp>/documentary.mp4`. The film plays right inside the tab (with rewind, play/pause and skip controls); recent films
 are listed on the tab.
 
+**Ask about this moment.** While a film is up, Peeky Ask is about the frame you're
+on. Press **Ask** (⌘/), the mic, or type in the box — the film pauses, the
+status line reads `Ask about 2:14 · The helper`, and Peeky answers from the exact
+code on screen (the pipeline writes a `timeline.json` so a timestamp maps back
+to the chapter, its lines and narration). The answer is spoken and shown under
+the film with the lines it's about lit up, and it says plainly when it's
+inferring rather than reading the code. Follow-ups: **Show me** (the same
+answer as an animated step walkthrough), **Go deeper** (hands the moment to the
+full Peeky Ask tab; the film stays parked), **Ask another**, and **Resume
+documentary**, which continues from the same timestamp. Suggested questions for
+the current chapter appear as chips.
+
+The Peeky Remote's **PEEKY DOC** cartridge is the same session on the phone:
+its **Ask Peeky** button pauses the Mac and records on the phone, the answer
+and the Show me / Go deeper / Resume controls appear there too, and the
+transport (restart, ±10s, play/pause, stop, scrubber) drives the film. With
+nothing playing it lists recent films to start with one tap. Phone answer
+read-out is **off by default**. Turn on **Read answers aloud** in the PEEKY DOC
+cartridge when wanted; the Mac renders the answer with the documentary's
+saved narrator voice and sends that audio to the phone instead of using
+iOS's robotic system voice.
+
 One-time setup (Python 3.12 + Homebrew):
 
 ```sh

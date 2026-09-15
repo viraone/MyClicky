@@ -143,6 +143,15 @@ final class SpeechService {
         audioEngine?.stop()
         requestBox.current?.endAudio()
         try? await Task.sleep(nanoseconds: 800_000_000)
+        // On-device recognition can take ~4s to surface its first words; when
+        // the recording ends before that, give the final result a real chance
+        // to land rather than reporting silence (short questions to a paused
+        // documentary came back as 0 chars, observed live).
+        var waited: UInt64 = 800_000_000
+        while latestTranscript.isEmpty, current.isEmpty, task != nil, waited < 3_200_000_000 {
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            waited += 200_000_000
+        }
         commitCurrent()
         let text = latestTranscript
         log.notice("finish -> \(text.count) chars")
