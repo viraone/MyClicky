@@ -1095,11 +1095,11 @@ struct CodeDocumentaryView: View {
     /// Timestamp + chapter, always visible on the film so Ask has an obvious anchor.
     private var momentBadge: some View {
         HStack(spacing: 6) {
-            Image(systemName: "questionmark.bubble.fill").font(.system(size: 10, weight: .bold))
+            Image(systemName: "questionmark.bubble.fill").font(.system(size: 11.5, weight: .bold))
             Text(model.askPhase == .idle ? "Ask about \(model.moment.label)" : model.moment.label)
                 .lineLimit(1)
         }
-        .font(.system(size: 11, weight: .semibold))
+        .font(.system(size: 13, weight: .semibold))
         .foregroundStyle(.white.opacity(0.9))
         .padding(.horizontal, 9).padding(.vertical, 5)
         .background(Capsule().fill(Color.black.opacity(0.55)))
@@ -1128,13 +1128,13 @@ struct CodeDocumentaryView: View {
             HStack(spacing: 8) {
                 Image(systemName: "questionmark.bubble.fill").foregroundStyle(accent)
                 Text("Ask about \(model.moment.label)")
-                    .font(.system(size: 13, weight: .bold))
+                    .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(.white)
                     .lineLimit(1)
                 Spacer(minLength: 0)
                 if !model.moment.codeRef.isEmpty {
                     Text(model.moment.codeRef)
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(.system(size: 12.5, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.5))
                 }
             }
@@ -1155,7 +1155,7 @@ struct CodeDocumentaryView: View {
                     Button("Done") { model.beginAsk() }.buttonStyle(.borderedProminent).tint(accent).controlSize(.small)
                     Button("Cancel") { model.cancelAsk() }.buttonStyle(.bordered).controlSize(.small)
                 }
-                .font(.system(size: 12.5))
+                .font(.system(size: 14))
                 .lineLimit(2)
                 suggestionChips
             case .thinking(let q):
@@ -1163,13 +1163,13 @@ struct CodeDocumentaryView: View {
                     ProgressView().controlSize(.small)
                     Text("“\(q)”").italic().foregroundStyle(.white.opacity(0.7)).lineLimit(2)
                 }
-                .font(.system(size: 12.5))
+                .font(.system(size: 14))
             case .answered(let a):
                 answerBody(a)
                 answerActions
             case .failed(let message):
                 Label(message, systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: 12.5)).foregroundStyle(.orange)
+                    .font(.system(size: 14)).foregroundStyle(.orange)
                 answerActions
             }
         }
@@ -1183,7 +1183,7 @@ struct CodeDocumentaryView: View {
                 ForEach(Array(model.suggestedQuestions.enumerated()), id: \.offset) { i, q in
                     Button { model.askSuggested(i) } label: {
                         Text(q)
-                            .font(.system(size: 11.5, weight: .medium))
+                            .font(.system(size: 13, weight: .medium))
                             .foregroundStyle(.white.opacity(0.9))
                             .padding(.horizontal, 10).padding(.vertical, 5)
                             .background(Capsule().fill(Color.white.opacity(0.1)))
@@ -1197,11 +1197,12 @@ struct CodeDocumentaryView: View {
     private func answerBody(_ a: CodeDocumentaryModel.Answer) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("“\(a.question)”")
-                .font(.system(size: 11.5)).italic()
-                .foregroundStyle(.white.opacity(0.5))
+                .font(.system(size: 14, weight: .regular)).italic()
+                .foregroundStyle(.white.opacity(0.62))
                 .lineLimit(2)
             Text(a.text)
-                .font(.system(size: 13.5))
+                .font(.system(size: 17, weight: .regular))
+                .lineSpacing(3)
                 .foregroundStyle(.white)
                 .fixedSize(horizontal: false, vertical: true)
             if !a.steps.isEmpty { stepsView(a.steps) }
@@ -1210,7 +1211,7 @@ struct CodeDocumentaryView: View {
                 Image(systemName: a.verified ? "checkmark.seal.fill" : "questionmark.circle")
                 Text(a.verified ? "Read from the code on screen" : "Peeky's interpretation — not verified in the code shown")
             }
-            .font(.system(size: 10.5))
+            .font(.system(size: 12.5, weight: .medium))
             .foregroundStyle(a.verified ? Color.green.opacity(0.8) : Color.orange.opacity(0.85))
         }
     }
@@ -1221,11 +1222,11 @@ struct CodeDocumentaryView: View {
             ForEach(Array(steps.enumerated()), id: \.offset) { i, step in
                 HStack(alignment: .top, spacing: 8) {
                     Text("\(i + 1)")
-                        .font(.system(size: 11, weight: .black, design: .monospaced))
+                        .font(.system(size: 12, weight: .black, design: .monospaced))
                         .foregroundStyle(.white)
                         .frame(width: 20, height: 20)
                         .background(Circle().fill(accent))
-                    Text(step).font(.system(size: 12.5)).foregroundStyle(.white.opacity(0.9))
+                    Text(step).font(.system(size: 15, weight: .regular)).foregroundStyle(.white.opacity(0.9))
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .transition(.move(edge: .leading).combined(with: .opacity))
@@ -1246,7 +1247,7 @@ struct CodeDocumentaryView: View {
                     let n = Int(row.prefix(4).trimmingCharacters(in: .whitespaces)) ?? -1
                     let hot = lines.contains(n)
                     Text(row)
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(.system(size: 13.5, design: .monospaced))
                         .foregroundStyle(hot ? .white : .white.opacity(0.45))
                         .padding(.horizontal, 8).padding(.vertical, 1.5)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1265,7 +1266,7 @@ struct CodeDocumentaryView: View {
         HStack(spacing: 8) {
             Button { model.resumeDocumentary() } label: {
                 Label("Resume documentary", systemImage: "play.fill")
-                    .font(.system(size: 12.5, weight: .bold))
+                    .font(.system(size: 13.5, weight: .bold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 12).padding(.vertical, 7)
                     .background(Capsule().fill(accent))
@@ -1279,7 +1280,7 @@ struct CodeDocumentaryView: View {
         }
         .buttonStyle(.bordered)
         .controlSize(.small)
-        .font(.system(size: 12))
+        .font(.system(size: 13))
     }
 
     private var transportBar: some View {
