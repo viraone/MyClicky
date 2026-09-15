@@ -278,6 +278,16 @@ final class CodeDocumentaryModel: ObservableObject {
         endObserver = nil
     }
 
+    /// Back to the home screen with a clean slate, ready for another code file.
+    func startNew() {
+        stopPlaying()
+        guard !phase.isRunning else { return }
+        sourceFile = nil
+        scriptTitle = nil
+        logLines = []
+        phase = .idle
+    }
+
     func reveal(_ url: URL) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
 
     func refreshRecent() {
@@ -600,16 +610,30 @@ struct CodeDocumentaryView: View {
             HStack(spacing: 10) {
                 Button { model.stopPlaying() } label: {
                     Label("Back", systemImage: "chevron.left")
-                        .font(.system(size: 12.5, weight: .semibold))
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(Color.white.opacity(0.92)))
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                .buttonStyle(.plain)
                 .keyboardShortcut(.escape, modifiers: [])
+                .help("Back to Peeky Code Doc home (Esc)")
                 Text(model.recent.first(where: { $0.url == url })?.title ?? url.deletingLastPathComponent().lastPathComponent)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.9))
                     .lineLimit(1)
                 Spacer(minLength: 0)
+                Button { model.startNew() } label: {
+                    Label("New documentary", systemImage: "plus")
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(Color(red: 0.90, green: 0.04, blue: 0.08)))
+                }
+                .buttonStyle(.plain)
+                .help("Go home and pick another code file")
                 Button { model.reveal(url) } label: { Image(systemName: "folder") }
                     .buttonStyle(.plain)
                     .foregroundStyle(.white.opacity(0.5))
