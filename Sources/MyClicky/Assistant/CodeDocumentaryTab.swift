@@ -1060,6 +1060,7 @@ private final class LineSplitter: @unchecked Sendable {
 struct CodeDocumentaryView: View {
     @ObservedObject var model: CodeDocumentaryModel
     let accent: Color
+    @State private var copiedAnswerPart: String?
 
     var body: some View {
         Group {
@@ -1237,11 +1238,16 @@ struct CodeDocumentaryView: View {
                 .lineLimit(2)
                 suggestionChips
             case .thinking(let q):
-                HStack(spacing: 8) {
+                questionBubble(q)
+                HStack(spacing: 10) {
                     ProgressView().controlSize(.small)
-                    Text("“\(q)”").italic().foregroundStyle(.white.opacity(0.7)).lineLimit(2)
+                    Text("Peeky is answering from the code on screen…")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.75))
                 }
-                .font(.system(size: 14))
+                .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(responseBubbleBackground)
             case .answered(let a):
                 answerBody(a)
                 answerActions
@@ -1273,25 +1279,116 @@ struct CodeDocumentaryView: View {
     }
 
     private func answerBody(_ a: CodeDocumentaryModel.Answer) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("“\(a.question)”")
-                .font(.system(size: 14, weight: .regular)).italic()
-                .foregroundStyle(.white.opacity(0.62))
-                .lineLimit(2)
-            Text(a.text)
-                .font(.system(size: 17, weight: .regular))
-                .lineSpacing(3)
-                .foregroundStyle(.white)
-                .fixedSize(horizontal: false, vertical: true)
-            if !a.steps.isEmpty { stepsView(a.steps) }
-            if let lines = a.lines, let excerpt = highlightedExcerpt(lines) { excerpt }
-            HStack(spacing: 6) {
-                Image(systemName: a.verified ? "checkmark.seal.fill" : "questionmark.circle")
-                Text(a.verified ? "Read from the code on screen" : "Peeky's interpretation — not verified in the code shown")
+        VStack(alignment: .leading, spacing: 10) {
+            questionBubble(a.question)
+            VStack(alignment: .leading, spacing: 9) {
+                HStack(spacing: 6) {
+                    Image(systemName: "sparkles")
+                    Text("PEEKY · RESPONSE")
+                }
+                .font(.system(size: 11.5, weight: .bold))
+                .foregroundStyle(.green.opacity(0.9))
+                Text(a.text)
+                    .font(.system(size: 17, weight: .regular))
+                    .lineSpacing(3)
+                    .foregroundStyle(.white)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                if !a.steps.isEmpty { stepsView(a.steps) }
+                if let lines = a.lines, let excerpt = highlightedExcerpt(lines) { excerpt }
+                HStack(spacing: 6) {
+                    Image(systemName: a.verified ? "checkmark.seal.fill" : "questionmark.circle")
+                    Text(a.verified ? "Read from the code on screen" : "Peeky's interpretation — not verified in the code shown")
+                }
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(a.verified ? Color.green.opacity(0.8) : Color.orange.opacity(0.85))
+                HStack {
+                    Spacer()
+                    copyAnswerButton(a.text, key: "response", help: "Copy Peeky's response")
+                }
             }
-            .font(.system(size: 12.5, weight: .medium))
-            .foregroundStyle(a.verified ? Color.green.opacity(0.8) : Color.orange.opacity(0.85))
+            .padding(13)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(responseBubbleBackground)
         }
+    }
+
+    private func questionBubble(_ question: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "person.fill")
+                Text("YOU · ASKED")
+            }
+            .font(.system(size: 11.5, weight: .bold))
+            .foregroundStyle(accent)
+            Text(question)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.white.opacity(0.95))
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+            HStack {
+                Spacer()
+                copyAnswerButton(question, key: "question", help: "Copy your question")
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: 900, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .fill(accent.opacity(0.12))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .strokeBorder(accent.opacity(0.45), lineWidth: 1)
+                )
+                .overlay(alignment: .trailing) {
+                    RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        .fill(accent.opacity(0.9))
+                        .frame(width: 3)
+                        .padding(.vertical, 7)
+                        .padding(.trailing, 3)
+                }
+        )
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    private var responseBubbleBackground: some View {
+        RoundedRectangle(cornerRadius: 11, style: .continuous)
+            .fill(Color.white.opacity(0.055))
+            .overlay(
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .strokeBorder(Color.green.opacity(0.25), lineWidth: 1)
+            )
+            .overlay(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(Color.green.opacity(0.8))
+                    .frame(width: 3)
+                    .padding(.vertical, 7)
+                    .padding(.leading, 3)
+            }
+    }
+
+    private func copyAnswerButton(_ text: String, key: String, help: String) -> some View {
+        let copied = copiedAnswerPart == key
+        return Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            copiedAnswerPart = key
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                if copiedAnswerPart == key { copiedAnswerPart = nil }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                if copied { Text("Copied") }
+            }
+            .font(.system(size: 11.5, weight: .semibold))
+            .foregroundStyle(copied ? Color.green : .white.opacity(0.55))
+            .padding(.horizontal, 7)
+            .frame(height: 24)
+            .background(Capsule().fill(Color.black.opacity(0.22)))
+        }
+        .buttonStyle(.plain)
+        .help(help)
     }
 
     /// "Show me": the walkthrough lands one step at a time.
