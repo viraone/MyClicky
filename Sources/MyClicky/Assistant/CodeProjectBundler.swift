@@ -463,6 +463,52 @@ enum CodeAnswerSegment: Equatable {
     }
 }
 
+enum CodeBlockApplicability {
+    static func canApply(language: String, to path: String, hasMatchedPrevious: Bool) -> Bool {
+        if hasMatchedPrevious { return true }
+
+        let language = language.lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !language.isEmpty else { return false }
+
+        let name = (path as NSString).lastPathComponent.lowercased()
+        let ext = (name as NSString).pathExtension
+        let accepted: Set<String>
+        switch ext {
+        case "py": accepted = ["py", "python"]
+        case "js", "mjs", "cjs": accepted = ["js", "javascript", "node"]
+        case "ts": accepted = ["ts", "typescript"]
+        case "tsx": accepted = ["tsx", "ts", "typescript"]
+        case "jsx": accepted = ["jsx", "js", "javascript"]
+        case "swift": accepted = ["swift"]
+        case "json": accepted = ["json", "jsonc"]
+        case "yaml", "yml": accepted = ["yaml", "yml"]
+        case "md", "markdown": accepted = ["md", "markdown"]
+        case "html", "htm": accepted = ["html"]
+        case "css": accepted = ["css"]
+        case "scss": accepted = ["scss", "sass"]
+        case "sh", "bash", "zsh", "fish": accepted = ["sh", "shell", "bash", "zsh", "fish"]
+        case "sql": accepted = ["sql"]
+        case "rb": accepted = ["rb", "ruby"]
+        case "rs": accepted = ["rs", "rust"]
+        case "go": accepted = ["go", "golang"]
+        case "java": accepted = ["java"]
+        case "kt", "kts": accepted = ["kt", "kotlin"]
+        case "c": accepted = ["c"]
+        case "h", "hpp", "cc", "cpp", "cxx": accepted = ["c", "cpp", "c++"]
+        case "txt": accepted = ["text", "txt", "plaintext"]
+        default:
+            switch name {
+            case ".gitignore": accepted = ["gitignore", "ignore"]
+            case "dockerfile": accepted = ["docker", "dockerfile"]
+            case "makefile": accepted = ["make", "makefile"]
+            default: accepted = ext.isEmpty ? [] : [ext]
+            }
+        }
+        return accepted.contains(language)
+    }
+}
+
 /// Putting a code block from an answer into a file.
 /// A local, line-based LCS. Only trailing spaces/tabs are ignored, as in Apply.
 enum LineDiff {

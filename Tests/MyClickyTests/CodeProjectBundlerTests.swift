@@ -400,6 +400,35 @@ final class CodeBlockLocatorTests: XCTestCase {
     }
 }
 
+final class CodeBlockApplicabilityTests: XCTestCase {
+    func testOnlyMatchingLanguageCanApplyToFocusedFile() {
+        XCTAssertTrue(CodeBlockApplicability.canApply(language: "py", to: "test_auto_hunter.py",
+                                                       hasMatchedPrevious: false))
+        XCTAssertTrue(CodeBlockApplicability.canApply(language: "python", to: "test_auto_hunter.py",
+                                                       hasMatchedPrevious: false))
+        XCTAssertFalse(CodeBlockApplicability.canApply(language: "sh", to: "test_auto_hunter.py",
+                                                        hasMatchedPrevious: false))
+        XCTAssertFalse(CodeBlockApplicability.canApply(language: "gitignore", to: "test_auto_hunter.py",
+                                                        hasMatchedPrevious: false))
+        XCTAssertFalse(CodeBlockApplicability.canApply(language: "", to: "test_auto_hunter.py",
+                                                        hasMatchedPrevious: false))
+    }
+
+    func testConfigurationAndShellLanguagesMatchTheirOwnFiles() {
+        XCTAssertTrue(CodeBlockApplicability.canApply(language: "gitignore", to: ".gitignore",
+                                                       hasMatchedPrevious: false))
+        XCTAssertTrue(CodeBlockApplicability.canApply(language: "bash", to: "scripts/setup.sh",
+                                                       hasMatchedPrevious: false))
+        XCTAssertFalse(CodeBlockApplicability.canApply(language: "python", to: "scripts/setup.sh",
+                                                        hasMatchedPrevious: false))
+    }
+
+    func testMatchedReplacementRemainsApplicableWithoutLanguageTag() {
+        XCTAssertTrue(CodeBlockApplicability.canApply(language: "", to: "App.swift",
+                                                       hasMatchedPrevious: true))
+    }
+}
+
 
 final class LineDiffTests: XCTestCase {
     func testIdenticalTextsAreAllSame() {
