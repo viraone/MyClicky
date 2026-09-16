@@ -4148,13 +4148,17 @@ struct AssistantPanelView: View {
                 ))
                 .foregroundStyle(.white)
                 .focused($fieldFocused)
-                .onSubmit {
-                    if NSEvent.modifierFlags.contains(.shift),
-                       let fieldEditor = NSApp.keyWindow?.firstResponder as? NSTextView {
-                        fieldEditor.insertNewlineIgnoringFieldEditor(nil)
+                .onKeyPress(.return, phases: .down) { press in
+                    if press.modifiers.contains(.shift) {
+                        if let fieldEditor = NSApp.keyWindow?.firstResponder as? NSTextView {
+                            fieldEditor.insertNewlineIgnoringFieldEditor(nil)
+                        } else {
+                            typedQuestion.append("\n")
+                        }
                     } else {
                         submit()
                     }
+                    return .handled
                 }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
