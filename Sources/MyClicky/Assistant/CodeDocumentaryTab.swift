@@ -7,10 +7,11 @@ import os
 
 private let log = Logger(subsystem: "MyClicky", category: "documentary")
 
-/// The Peeky Code Doc tab: pick a code file, Claude writes a short
+/// The Peeky Code Doc tab: pick a code file, a model writes a short
 /// documentary script about it, and a local Manim + Kokoro pipeline turns
-/// that into a narrated, animated MP4. Only the script-writing step talks to
-/// Claude; narration and rendering happen on this Mac.
+/// that into a narrated, animated MP4. The script writer is either a local
+/// model through Ollama (default — free, nothing leaves the Mac) or Claude;
+/// narration and rendering always happen on this Mac.
 ///
 /// The pipeline lives outside the app (default `~/code-documentary`) so it
 /// can be edited and run by hand too — see `make_doc.py` there.
@@ -78,12 +79,74 @@ final class CodeDocumentaryModel: ObservableObject {
         didSet { UserDefaults.standard.set(quality.rawValue, forKey: "documentaryQuality") }
     }
 
+    // MARK: Script writer
+
+    /// Who writes the script (and answers paused-frame questions). Local is
+    /// the default: the file never leaves this Mac and there's no API charge.
+    /// Claude remains one click away for the best narration.
+    @Published var scriptProvider: CodeAIProvider {
+        didSet {
+            UserDefaults.standard.set(scriptProvider.rawValue, forKey: Self.providerKey)
+            if scriptProvider == .ollama { refreshOllamaModels() }
+        }
+    }
+    @Published var ollamaModel: String {
+        didSet { UserDefaults.standard.set(ollamaModel, forKey: Self.ollamaModelKey) }
+    }
+    @Published var ollamaModels: [String] = []
+
+    static let providerKey = "documentaryProvider"
+    static let ollamaModelKey = "documentaryOllamaModel"
+    static let defaultOllamaModel = "qwen3-coder-next"
+
+    /// One tag for the picker: `"claude"` or `"ollama:<model>"`.
+    var scriptEngine: String {
+        get { scriptProvider == .claude ? "claude" : "ollama:\(ollamaModel)" }
+        set {
+            if newValue == "claude" {
+                scriptProvider = .claude
+            } else if newValue.hasPrefix("ollama:") {
+                ollamaModel = String(newValue.dropFirst("ollama:".count))
+                scriptProvider = .ollama
+            }
+        }
+    }
+
+    /// Models offered in the picker: the chosen one always, the default
+    /// always, then whatever Ollama has installed.
+    var ollamaChoices: [String] {
+        var out: [String] = []
+        for tag in [ollamaModel, Self.defaultOllamaModel] + ollamaModels {
+            let base = tag.hasSuffix(":latest") ? String(tag.dropLast(":latest".count)) : tag
+            if !out.contains(where: { $0 == base || $0 == tag || $0.hasPrefix("\(base):") }) { out.append(base) }
+        }
+        return out
+    }
+
+    var scriptWriterLabel: String {
+        scriptProvider == .claude ? "Claude" : AssistantState.ollamaDisplayName(ollamaModel)
+    }
+
+    let ollama = OllamaService()
+    private var ollamaRefresh: Task<Void, Never>?
+
+    func refreshOllamaModels() {
+        ollamaRefresh?.cancel()
+        ollamaRefresh = Task { [weak self] in
+            guard let self, let models = try? await self.ollama.models() else { return }
+            guard !Task.isCancelled else { return }
+            self.ollamaModels = models.filter { !$0.hasPrefix("nomic-embed") }
+        }
+    }
+
     private var process: Process?
     private var generation = 0
 
     init() {
         voice = UserDefaults.standard.string(forKey: "documentaryVoice") ?? "am_michael"
         quality = Quality(rawValue: UserDefaults.standard.string(forKey: "documentaryQuality") ?? "") ?? .high
+        scriptProvider = CodeAIProvider(rawValue: UserDefaults.standard.string(forKey: Self.providerKey) ?? "") ?? .ollama
+        ollamaModel = UserDefaults.standard.string(forKey: Self.ollamaModelKey) ?? Self.defaultOllamaModel
         refreshRecent()
     }
 
@@ -160,24 +223,24 @@ final class CodeDocumentaryModel: ObservableObject {
             phase = .failed("Pipeline not found at \(Self.pipelineDir.path). See the setup note below.")
             return
         }
-        guard let apiKey = KeychainService.anthropicAPIKey(), !apiKey.isEmpty else {
-            phase = .failed("No Anthropic API key in Keychain. Run once in Terminal:\n\(KeychainService.setupCommand)")
-            return
-        }
+        guard let requester = makeRequester(purpose: .script) else { return }
 
         generation += 1
         let gen = generation
         logLines = []
         scriptTitle = nil
         phase = .writingScript
-        ActivityLog.recordAction("code-documentary", ["file": source.lastPathComponent])
+        ActivityLog.recordAction("code-documentary", ["file": source.lastPathComponent,
+                                                      "writer": scriptProvider == .claude ? "claude" : ollamaModel])
 
         Task {
             do {
                 let code = try String(contentsOf: source, encoding: .utf8)
                 append("Reading \(source.lastPathComponent) (\(code.split(separator: "\n", omittingEmptySubsequences: false).count) lines)")
-                append("Asking Claude for a documentary script…")
-                let script = try await Self.writeScript(for: code, at: source, apiKey: apiKey)
+                append(scriptProvider == .claude
+                       ? "Asking Claude for a documentary script…"
+                       : "Asking \(scriptWriterLabel) on this Mac for a documentary script — nothing leaves the machine…")
+                let script = try await Self.writeScript(for: code, at: source, using: requester)
                 guard gen == generation else { return }
                 scriptTitle = script["title"] as? String
                 let sceneCount = (script["scenes"] as? [[String: Any]])?.count ?? 0
@@ -207,6 +270,59 @@ final class CodeDocumentaryModel: ObservableObject {
         process = nil
         append("Cancelled")
         phase = .idle
+    }
+
+    // MARK: Provider routing
+
+    /// A structured request bound to the chosen provider — Claude with the
+    /// user's key, or the local model through Ollama. Both answer one JSON
+    /// object for a system prompt plus one user message.
+    typealias JSONRequester = @MainActor (_ system: String, _ user: String) async throws -> [String: Any]
+
+    enum RequestPurpose {
+        case script, ask
+
+        var maxTokens: Int { self == .script ? 9_000 : 1_200 }
+        var claudeTimeout: TimeInterval { self == .script ? 240 : 60 }
+        var claudeEffort: String { self == .script ? "high" : "medium" }
+        /// An 80B model writing 6–9K tokens can take a few minutes.
+        var ollamaTimeout: TimeInterval { self == .script ? 900 : 300 }
+        var ollamaTemperature: Double { self == .script ? 0.4 : 0.2 }
+    }
+
+    /// nil (with the phase already set to `.failed`) when the provider
+    /// isn't usable — today that only means Claude without a key.
+    private func makeRequester(purpose: RequestPurpose) -> JSONRequester? {
+        switch scriptProvider {
+        case .claude:
+            guard let apiKey = KeychainService.anthropicAPIKey(), !apiKey.isEmpty else {
+                let message = purpose == .script
+                    ? "No Anthropic API key in Keychain. Run once in Terminal:\n\(KeychainService.setupCommand)\nOr switch Script to Local."
+                    : "No Anthropic API key in Keychain. Switch Script to Local, or add a key."
+                if purpose == .script { phase = .failed(message) } else { askPhase = .failed(message) }
+                return nil
+            }
+            let claude = AnthropicService(apiKey: apiKey)
+            return { system, user in
+                try await claude.requestJSON(system: system, userText: user, maxTokens: purpose.maxTokens,
+                                             timeout: purpose.claudeTimeout, effort: purpose.claudeEffort)
+            }
+        case .ollama:
+            let ollama = self.ollama
+            let model = ollamaModel
+            var status: (@MainActor (String) -> Void)?
+            if purpose == .script {
+                status = { [weak self] (line: String) in self?.append(line) }
+            }
+            let temperature = purpose.ollamaTemperature
+            let timeout = purpose.ollamaTimeout
+            let maxTokens = purpose.maxTokens
+            return { system, user in
+                try await ollama.requestJSON(system: system, userText: user, model: model,
+                                             maxTokens: maxTokens, temperature: temperature,
+                                             timeout: timeout, onStatus: status)
+            }
+        }
     }
 
     func open(_ url: URL) { NSWorkspace.shared.open(url) }
@@ -464,10 +580,7 @@ final class CodeDocumentaryModel: ObservableObject {
         let q = question.trimmingCharacters(in: .whitespacesAndNewlines)
         guard isShowingFilm, !q.isEmpty else { return }
         pauseForAsk()
-        guard let apiKey = KeychainService.anthropicAPIKey(), !apiKey.isEmpty else {
-            askPhase = .failed("No Anthropic API key in Keychain.")
-            return
-        }
+        guard let requester = makeRequester(purpose: .ask) else { return }
         let m = moment
         askPhase = .thinking(q)
         ActivityLog.recordAction("doc-ask", ["q": q, "t": m.timecode])
@@ -475,10 +588,9 @@ final class CodeDocumentaryModel: ObservableObject {
         remoteAudioTask?.cancel()
         askTask = Task { [weak self] in
             do {
-                let json = try await AnthropicService(apiKey: apiKey).requestJSON(
-                    system: Self.askSystemPrompt(mode: mode),
-                    userText: Self.askUserText(moment: m, question: q, mode: mode),
-                    maxTokens: 1_200, timeout: 60, effort: "medium")
+                let json = try await requester(
+                    Self.askSystemPrompt(mode: mode),
+                    Self.askUserText(moment: m, question: q, mode: mode))
                 guard let self, !Task.isCancelled else { return }
                 let answer = Self.parseAnswer(
                     json, question: q, fallbackLines: m.chapter?.lines, excerpt: m.excerpt)
@@ -959,7 +1071,7 @@ final class CodeDocumentaryModel: ObservableObject {
     Rules: valid JSON only; ids unique; line ranges inside the file; no markdown anywhere.
     """
 
-    static func writeScript(for code: String, at source: URL, apiKey: String) async throws -> [String: Any] {
+    static func writeScript(for code: String, at source: URL, using request: JSONRequester) async throws -> [String: Any] {
         let allLines = code.components(separatedBy: "\n")
         let numbered = allLines.enumerated()
             .map { String(format: "%4d| %@", $0.offset + 1, $0.element) }
@@ -971,9 +1083,7 @@ final class CodeDocumentaryModel: ObservableObject {
 
         \(numbered)
         """
-        let claude = AnthropicService(apiKey: apiKey)
-        var json = try await claude.requestJSON(system: scriptSystemPrompt, userText: user,
-                                                maxTokens: 9_000, timeout: 240, effort: "high")
+        var json = try await request(scriptSystemPrompt, user)
         json["source"] = source.path
         try validate(&json, lineCount: allLines.count)
         return json
@@ -985,7 +1095,7 @@ final class CodeDocumentaryModel: ObservableObject {
     static func validate(_ json: inout [String: Any], lineCount: Int) throws {
         guard var scenes = json["scenes"] as? [[String: Any]], !scenes.isEmpty else {
             throw NSError(domain: "CodeDocumentary", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "Claude's script had no scenes."])
+                          userInfo: [NSLocalizedDescriptionKey: "The script had no scenes."])
         }
         var seen = Set<String>()
         var kept: [[String: Any]] = []
@@ -1013,7 +1123,7 @@ final class CodeDocumentaryModel: ObservableObject {
         }
         guard kept.contains(where: { ($0["kind"] as? String) == "code" }) else {
             throw NSError(domain: "CodeDocumentary", code: 2,
-                          userInfo: [NSLocalizedDescriptionKey: "Claude's script had no usable code scenes."])
+                          userInfo: [NSLocalizedDescriptionKey: "The script had no usable code scenes."])
         }
         scenes = kept
         json["scenes"] = scenes
@@ -1111,7 +1221,10 @@ struct CodeDocumentaryView: View {
             }
             return true
         }
-        .onAppear { model.refreshRecent() }
+        .onAppear {
+            model.refreshRecent()
+            if model.scriptProvider == .ollama { model.refreshOllamaModels() }
+        }
     }
 
     // MARK: Player
@@ -1565,7 +1678,9 @@ struct CodeDocumentaryView: View {
                 Text("Turn a code file into a mini documentary")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.92))
-                Text("Claude writes the script · narration and animation render on this Mac · nothing else leaves it")
+                Text(model.scriptProvider == .claude
+                     ? "Claude writes the script · narration and animation render on this Mac · nothing else leaves it"
+                     : "\(model.scriptWriterLabel) writes the script on this Mac · narration and animation render here too · nothing leaves it · no API charge")
                     .font(.system(size: 11.5, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.4))
             }
@@ -1637,11 +1752,29 @@ struct CodeDocumentaryView: View {
 
     private var optionsRow: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 14) { voicePicker; qualityPicker; Spacer(minLength: 0) }
-            VStack(alignment: .leading, spacing: 8) { voicePicker; qualityPicker }
+            HStack(spacing: 14) { scriptPicker; voicePicker; qualityPicker; Spacer(minLength: 0) }
+            VStack(alignment: .leading, spacing: 8) { scriptPicker; voicePicker; qualityPicker }
         }
         .font(.system(size: 12))
         .disabled(model.phase.isRunning)
+    }
+
+    /// Claude in the cloud, or any installed Ollama model on this Mac.
+    private var scriptPicker: some View {
+        Picker("Script", selection: Binding(
+            get: { model.scriptEngine },
+            set: { model.scriptEngine = $0 }
+        )) {
+            ForEach(model.ollamaChoices, id: \.self) { tag in
+                Text("Local · \(AssistantState.ollamaDisplayName(tag))").tag("ollama:\(tag)")
+            }
+            Divider()
+            Text("Claude · Cloud").tag("claude")
+        }
+        .frame(maxWidth: 300)
+        .help(model.scriptProvider == .claude
+              ? "Claude Sonnet writes the script · billed to your Anthropic key"
+              : "\(model.ollamaModel) runs through Ollama on this Mac · no API charge")
     }
 
     private var voicePicker: some View {

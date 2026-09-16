@@ -100,6 +100,49 @@ final class OllamaService {
         return text
     }
 
+    /// One-shot structured request: a system prompt plus one user message,
+    /// answered as a single JSON object. Ollama's JSON mode constrains the
+    /// sampler to valid JSON, so local models can fill the same schemas
+    /// Claude does (documentary scripts, paused-frame answers) without
+    /// prose or code fences creeping in. `maxTokens` caps the answer and
+    /// is also reserved in the context window so long outputs don't get
+    /// truncated.
+    func requestJSON(system: String, userText: String, model: String,
+                     maxTokens: Int = 4_000, temperature: Double = 0.3, timeout: TimeInterval = 600,
+                     onStatus: (@MainActor (String) -> Void)? = nil) async throws -> [String: Any] {
+        try await ensureRunning()
+        try await ensureModel(model, onStatus: onStatus)
+
+        let messages: [[String: String]] = [
+            ["role": "system", "content": system],
+            ["role": "user", "content": userText],
+        ]
+        let limit = await contextLength(of: model)
+        guard let window = Self.contextWindow(for: messages, limit: limit,
+                                              headroom: max(Self.answerHeadroom, maxTokens)) else {
+            throw OllamaError.tooLarge(tokens: Self.estimatedTokens(of: messages), limit: limit)
+        }
+        onStatus?("\(model) · \(window / 1024)K context · JSON mode")
+        let body: [String: Any] = [
+            "model": model,
+            "stream": false,
+            "format": "json",
+            "messages": messages,
+            "options": ["temperature": temperature, "num_ctx": window, "num_predict": maxTokens],
+        ]
+        let data = try await post(path: "api/chat", body: body, timeout: timeout)
+        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let message = json["message"] as? [String: Any],
+              let text = (message["content"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty else {
+            throw OllamaError.emptyResponse
+        }
+        guard let object = AnthropicService.parseJSONObject(from: text) else {
+            throw OllamaError.notJSON
+        }
+        return object
+    }
+
     /// The conversation as Ollama's chat API wants it: the same system
     /// prompt and project bundle Claude gets, plus a blunt restatement of
     /// the two-block edit format. Local models otherwise tend to answer
@@ -200,7 +243,7 @@ final class OllamaService {
 
     /// Rough token count of a conversation — code runs about 3.5
     /// characters a token, the same figure the project card uses.
-    static func estimatedTokens(of messages: [[String: String]]) -> Int {
+    nonisolated static func estimatedTokens(of messages: [[String: String]]) -> Int {
         let characters = messages.reduce(0) { $0 + ($1["content"]?.count ?? 0) }
         return Int(Double(characters) / 3.5)
     }
@@ -212,8 +255,9 @@ final class OllamaService {
     /// its defaults Ollama sizes the key/value cache for the model's full
     /// window — 262K for Qwen3-Coder, about 26 GB on top of 17 GB of
     /// weights — on every question, however small the project.
-    static func contextWindow(for messages: [[String: String]], limit: Int?) -> Int? {
-        let needed = estimatedTokens(of: messages) + answerHeadroom
+    static func contextWindow(for messages: [[String: String]], limit: Int?,
+                              headroom: Int? = nil) -> Int? {
+        let needed = estimatedTokens(of: messages) + (headroom ?? answerHeadroom)
         if let limit, needed > limit { return nil }
         if let bucket = contextBuckets.first(where: { $0 >= needed }) {
             return limit.map { min(bucket, $0) } ?? bucket
@@ -350,6 +394,7 @@ final class OllamaService {
         case couldNotStart(String)
         case badResponse
         case emptyResponse
+        case notJSON
         case api(String)
         case tooLarge(tokens: Int, limit: Int?)
 
@@ -362,6 +407,7 @@ final class OllamaService {
             case .couldNotStart(let detail): return "Ollama could not start: \(detail)"
             case .badResponse: return "Ollama returned an unexpected response."
             case .emptyResponse: return "The local model returned an empty answer."
+            case .notJSON: return "The local model's answer wasn't valid JSON. Try again, or switch to Claude."
             case .api(let message): return "Ollama error: \(message)"
             }
         }

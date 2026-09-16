@@ -534,7 +534,7 @@ struct AnthropicService {
 
     /// Parses a JSON object from model output, tolerating stray markdown
     /// fences or surrounding text.
-    private static func parseJSONObject(from text: String) -> [String: Any]? {
+    static func parseJSONObject(from text: String) -> [String: Any]? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if let data = trimmed.data(using: .utf8),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {

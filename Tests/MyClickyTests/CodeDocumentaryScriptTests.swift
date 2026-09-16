@@ -63,4 +63,51 @@ final class CodeDocumentaryScriptTests: XCTestCase {
         XCTAssertEqual(model.sourceFile, file)
         XCTAssertEqual(model.phase, .idle)
     }
+
+    func testWriteScriptFeedsNumberedFileToRequesterAndValidates() async throws {
+        let source = URL(fileURLWithPath: "/tmp/hello.swift")
+        var seen: (system: String, user: String)?
+        let script = try await CodeDocumentaryModel.writeScript(for: "let a = 1\nlet b = 2\n", at: source) { system, user in
+            seen = (system, user)
+            return ["title": "", "scenes": [
+                ["id": "open", "kind": "title", "narration": "Hi."],
+                ["id": "c", "kind": "code", "lines": [1, 99], "narration": "Two lets."],
+            ]]
+        }
+        XCTAssertEqual(seen?.system, CodeDocumentaryModel.scriptSystemPrompt)
+        XCTAssertTrue(seen?.user.contains("   1| let a = 1") ?? false, "lines are numbered for the model")
+        XCTAssertTrue(seen?.user.contains("Lines: 3") ?? false)
+        XCTAssertEqual(script["source"] as? String, source.path)
+        XCTAssertEqual(script["title"] as? String, "THE CODE", "validate() repairs the local model's output")
+        let code = (script["scenes"] as! [[String: Any]])[1]
+        XCTAssertEqual(code["lines"] as! [Int], [1, 3])
+    }
+
+    func testScriptEngineTagRoundTripsProviderAndModel() {
+        let model = CodeDocumentaryModel()
+        model.scriptEngine = "ollama:qwen3-coder:30b"
+        XCTAssertEqual(model.scriptProvider, .ollama)
+        XCTAssertEqual(model.ollamaModel, "qwen3-coder:30b")
+        XCTAssertEqual(model.scriptEngine, "ollama:qwen3-coder:30b")
+        XCTAssertEqual(model.scriptWriterLabel, "Qwen3-Coder 30B")
+
+        model.scriptEngine = "claude"
+        XCTAssertEqual(model.scriptProvider, .claude)
+        XCTAssertEqual(model.ollamaModel, "qwen3-coder:30b", "last local choice is remembered")
+        XCTAssertEqual(model.scriptWriterLabel, "Claude")
+
+        model.scriptEngine = "garbage"
+        XCTAssertEqual(model.scriptProvider, .claude, "unknown tags are ignored")
+    }
+
+    func testOllamaChoicesKeepDefaultFirstAndFoldLatestTags() {
+        let model = CodeDocumentaryModel()
+        model.scriptEngine = "ollama:\(CodeDocumentaryModel.defaultOllamaModel)"
+        model.ollamaModels = ["qwen3-coder-next:latest", "qwen3-coder:30b", "llama3.1:8b"]
+        XCTAssertEqual(model.ollamaChoices, ["qwen3-coder-next", "qwen3-coder:30b", "llama3.1:8b"])
+
+        model.ollamaModel = "llama3.1:8b"
+        XCTAssertEqual(model.ollamaChoices.first, "llama3.1:8b", "the chosen model always appears")
+        XCTAssertTrue(model.ollamaChoices.contains("qwen3-coder-next"))
+    }
 }

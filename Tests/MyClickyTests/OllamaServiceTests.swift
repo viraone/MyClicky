@@ -132,6 +132,8 @@ final class OllamaServiceTests: XCTestCase {
         XCTAssertEqual(OllamaService.contextWindow(for: messages(characters: 7_000), limit: nil), 8_192)
         // Too big for the model: nil, so the caller explains instead of letting Ollama truncate the prompt.
         XCTAssertNil(OllamaService.contextWindow(for: messages(characters: 200_000), limit: 32_768))
+        // A long JSON answer reserves its own room: 8K of prompt plus 9K of script needs the 32K bucket.
+        XCTAssertEqual(OllamaService.contextWindow(for: messages(characters: 28_000), limit: 262_144, headroom: 9_000), 32_768)
         XCTAssertTrue(OllamaService.OllamaError.tooLarge(tokens: 57_000, limit: 32_768).localizedDescription.contains("57K tokens"))
     }
 
