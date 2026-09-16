@@ -1185,6 +1185,7 @@ struct CodeDocumentaryView: View {
     @State private var copiedAnswerPart: String?
     @State private var videoZoom: CGFloat = 1
     @State private var videoOffset: CGSize = .zero
+    @State private var conversationExpanded = false
     @GestureState private var videoDrag: CGSize = .zero
 
     var body: some View {
@@ -1199,7 +1200,22 @@ struct CodeDocumentaryView: View {
         }
         .animation(.easeInOut(duration: 0.3), value: model.nowPlaying)
         .onChange(of: model.nowPlaying) { _, url in
-            if url == nil { resetVideoZoom() }
+            if url == nil {
+                resetVideoZoom()
+                conversationExpanded = false
+            }
+        }
+        .onChange(of: model.askPhase) { _, phase in
+            if phase != .idle {
+                conversationExpanded = true
+            } else if model.askHistory.isEmpty {
+                conversationExpanded = false
+            }
+        }
+        .onChange(of: model.isPlaying) { _, playing in
+            if playing, !model.askHistory.isEmpty {
+                conversationExpanded = false
+            }
         }
     }
 
@@ -1278,7 +1294,7 @@ struct CodeDocumentaryView: View {
 
             zoomableVideo
 
-            if model.askPhase != .idle {
+            if !model.askHistory.isEmpty || model.askPhase != .idle {
                 askCard
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -1465,54 +1481,133 @@ struct CodeDocumentaryView: View {
 
     @ViewBuilder private var askCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: "questionmark.bubble.fill").foregroundStyle(accent)
-                Text("Ask about \(model.moment.label)")
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-                if !model.moment.codeRef.isEmpty {
-                    Text(model.moment.codeRef)
-                        .font(.system(size: 12.5, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.5))
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    conversationExpanded.toggle()
                 }
-            }
-
-            ScrollViewReader { proxy in
-                ScrollView(.vertical) {
-                    VStack(alignment: .leading, spacing: 12) {
-                        ForEach(Array(model.askHistory.enumerated()), id: \.offset) { index, answer in
-                            answerBody(answer, key: "history-\(index)")
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "bubble.left.and.bubble.right.fill")
+                        .foregroundStyle(accent)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text("Peeky conversation")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(.white)
+                            if !model.askHistory.isEmpty {
+                                Text("\(model.askHistory.count)")
+                                    .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(.white.opacity(0.85))
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Capsule().fill(accent.opacity(0.55)))
+                            }
                         }
-                        currentAskContent
-                        Color.clear.frame(height: 1).id("documentary-ask-bottom")
+                        Text(conversationSubtitle)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.white.opacity(0.55))
+                            .lineLimit(1)
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding(.trailing, 6)
+                    Spacer(minLength: 8)
+                    Image(systemName: conversationExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.65))
+                        .frame(width: 24, height: 24)
+                        .background(Circle().fill(Color.white.opacity(0.08)))
                 }
-                .scrollIndicators(.visible)
-                .frame(maxHeight: 460)
-                .onAppear {
-                    proxy.scrollTo("documentary-ask-bottom", anchor: .bottom)
-                }
-                .onChange(of: model.askHistory.count) {
-                    withAnimation { proxy.scrollTo("documentary-ask-bottom", anchor: .bottom) }
-                }
-                .onChange(of: model.askPhase) {
-                    withAnimation { proxy.scrollTo("documentary-ask-bottom", anchor: .bottom) }
-                }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .help(conversationExpanded ? "Collapse conversation" : "Show conversation")
 
-            switch model.askPhase {
-            case .answered, .failed:
-                answerActions
-            default:
-                EmptyView()
+            if conversationExpanded {
+                Divider().overlay(Color.white.opacity(0.10))
+
+                HStack(spacing: 8) {
+                    Image(systemName: "questionmark.bubble.fill").foregroundStyle(accent)
+                    Text("Ask about \(model.moment.label)")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.9))
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    if !model.moment.codeRef.isEmpty {
+                        Text(model.moment.codeRef)
+                            .font(.system(size: 11.5, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.45))
+                    }
+                }
+
+                ScrollViewReader { proxy in
+                    ScrollView(.vertical) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            ForEach(Array(model.askHistory.enumerated()), id: \.offset) { index, answer in
+                                answerBody(answer, key: "history-\(index)")
+                            }
+                            currentAskContent
+                            Color.clear.frame(height: 1).id("documentary-ask-bottom")
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.trailing, 6)
+                    }
+                    .scrollIndicators(.visible)
+                    .frame(maxHeight: 360)
+                    .onAppear {
+                        proxy.scrollTo("documentary-ask-bottom", anchor: .bottom)
+                    }
+                    .onChange(of: model.askHistory.count) {
+                        withAnimation { proxy.scrollTo("documentary-ask-bottom", anchor: .bottom) }
+                    }
+                    .onChange(of: model.askPhase) {
+                        withAnimation { proxy.scrollTo("documentary-ask-bottom", anchor: .bottom) }
+                    }
+                }
+
+                switch model.askPhase {
+                case .answered, .failed:
+                    answerActions
+                default:
+                    EmptyView()
+                }
+            } else if let answer = model.askHistory.last {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text("Q")
+                        .font(.system(size: 10.5, weight: .black, design: .rounded))
+                        .foregroundStyle(accent)
+                    Text(answer.question)
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.72))
+                        .lineLimit(1)
+                    Text("·")
+                        .foregroundStyle(.white.opacity(0.25))
+                    Text(answer.text)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.white.opacity(0.48))
+                        .lineLimit(1)
+                }
             }
         }
         .padding(12)
         .background(card)
+    }
+
+    private var conversationSubtitle: String {
+        switch model.askPhase {
+        case .listening:
+            return "Listening for a question…"
+        case .thinking(let question):
+            return "Answering: \(question)"
+        case .failed:
+            return "The latest question needs attention"
+        case .answered(let answer):
+            return answer.question
+        case .idle:
+            if let answer = model.askHistory.last {
+                return model.isPlaying
+                    ? "Collapsed while the film plays · \(answer.question)"
+                    : answer.question
+            }
+            return "Ask about this documentary"
+        }
     }
 
     @ViewBuilder private var currentAskContent: some View {
