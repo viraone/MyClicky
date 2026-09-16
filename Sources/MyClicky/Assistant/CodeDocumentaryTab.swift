@@ -1183,6 +1183,9 @@ struct CodeDocumentaryView: View {
     @ObservedObject var model: CodeDocumentaryModel
     let accent: Color
     @State private var copiedAnswerPart: String?
+    @State private var videoZoom: CGFloat = 1
+    @State private var videoOffset: CGSize = .zero
+    @GestureState private var videoDrag: CGSize = .zero
 
     var body: some View {
         Group {
@@ -1195,6 +1198,9 @@ struct CodeDocumentaryView: View {
             }
         }
         .animation(.easeInOut(duration: 0.3), value: model.nowPlaying)
+        .onChange(of: model.nowPlaying) { _, url in
+            if url == nil { resetVideoZoom() }
+        }
     }
 
     private var setupScreen: some View {
@@ -1248,6 +1254,7 @@ struct CodeDocumentaryView: View {
                     .foregroundStyle(.white.opacity(0.9))
                     .lineLimit(1)
                 Spacer(minLength: 0)
+                zoomControls
                 Button { model.startNew() } label: {
                     Label("New documentary", systemImage: "plus")
                         .font(.system(size: 12.5, weight: .semibold))
@@ -1269,17 +1276,7 @@ struct CodeDocumentaryView: View {
             }
             .padding(.horizontal, 4)
 
-            DocumentaryVideoSurface(player: model.player)
-                .aspectRatio(16 / 9, contentMode: .fit)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.black)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
-                )
-                .overlay(alignment: .bottomLeading) { momentBadge.padding(10) }
-                .onTapGesture { model.togglePlay() }
+            zoomableVideo
 
             if model.askPhase != .idle {
                 askCard
@@ -1292,6 +1289,145 @@ struct CodeDocumentaryView: View {
         .padding(.bottom, 8)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .animation(.easeInOut(duration: 0.25), value: model.askPhase)
+    }
+
+    private var zoomableVideo: some View {
+        GeometryReader { proxy in
+            ZStack {
+                Color.black
+                DocumentaryVideoSurface(player: model.player)
+                    .aspectRatio(16 / 9, contentMode: .fit)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .scaleEffect(videoZoom)
+                    .offset(clampedVideoOffset(
+                        CGSize(width: videoOffset.width + videoDrag.width,
+                               height: videoOffset.height + videoDrag.height),
+                        in: proxy.size
+                    ))
+            }
+            .contentShape(Rectangle())
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 3)
+                    .updating($videoDrag) { value, state, _ in
+                        guard videoZoom > 1 else { return }
+                        state = value.translation
+                    }
+                    .onEnded { value in
+                        guard videoZoom > 1 else { return }
+                        videoOffset = clampedVideoOffset(
+                            CGSize(width: videoOffset.width + value.translation.width,
+                                   height: videoOffset.height + value.translation.height),
+                            in: proxy.size
+                        )
+                    }
+            )
+            .onTapGesture { model.togglePlay() }
+        }
+        .aspectRatio(16 / 9, contentMode: .fit)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+        )
+        .overlay(alignment: .bottomLeading) { momentBadge.padding(10) }
+        .overlay(alignment: .bottomTrailing) {
+            if videoZoom > 1 {
+                Label("Drag to pan", systemImage: "hand.draw")
+                    .font(.system(size: 11.5, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.8))
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(Capsule().fill(Color.black.opacity(0.55)))
+                    .padding(10)
+                    .allowsHitTesting(false)
+            }
+        }
+    }
+
+    private var zoomControls: some View {
+        HStack(spacing: 2) {
+            Button { stepVideoZoom(-1) } label: {
+                Image(systemName: "minus.magnifyingglass")
+                    .frame(width: 26, height: 26)
+            }
+            .disabled(videoZoom <= 1)
+            .help("Zoom out")
+
+            Menu {
+                ForEach([CGFloat(1), 1.25, 1.5, 2], id: \.self) { zoom in
+                    Button {
+                        setVideoZoom(zoom)
+                    } label: {
+                        if videoZoom == zoom {
+                            Label(zoomLabel(zoom), systemImage: "checkmark")
+                        } else {
+                            Text(zoomLabel(zoom))
+                        }
+                    }
+                }
+            } label: {
+                Text(zoomLabel(videoZoom))
+                    .font(.system(size: 11.5, weight: .bold, design: .monospaced))
+                    .frame(minWidth: 42)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Video zoom")
+
+            Button { stepVideoZoom(1) } label: {
+                Image(systemName: "plus.magnifyingglass")
+                    .frame(width: 26, height: 26)
+            }
+            .disabled(videoZoom >= 2)
+            .help("Zoom in")
+
+            if videoZoom > 1 {
+                Button { resetVideoZoom() } label: {
+                    Image(systemName: "arrow.counterclockwise")
+                        .frame(width: 26, height: 26)
+                }
+                .help("Reset to fit")
+            }
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.white.opacity(0.9))
+        .padding(.horizontal, 5)
+        .padding(.vertical, 2)
+        .background(Capsule().fill(Color.white.opacity(0.10)))
+        .overlay(Capsule().strokeBorder(Color.white.opacity(0.16), lineWidth: 1))
+    }
+
+    private func stepVideoZoom(_ direction: Int) {
+        let levels: [CGFloat] = [1, 1.25, 1.5, 2]
+        let index = levels.enumerated().min(by: {
+            abs($0.element - videoZoom) < abs($1.element - videoZoom)
+        })?.offset ?? 0
+        setVideoZoom(levels[min(max(index + direction, 0), levels.count - 1)])
+    }
+
+    private func setVideoZoom(_ zoom: CGFloat) {
+        withAnimation(.easeInOut(duration: 0.18)) {
+            videoZoom = zoom
+            videoOffset = .zero
+        }
+    }
+
+    private func resetVideoZoom() {
+        setVideoZoom(1)
+    }
+
+    private func zoomLabel(_ zoom: CGFloat) -> String {
+        zoom == 1 ? "Fit" : "\(Int((zoom * 100).rounded()))%"
+    }
+
+    private func clampedVideoOffset(_ offset: CGSize, in size: CGSize) -> CGSize {
+        guard videoZoom > 1 else { return .zero }
+        let maxX = size.width * (videoZoom - 1) / 2
+        let maxY = size.height * (videoZoom - 1) / 2
+        return CGSize(width: min(max(offset.width, -maxX), maxX),
+                      height: min(max(offset.height, -maxY), maxY))
     }
 
     // MARK: Ask about this moment
