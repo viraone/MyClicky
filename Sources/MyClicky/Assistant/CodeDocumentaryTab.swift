@@ -1684,7 +1684,10 @@ struct CodeDocumentaryView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
                 if !a.steps.isEmpty { stepsView(a.steps) }
-                if let lines = a.lines, let excerpt = highlightedExcerpt(lines, excerpt: a.excerpt) { excerpt }
+                if let lines = a.lines,
+                   let excerpt = highlightedExcerpt(lines, excerpt: a.excerpt, key: "\(key)-excerpt") {
+                    excerpt
+                }
                 HStack(spacing: 6) {
                     Image(systemName: a.verified ? "checkmark.seal.fill" : "questionmark.circle")
                     Text(a.verified ? "Read from the code on screen" : "Peeky's interpretation — not verified in the code shown")
@@ -1801,7 +1804,7 @@ struct CodeDocumentaryView: View {
     }
 
     /// The chapter's code with the answer's lines lit in the accent colour.
-    private func highlightedExcerpt(_ lines: ClosedRange<Int>, excerpt: String) -> AnyView? {
+    private func highlightedExcerpt(_ lines: ClosedRange<Int>, excerpt: String, key: String) -> AnyView? {
         guard !excerpt.isEmpty else { return nil }
         let rows = excerpt.components(separatedBy: "\n")
         return AnyView(
@@ -1820,9 +1823,44 @@ struct CodeDocumentaryView: View {
                         }
                 }
             }
-            .padding(.vertical, 6)
+            .padding(.top, 6)
+            .padding(.bottom, 34)
             .background(RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.5)))
+            .overlay(alignment: .bottomTrailing) {
+                copyCodeButton(Self.codeFromNumberedExcerpt(excerpt), key: key)
+                    .padding(7)
+            }
         )
+    }
+
+    private func copyCodeButton(_ code: String, key: String) -> some View {
+        let copied = copiedAnswerPart == key
+        return Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(code, forType: .string)
+            copiedAnswerPart = key
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                if copiedAnswerPart == key { copiedAnswerPart = nil }
+            }
+        } label: {
+            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(copied ? Color.green : .white.opacity(0.7))
+                .frame(width: 26, height: 24)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.09)))
+        }
+        .buttonStyle(.plain)
+        .help(copied ? "Copied" : "Copy this code")
+        .accessibilityLabel(copied ? "Code copied" : "Copy this code")
+    }
+
+    static func codeFromNumberedExcerpt(_ excerpt: String) -> String {
+        excerpt.components(separatedBy: "\n").map { row in
+            guard let firstDigit = row.firstIndex(where: { $0.isNumber }) else { return row }
+            let afterDigits = row[firstDigit...].drop(while: { $0.isNumber })
+            guard afterDigits.hasPrefix("  ") else { return row }
+            return String(afterDigits.dropFirst(2))
+        }.joined(separator: "\n")
     }
 
     private var answerActions: some View {

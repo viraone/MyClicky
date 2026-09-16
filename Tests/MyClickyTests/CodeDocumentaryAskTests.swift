@@ -61,6 +61,14 @@ final class CodeDocumentaryAskTests: XCTestCase {
         XCTAssertNil(c.lines)
     }
 
+    func testCopiedExcerptOmitsDisplayLineNumbers() {
+        let excerpt = "  42  async goto(): Promise<void> {\n  43      await this.page.goto('/jobs');\n  44  }"
+        XCTAssertEqual(
+            CodeDocumentaryView.codeFromNumberedExcerpt(excerpt),
+            "async goto(): Promise<void> {\n    await this.page.goto('/jobs');\n}"
+        )
+    }
+
     func testRemoteStateLineWhenNothingIsShowing() {
         let model = CodeDocumentaryModel()
         let line = model.remoteStateLine()
