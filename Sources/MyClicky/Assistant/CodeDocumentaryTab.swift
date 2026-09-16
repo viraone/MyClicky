@@ -1343,6 +1343,13 @@ struct CodeDocumentaryView: View {
             }
 
             transportBar
+
+            switch model.askPhase {
+            case .answered, .failed:
+                answerActions
+            default:
+                EmptyView()
+            }
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 8)
@@ -1605,12 +1612,6 @@ struct CodeDocumentaryView: View {
                     }
                 }
 
-                switch model.askPhase {
-                case .answered, .failed:
-                    answerActions
-                default:
-                    EmptyView()
-                }
             } else if let answer = model.askHistory.last {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text("Q")
