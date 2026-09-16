@@ -1757,38 +1757,72 @@ struct CodeDocumentaryView: View {
         }
         .font(.system(size: 12))
         .disabled(model.phase.isRunning)
+        .opacity(model.phase.isRunning ? 0.55 : 1)
     }
 
     /// Claude in the cloud, or any installed Ollama model on this Mac.
     private var scriptPicker: some View {
-        Picker("Script", selection: Binding(
-            get: { model.scriptEngine },
-            set: { model.scriptEngine = $0 }
-        )) {
-            ForEach(model.ollamaChoices, id: \.self) { tag in
-                Text("Local · \(AssistantState.ollamaDisplayName(tag))").tag("ollama:\(tag)")
+        option("Script", icon: model.scriptProvider == .claude ? "cloud" : "desktopcomputer",
+               tint: model.scriptProvider == .claude ? .cyan : .green, maxWidth: 300) {
+            Picker("Script", selection: Binding(
+                get: { model.scriptEngine },
+                set: { model.scriptEngine = $0 }
+            )) {
+                ForEach(model.ollamaChoices, id: \.self) { tag in
+                    Text("Local · \(AssistantState.ollamaDisplayName(tag))").tag("ollama:\(tag)")
+                }
+                Divider()
+                Text("Claude · Cloud").tag("claude")
             }
-            Divider()
-            Text("Claude · Cloud").tag("claude")
         }
-        .frame(maxWidth: 300)
         .help(model.scriptProvider == .claude
               ? "Claude Sonnet writes the script · billed to your Anthropic key"
               : "\(model.ollamaModel) runs through Ollama on this Mac · no API charge")
     }
 
     private var voicePicker: some View {
-        Picker("Voice", selection: $model.voice) {
-            ForEach(CodeDocumentaryModel.voices) { Text($0.label).tag($0.id) }
+        option("Voice", icon: "waveform", tint: accent, maxWidth: 260) {
+            Picker("Voice", selection: $model.voice) {
+                ForEach(CodeDocumentaryModel.voices) { Text($0.label).tag($0.id) }
+            }
         }
-        .frame(maxWidth: 260)
     }
 
     private var qualityPicker: some View {
-        Picker("Quality", selection: $model.quality) {
-            ForEach(CodeDocumentaryModel.Quality.allCases) { Text($0.label).tag($0) }
+        option("Quality", icon: "4k.tv", tint: accent, maxWidth: 220) {
+            Picker("Quality", selection: $model.quality) {
+                ForEach(CodeDocumentaryModel.Quality.allCases) { Text($0.label).tag($0) }
+            }
         }
-        .frame(maxWidth: 220)
+    }
+
+    /// A bright, readable wrapper for the setup pickers: the stock macOS
+    /// menu picker nearly vanishes against this dark, translucent panel.
+    private func option<Content: View>(_ label: String, icon: String, tint: Color, maxWidth: CGFloat,
+                                       @ViewBuilder content: () -> Content) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(tint)
+            Text(label)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.85))
+            content()
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .tint(.white)
+                .foregroundStyle(.white)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: maxWidth)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.white.opacity(0.10))
+                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(tint.opacity(0.45), lineWidth: 1))
+        )
     }
 
     private var canGenerate: Bool { model.sourceFile != nil && model.pipelineReady }
