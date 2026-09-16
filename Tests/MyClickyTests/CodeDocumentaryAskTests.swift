@@ -90,6 +90,27 @@ final class CodeDocumentaryAskTests: XCTestCase {
         XCTAssertNil(model.resumableSession)
     }
 
+    func testDeleteOnlyTargetsDirectDocumentaryProjects() throws {
+        let root = URL(fileURLWithPath: "/tmp/peeky-projects")
+        let film = root.appendingPathComponent("job-page/documentary.mp4")
+        XCTAssertEqual(
+            try CodeDocumentaryModel.projectDirectory(for: film, within: root).path,
+            root.appendingPathComponent("job-page").path
+        )
+        XCTAssertThrowsError(
+            try CodeDocumentaryModel.projectDirectory(
+                for: URL(fileURLWithPath: "/tmp/documentary.mp4"),
+                within: root
+            )
+        )
+        XCTAssertThrowsError(
+            try CodeDocumentaryModel.projectDirectory(
+                for: root.appendingPathComponent("job-page/script.json"),
+                within: root
+            )
+        )
+    }
+
     func testRemoteStateLineWhenNothingIsShowing() {
         let model = CodeDocumentaryModel()
         let line = model.remoteStateLine()

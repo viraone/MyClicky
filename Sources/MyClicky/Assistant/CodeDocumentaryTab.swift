@@ -953,6 +953,24 @@ final class CodeDocumentaryModel: ObservableObject {
 
     func reveal(_ url: URL) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
 
+    func trash(_ item: Recent) throws {
+        let project = try Self.projectDirectory(for: item.url, within: Self.projectsDir)
+        try FileManager.default.trashItem(at: project, resultingItemURL: nil)
+        if resumableSession?.url == item.url { resumableSession = nil }
+        if case .done(let url) = phase, url == item.url { phase = .idle }
+        refreshRecent()
+    }
+
+    nonisolated static func projectDirectory(for film: URL, within projectsDirectory: URL) throws -> URL {
+        let root = projectsDirectory.standardizedFileURL
+        let project = film.deletingLastPathComponent().standardizedFileURL
+        guard film.lastPathComponent == "documentary.mp4",
+              project.deletingLastPathComponent().path == root.path else {
+            throw CocoaError(.fileWriteInvalidFileName)
+        }
+        return project
+    }
+
     func refreshRecent() {
         let fm = FileManager.default
         guard let dirs = try? fm.contentsOfDirectory(at: Self.projectsDir, includingPropertiesForKeys: nil) else {
@@ -1228,6 +1246,8 @@ struct CodeDocumentaryView: View {
     @State private var videoZoom: CGFloat = 1
     @State private var videoOffset: CGSize = .zero
     @State private var conversationExpanded = false
+    @State private var pendingDeletion: CodeDocumentaryModel.Recent?
+    @State private var deletionError: String?
     @GestureState private var videoDrag: CGSize = .zero
 
     var body: some View {
@@ -1258,6 +1278,28 @@ struct CodeDocumentaryView: View {
             if playing, !model.askHistory.isEmpty {
                 conversationExpanded = false
             }
+        }
+        .alert(item: $pendingDeletion) { item in
+            Alert(
+                title: Text("Delete “\(item.title)”?"),
+                message: Text("This moves the documentary and its generated files to the Trash."),
+                primaryButton: .destructive(Text("Delete")) {
+                    do {
+                        try model.trash(item)
+                    } catch {
+                        deletionError = error.localizedDescription
+                    }
+                },
+                secondaryButton: .cancel()
+            )
+        }
+        .alert("Couldn’t delete documentary", isPresented: Binding(
+            get: { deletionError != nil },
+            set: { if !$0 { deletionError = nil } }
+        )) {
+            Button("OK", role: .cancel) { deletionError = nil }
+        } message: {
+            Text(deletionError ?? "")
         }
     }
 
@@ -2419,6 +2461,11 @@ struct CodeDocumentaryView: View {
                     Button { model.reveal(item.url) } label: { Image(systemName: "folder") }
                         .buttonStyle(.plain)
                         .foregroundStyle(.white.opacity(0.5))
+                        .help("Show in Finder")
+                    Button { pendingDeletion = item } label: { Image(systemName: "trash") }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.white.opacity(0.5))
+                        .help("Delete documentary")
                 }
                 .padding(.vertical, 2)
             }
