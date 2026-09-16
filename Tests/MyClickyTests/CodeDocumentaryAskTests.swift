@@ -69,6 +69,27 @@ final class CodeDocumentaryAskTests: XCTestCase {
         )
     }
 
+    func testBackPreservesPlaybackPositionForReturn() {
+        let model = CodeDocumentaryModel()
+        let film = URL(fileURLWithPath: "/tmp/documentary.mp4")
+        model.play(film)
+        model.playhead = 50
+        model.duration = 165
+
+        model.stopPlaying()
+
+        XCTAssertNil(model.nowPlaying)
+        XCTAssertEqual(model.resumableSession?.url, film)
+        XCTAssertEqual(model.resumableSession?.playhead, 50)
+
+        model.resumeLastDocumentary()
+
+        XCTAssertEqual(model.nowPlaying, film)
+        XCTAssertEqual(model.playhead, 50)
+        XCTAssertFalse(model.isPlaying)
+        XCTAssertNil(model.resumableSession)
+    }
+
     func testRemoteStateLineWhenNothingIsShowing() {
         let model = CodeDocumentaryModel()
         let line = model.remoteStateLine()

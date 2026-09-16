@@ -335,6 +335,17 @@ final class CodeDocumentaryModel: ObservableObject {
     @Published var isPlaying = false
     @Published var playhead: Double = 0
     @Published var duration: Double = 0
+    struct ResumableSession: Equatable {
+        let url: URL
+        let title: String
+        let playhead: Double
+        let duration: Double
+        let answers: [Answer]
+        let askPhase: AskPhase
+
+        var lastQuestion: String? { answers.last?.question }
+    }
+    @Published private(set) var resumableSession: ResumableSession?
     private var timeObserver: Any?
     private var endObserver: NSObjectProtocol?
 
@@ -344,6 +355,7 @@ final class CodeDocumentaryModel: ObservableObject {
         askTask?.cancel()
         askPhase = .idle
         askHistory = []
+        resumableSession = nil
         nowPlaying = url
         playhead = 0
         duration = 0
@@ -398,8 +410,24 @@ final class CodeDocumentaryModel: ObservableObject {
 
     func restart() { seek(to: 0); if player.rate == 0 { player.play(); isPlaying = true } }
 
-    /// Stop: pause, rewind, and return to the setup screen.
-    func stopPlaying() {
+    /// Leave the player while keeping enough state to return to this moment.
+    func stopPlaying(preservingSession: Bool = true) {
+        if preservingSession, let url = nowPlaying {
+            let restorablePhase: AskPhase = switch askPhase {
+            case .answered, .failed, .idle: askPhase
+            case .listening, .thinking: .idle
+            }
+            resumableSession = ResumableSession(
+                url: url,
+                title: filmTitle,
+                playhead: playhead,
+                duration: duration,
+                answers: askHistory,
+                askPhase: restorablePhase
+            )
+        } else if !preservingSession {
+            resumableSession = nil
+        }
         player.pause()
         player.replaceCurrentItem(with: nil)
         isPlaying = false
@@ -408,6 +436,20 @@ final class CodeDocumentaryModel: ObservableObject {
         askPhase = .idle
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         endObserver = nil
+        publishState()
+    }
+
+    func resumeLastDocumentary() {
+        guard let session = resumableSession else { return }
+        play(session.url)
+        player.pause()
+        let target = CMTime(seconds: session.playhead, preferredTimescale: 600)
+        player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+        playhead = session.playhead
+        duration = session.duration
+        askHistory = session.answers
+        askPhase = session.askPhase
+        isPlaying = false
         publishState()
     }
 
@@ -901,7 +943,7 @@ final class CodeDocumentaryModel: ObservableObject {
 
     /// Back to the home screen with a clean slate, ready for another code file.
     func startNew() {
-        stopPlaying()
+        stopPlaying(preservingSession: false)
         guard !phase.isRunning else { return }
         sourceFile = nil
         scriptTitle = nil
@@ -1223,6 +1265,7 @@ struct CodeDocumentaryView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 header
+                if let session = model.resumableSession { continueWatchingCard(session) }
                 if !model.pipelineReady { setupCard }
                 fileCard
                 optionsRow
@@ -1264,7 +1307,7 @@ struct CodeDocumentaryView: View {
                 }
                 .buttonStyle(.plain)
                 .keyboardShortcut(.escape, modifiers: [])
-                .help("Back to Peeky Code Doc home (Esc)")
+                .help("Back to Peeky Code Doc home — your place and conversation are saved (Esc)")
                 Text(model.recent.first(where: { $0.url == url })?.title ?? url.deletingLastPathComponent().lastPathComponent)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.9))
@@ -1956,6 +1999,57 @@ struct CodeDocumentaryView: View {
                                      : Color.green.opacity(0.95))
             }
         }
+    }
+
+    private func continueWatchingCard(_ session: CodeDocumentaryModel.ResumableSession) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "play.rectangle.on.rectangle.fill")
+                .font(.system(size: 24))
+                .foregroundStyle(accent)
+                .frame(width: 32)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("CONTINUE WATCHING")
+                    .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                    .foregroundStyle(accent)
+                Text(session.title)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.95))
+                    .lineLimit(1)
+                HStack(spacing: 5) {
+                    Text("Paused at \(timecode(session.playhead))")
+                    if !session.answers.isEmpty {
+                        Text("·")
+                        Text("\(session.answers.count) question\(session.answers.count == 1 ? "" : "s") saved")
+                    }
+                }
+                .font(.system(size: 11.5, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.55))
+                if let question = session.lastQuestion {
+                    Text("“\(question)”")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 8)
+            Button { model.resumeLastDocumentary() } label: {
+                Label("Return to documentary", systemImage: "arrow.uturn.backward")
+                    .font(.system(size: 12.5, weight: .semibold))
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(accent)
+            .controlSize(.regular)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(accent.opacity(0.1))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(accent.opacity(0.45), lineWidth: 1)
+                )
+        )
     }
 
     private var setupCard: some View {
