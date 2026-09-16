@@ -1391,13 +1391,17 @@ struct CodeDocumentaryView: View {
                 header
                 if let session = model.resumableSession { continueWatchingCard(session) }
                 if !model.pipelineReady { setupCard }
-                fileCard
-                textFileCard
-                optionsRow
-                runRow
-                if !model.logLines.isEmpty || model.phase.isRunning { progressCard }
-                if case .done(let url) = model.phase { doneCard(url) }
-                if case .failed(let message) = model.phase { errorCard(message) }
+                if case .done(let url) = model.phase {
+                    if model.resumableSession?.url == url {
+                        newDocumentaryButton
+                    } else {
+                        doneCard(url)
+                    }
+                } else {
+                    creationCard
+                    if model.phase.isRunning { progressCard }
+                    if case .failed(let message) = model.phase { errorCard(message) }
+                }
                 if !model.recent.isEmpty { recentCard }
             }
             .padding(.horizontal, 16)
@@ -1407,7 +1411,10 @@ struct CodeDocumentaryView: View {
             guard let provider = providers.first else { return false }
             _ = provider.loadObject(ofClass: URL.self) { url, _ in
                 guard let url else { return }
-                Task { @MainActor in model.setSource(url) }
+                Task { @MainActor in
+                    guard !model.phase.isRunning else { return }
+                    model.setSource(url)
+                }
             }
             return true
         }
@@ -2113,9 +2120,12 @@ struct CodeDocumentaryView: View {
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundStyle(accent)
             VStack(alignment: .leading, spacing: 3) {
-                Text("Turn a code file into a mini documentary")
+                Text("Make a mini documentary")
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.92))
+                Text("Choose a code file or written document, then pick how it should sound.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.white.opacity(0.55))
                 Text(model.scriptProvider == .claude
                      ? "Claude writes the script · narration and animation render on this Mac · nothing else leaves it"
                      : "\(model.scriptWriterLabel) writes the script on this Mac · narration and animation render here too · nothing leaves it · no API charge")
@@ -2205,6 +2215,7 @@ struct CodeDocumentaryView: View {
     /// Drop handling for one card; the kind is fixed by which card was hit.
     private func dropHandler(kind: CodeDocumentaryModel.SourceKind) -> ([NSItemProvider]) -> Bool {
         { providers in
+            guard !model.phase.isRunning else { return false }
             guard let provider = providers.first else { return false }
             _ = provider.loadObject(ofClass: URL.self) { url, _ in
                 guard let url else { return }
@@ -2214,10 +2225,108 @@ struct CodeDocumentaryView: View {
         }
     }
 
-    private var fileCard: some View {
-        let selected = selectedFile(for: .code)
+    private var creationCard: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            stepHeading(1, "Choose your source", detail: "What should the documentary explain?")
+            sourceKindPicker
+            sourceDropZone
+
+            Divider().overlay(Color.white.opacity(0.08))
+
+            stepHeading(2, "Choose the style", detail: "Set the writer, narrator and video quality.")
+            optionsRow
+
+            Divider().overlay(Color.white.opacity(0.08))
+
+            stepHeading(3, "Create your film", detail: "Peeky writes, narrates and animates it.")
+            runRow
+        }
+        .padding(16)
+        .background(card)
+    }
+
+    private func stepHeading(_ number: Int, _ title: String, detail: String) -> some View {
+        HStack(spacing: 10) {
+            Text("\(number)")
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .foregroundStyle(.white)
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(accent))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.92))
+                Text(detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.45))
+            }
+        }
+    }
+
+    private var sourceKindPicker: some View {
+        HStack(spacing: 6) {
+            sourceKindButton(.code, title: "Code file", detail: "Explain how code works", icon: "chevron.left.forwardslash.chevron.right")
+            sourceKindButton(.text, title: "Text document", detail: "Explain writing or notes", icon: "doc.plaintext")
+        }
+        .padding(4)
+        .allowsHitTesting(!model.phase.isRunning)
+        .opacity(model.phase.isRunning ? 0.55 : 1)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.black.opacity(0.28))
+        )
+    }
+
+    private func sourceKindButton(_ kind: CodeDocumentaryModel.SourceKind, title: String,
+                                  detail: String, icon: String) -> some View {
+        let selected = model.sourceKind == kind
+        return Button {
+            guard !model.phase.isRunning, model.sourceKind != kind else { return }
+            model.sourceKind = kind
+            model.sourceFile = nil
+            if case .failed = model.phase { model.phase = .idle }
+        } label: {
+            HStack(spacing: 9) {
+                Image(systemName: icon)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(selected ? accent : .white.opacity(0.45))
+                    .frame(width: 22)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(selected ? .white : .white.opacity(0.62))
+                    Text(detail)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.white.opacity(selected ? 0.48 : 0.3))
+                }
+                Spacer(minLength: 0)
+                if selected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(accent)
+                }
+            }
+            .padding(.horizontal, 11)
+            .padding(.vertical, 9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(selected ? Color.white.opacity(0.10) : Color.clear)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(selected ? accent.opacity(0.45) : Color.clear, lineWidth: 1)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var sourceDropZone: some View {
+        let kind = model.sourceKind
+        let selected = selectedFile(for: kind)
+        let isText = kind == .text
         return HStack(spacing: 12) {
-            Image(systemName: selected == nil ? "doc.badge.plus" : "doc.text.fill")
+            Image(systemName: selected == nil ? (isText ? "doc.plaintext" : "doc.badge.plus") : "doc.text.fill")
                 .font(.system(size: 22))
                 .foregroundStyle(selected == nil ? .white.opacity(0.35) : accent)
                 .frame(width: 30)
@@ -2232,92 +2341,41 @@ struct CodeDocumentaryView: View {
                         .lineLimit(1)
                         .truncationMode(.head)
                 } else {
-                    Text("Drop a code file here")
+                    Text(isText ? "Drop a text document here" : "Drop a code file here")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(.white.opacity(0.85))
-                    Text("or click to choose one, or paste a path in the box below")
+                    Text(isText
+                         ? ".txt, .text or .md · essays, notes and explainers"
+                         : "Any readable source file · or paste its path below")
                         .font(.system(size: 11.5))
                         .foregroundStyle(.white.opacity(0.4))
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            Button(selected == nil ? "Choose…" : "Change…") { model.pickFile() }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-                .disabled(model.phase.isRunning)
-                .fixedSize()
+            Button(selected == nil ? "Choose file…" : "Change file…") {
+                isText ? model.pickTextFile() : model.pickFile()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .fixedSize()
         }
         .padding(14)
         .frame(maxWidth: .infinity)
-        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .onTapGesture { if !model.phase.isRunning { model.pickFile() } }
-        .onDrop(of: [.fileURL], isTargeted: nil, perform: dropHandler(kind: .code))
-        .help("Click to choose a file, or drop one here")
+        .allowsHitTesting(!model.phase.isRunning)
+        .opacity(model.phase.isRunning ? 0.55 : 1)
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .onTapGesture {
+            guard !model.phase.isRunning else { return }
+            if isText { model.pickTextFile() } else { model.pickFile() }
+        }
+        .onDrop(of: [.fileURL], isTargeted: nil, perform: dropHandler(kind: kind))
+        .help(isText ? "Choose or drop a text document" : "Choose or drop a code file")
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: selected == nil ? [6, 5] : []))
                 .foregroundStyle(selected == nil ? .white.opacity(0.18) : accent.opacity(0.45))
-                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.03)))
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.03)))
         )
-    }
-
-    /// The written-word section: same pipeline, prose-minded script.
-    private var textFileCard: some View {
-        let selected = selectedFile(for: .text)
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Text("OR A .TXT FILE")
-                    .font(.system(size: 10.5, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.45))
-                Text("· an essay, notes, an explainer — Peeky turns the writing into a mini documentary too")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.35))
-                    .lineLimit(1)
-            }
-            HStack(spacing: 12) {
-                Image(systemName: selected == nil ? "doc.plaintext" : "doc.plaintext.fill")
-                    .font(.system(size: 22))
-                    .foregroundStyle(selected == nil ? .white.opacity(0.35) : accent)
-                    .frame(width: 30)
-                VStack(alignment: .leading, spacing: 3) {
-                    if let file = selected {
-                        Text(file.lastPathComponent)
-                            .font(.system(size: 14, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.92))
-                        Text(file.deletingLastPathComponent().path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.4))
-                            .lineLimit(1)
-                            .truncationMode(.head)
-                    } else {
-                        Text("Drop a .txt file here")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(.white.opacity(0.85))
-                        Text("or click to choose one — the passages appear on screen while the narrator explains them")
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(.white.opacity(0.4))
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                Button(selected == nil ? "Choose…" : "Change…") { model.pickTextFile() }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(model.phase.isRunning)
-                    .fixedSize()
-            }
-            .padding(14)
-            .frame(maxWidth: .infinity)
-            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .onTapGesture { if !model.phase.isRunning { model.pickTextFile() } }
-            .onDrop(of: [.fileURL], isTargeted: nil, perform: dropHandler(kind: .text))
-            .help("Click to choose a .txt file, or drop one here")
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: selected == nil ? [6, 5] : []))
-                    .foregroundStyle(selected == nil ? .white.opacity(0.18) : accent.opacity(0.45))
-                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.03)))
-            )
-        }
     }
 
     private var optionsRow: some View {
@@ -2471,12 +2529,13 @@ struct CodeDocumentaryView: View {
                 Button { model.generate() } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "play.fill")
-                        Text("Make documentary")
+                        Text("Create documentary")
                     }
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
                     .padding(.horizontal, 16)
-                    .padding(.vertical, 9)
+                    .padding(.vertical, 10)
                     .background(
                         RoundedRectangle(cornerRadius: 9, style: .continuous)
                             .fill(canGenerate ? Color(red: 0.90, green: 0.04, blue: 0.08) : Color.white.opacity(0.12))
@@ -2495,7 +2554,7 @@ struct CodeDocumentaryView: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)
-                Text(canGenerate ? "⌘↩ · renders in 1–3 min" : "choose a code or .txt file above to enable")
+                Text(canGenerate ? "⌘↩ · usually 1–3 min" : "Choose a source in step 1 to continue")
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.35))
                     .lineLimit(1)
@@ -2560,30 +2619,51 @@ struct CodeDocumentaryView: View {
     }
 
     private func doneCard(_ url: URL) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: "checkmark.seal.fill")
-                .font(.system(size: 22))
-                .foregroundStyle(accent)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Your documentary is ready")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.92))
-                Text(url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.4))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 12) {
+                Image(systemName: "checkmark.seal.fill")
+                    .font(.system(size: 24))
+                    .foregroundStyle(accent)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Your documentary is ready")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.92))
+                    Text(url.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.4))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
-            Button { model.play(url) } label: { Label("Watch", systemImage: "play.rectangle.fill") }
+            HStack(spacing: 8) {
+                Button { model.play(url) } label: {
+                    Label("Watch documentary", systemImage: "play.rectangle.fill")
+                        .frame(maxWidth: .infinity)
+                }
                 .buttonStyle(.borderedProminent)
                 .tint(accent)
-            Button { model.reveal(url) } label: { Image(systemName: "folder") }
+                Button { model.startNew() } label: {
+                    Label("Create another", systemImage: "plus")
+                }
                 .buttonStyle(.bordered)
-                .help("Show in Finder")
+                Button { model.reveal(url) } label: { Image(systemName: "folder") }
+                    .buttonStyle(.bordered)
+                    .help("Show in Finder")
+            }
         }
         .padding(14)
         .background(card)
+    }
+
+    private var newDocumentaryButton: some View {
+        Button { model.startNew() } label: {
+            Label("Create a new documentary", systemImage: "plus")
+                .font(.system(size: 13, weight: .semibold))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 5)
+        }
+        .buttonStyle(.bordered)
     }
 
     private func errorCard(_ message: String) -> some View {
