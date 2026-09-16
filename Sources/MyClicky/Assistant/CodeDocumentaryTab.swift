@@ -1912,8 +1912,10 @@ struct CodeDocumentaryView: View {
                 Text(model.scriptProvider == .claude
                      ? "Claude writes the script · narration and animation render on this Mac · nothing else leaves it"
                      : "\(model.scriptWriterLabel) writes the script on this Mac · narration and animation render here too · nothing leaves it · no API charge")
-                    .font(.system(size: 11.5, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.4))
+                    .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(model.scriptProvider == .claude
+                                     ? Color.cyan.opacity(0.9)
+                                     : Color.green.opacity(0.95))
             }
         }
     }
@@ -1994,17 +1996,34 @@ struct CodeDocumentaryView: View {
     /// Claude in the cloud, or any installed Ollama model on this Mac.
     private var scriptPicker: some View {
         option("Script", icon: model.scriptProvider == .claude ? "cloud" : "desktopcomputer",
-               tint: model.scriptProvider == .claude ? .cyan : .green, maxWidth: 300) {
-            Picker("Script", selection: Binding(
-                get: { model.scriptEngine },
-                set: { model.scriptEngine = $0 }
-            )) {
+               tint: model.scriptProvider == .claude ? .cyan : .green, maxWidth: 340) {
+            Menu {
                 ForEach(model.ollamaChoices, id: \.self) { tag in
-                    Text("Local · \(AssistantState.ollamaDisplayName(tag))").tag("ollama:\(tag)")
+                    Button {
+                        model.scriptEngine = "ollama:\(tag)"
+                    } label: {
+                        Label("Local · \(AssistantState.ollamaDisplayName(tag))",
+                              systemImage: model.scriptEngine == "ollama:\(tag)" ? "checkmark" : "desktopcomputer")
+                    }
                 }
                 Divider()
-                Text("Claude · Cloud").tag("claude")
+                Button {
+                    model.scriptEngine = "claude"
+                } label: {
+                    Label("Claude · Cloud", systemImage: model.scriptProvider == .claude ? "checkmark" : "cloud")
+                }
+            } label: {
+                selectedOptionLabel(
+                    model.scriptProvider == .claude
+                        ? "Claude · Cloud"
+                        : "Local · \(model.scriptWriterLabel)",
+                    tint: model.scriptProvider == .claude ? .cyan : .green
+                )
             }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
         }
         .help(model.scriptProvider == .claude
               ? "Claude Sonnet writes the script · billed to your Anthropic key"
@@ -2013,22 +2032,70 @@ struct CodeDocumentaryView: View {
 
     private var voicePicker: some View {
         option("Voice", icon: "waveform", tint: accent, maxWidth: 260) {
-            Picker("Voice", selection: $model.voice) {
-                ForEach(CodeDocumentaryModel.voices) { Text($0.label).tag($0.id) }
+            Menu {
+                ForEach(CodeDocumentaryModel.voices) { voice in
+                    Button {
+                        model.voice = voice.id
+                    } label: {
+                        Label(voice.label, systemImage: model.voice == voice.id ? "checkmark" : "waveform")
+                    }
+                }
+            } label: {
+                selectedOptionLabel(
+                    CodeDocumentaryModel.voices.first(where: { $0.id == model.voice })?.label ?? model.voice,
+                    tint: accent
+                )
             }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
         }
     }
 
     private var qualityPicker: some View {
         option("Quality", icon: "4k.tv", tint: accent, maxWidth: 220) {
-            Picker("Quality", selection: $model.quality) {
-                ForEach(CodeDocumentaryModel.Quality.allCases) { Text($0.label).tag($0) }
+            Menu {
+                ForEach(CodeDocumentaryModel.Quality.allCases) { quality in
+                    Button {
+                        model.quality = quality
+                    } label: {
+                        Label(quality.label, systemImage: model.quality == quality ? "checkmark" : "4k.tv")
+                    }
+                }
+            } label: {
+                selectedOptionLabel(model.quality.label, tint: accent)
             }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
         }
     }
 
-    /// A bright, readable wrapper for the setup pickers: the stock macOS
-    /// menu picker nearly vanishes against this dark, translucent panel.
+    private func selectedOptionLabel(_ value: String, tint: Color) -> some View {
+        HStack(spacing: 5) {
+            Text(value)
+                .font(.system(size: 11.5, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+            Image(systemName: "chevron.down")
+                .font(.system(size: 8, weight: .black))
+                .foregroundStyle(tint)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color.black.opacity(0.48))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
+                )
+        )
+    }
+
+    /// A bright wrapper for the setup menus against the dark panel.
     private func option<Content: View>(_ label: String, icon: String, tint: Color, maxWidth: CGFloat,
                                        @ViewBuilder content: () -> Content) -> some View {
         HStack(spacing: 6) {
@@ -2039,11 +2106,6 @@ struct CodeDocumentaryView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.85))
             content()
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .tint(.white)
-                .foregroundStyle(.white)
-                .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: maxWidth)
         .padding(.horizontal, 10)
