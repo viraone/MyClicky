@@ -297,10 +297,26 @@ def g_filter(region: Rectangle, spec: dict):
     bar = search_bar(3.8, spec.get("query", "")).move_to(win[0].get_top() + DOWN * 0.8)
     grid = card_grid(total, cols=3, w=1.0, h=0.6).next_to(bar, DOWN, buff=0.3)
     parts = [win, bar[0], bar[1], grid, bar[2]]
-    beats = [[FadeIn(win), FadeIn(bar[0]), FadeIn(bar[1]), FadeIn(grid, lag_ratio=0.05)], [Write(bar[2])]]
+    empty = None
     if spec.get("empty"):
         empty = empty_state(3.4, 1.8).move_to(grid)
         parts.append(empty)
+    cap = None
+    if spec.get("caption"):
+        cap = caption(spec["caption"]).next_to(win, DOWN, buff=0.3)
+        parts.append(cap)
+
+    # Position first, then create `.animate` builders. AnimationBuilder stores
+    # its target immediately; creating it before `move_to(region)` makes the
+    # cards travel back to their old center when the filter beat begins.
+    group = VGroup(*parts)
+    if group.width > region.width:
+        group.scale_to_fit_width(region.width)
+    if group.height > region.height:
+        group.scale_to_fit_height(region.height)
+    group.move_to(region)
+    beats = [[FadeIn(win), FadeIn(bar[0]), FadeIn(bar[1]), FadeIn(grid, lag_ratio=0.05)], [Write(bar[2])]]
+    if empty is not None:
         beats += [[FadeOut(grid)], [FadeIn(empty, shift=UP * 0.1)]]
     else:
         step = max(total // max(kept, 1), 1)
@@ -311,11 +327,9 @@ def g_filter(region: Rectangle, spec: dict):
         if spec.get("restore"):
             beats.append([FadeOut(bar[2]), drop.animate.set_opacity(1),
                           *[k[0].animate.set_stroke(CARD_EDGE) for k in keep]])
-    if spec.get("caption"):
-        cap = caption(spec["caption"]).next_to(win, DOWN, buff=0.3)
-        parts.append(cap)
+    if cap is not None:
         beats.append([FadeIn(cap)])
-    return VGroup(*parts).move_to(region), beats
+    return group, beats
 
 
 def g_pair(region: Rectangle, spec: dict):
