@@ -83,6 +83,46 @@ final class CodeDocumentaryScriptTests: XCTestCase {
         XCTAssertEqual(code["lines"] as! [Int], [1, 3])
     }
 
+    func testTextSourceUsesProsePromptAndTagsScriptForPipeline() async throws {
+        let source = URL(fileURLWithPath: "/tmp/promise.txt")
+        var seen: (system: String, user: String)?
+        let script = try await CodeDocumentaryModel.writeScript(for: "# A promise\n\nIt is a value you don't have yet.\n",
+                                                                at: source, kind: .text) { system, user in
+            seen = (system, user)
+            return ["title": "THE PROMISE", "scenes": [
+                ["id": "open", "kind": "title", "narration": "Hi."],
+                ["id": "p", "kind": "code", "lines": [3, 3], "narration": "One sentence."],
+            ]]
+        }
+        XCTAssertEqual(seen?.system, CodeDocumentaryModel.textScriptSystemPrompt)
+        XCTAssertTrue(seen?.user.hasPrefix("Document: promise.txt") ?? false)
+        XCTAssertEqual(script["language"] as? String, "text", "pipeline wraps prose and hides line numbers")
+
+        // The code path is untouched: no language tag, same prompt as before.
+        let codeScript = try await CodeDocumentaryModel.writeScript(for: "let a = 1\n", at: URL(fileURLWithPath: "/tmp/a.swift")) { system, _ in
+            XCTAssertEqual(system, CodeDocumentaryModel.scriptSystemPrompt)
+            return ["scenes": [["id": "c", "kind": "code", "lines": [1, 1], "narration": "A let."]]]
+        }
+        XCTAssertNil(codeScript["language"])
+    }
+
+    func testSourceKindIsExplicitOrInferredFromExtension() throws {
+        let model = CodeDocumentaryModel()
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+        let txt = dir.appendingPathComponent("notes-\(UUID().uuidString).txt")
+        let ts = dir.appendingPathComponent("app-\(UUID().uuidString).ts")
+        try "Some notes.\n".write(to: txt, atomically: true, encoding: .utf8)
+        try "const a = 1;\n".write(to: ts, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: txt); try? FileManager.default.removeItem(at: ts) }
+
+        XCTAssertTrue(model.setSource(path: txt.path))
+        XCTAssertEqual(model.sourceKind, .text, "a typed .txt path lands in the text section")
+        XCTAssertTrue(model.setSource(path: ts.path))
+        XCTAssertEqual(model.sourceKind, .code)
+        XCTAssertTrue(model.setSource(txt, kind: .code))
+        XCTAssertEqual(model.sourceKind, .code, "the code card's own chooser and drop stay code, whatever the extension")
+    }
+
     func testScriptEngineTagRoundTripsProviderAndModel() {
         let model = CodeDocumentaryModel()
         model.scriptEngine = "ollama:qwen3-coder:30b"

@@ -67,7 +67,21 @@ final class CodeDocumentaryModel: ObservableObject {
         var url: URL { id }
     }
 
+    /// What the chosen file is: source code (the original flow) or written
+    /// text such as an essay or notes. Decides which script prompt is used
+    /// and how the pipeline draws the passages on screen.
+    enum SourceKind: String { case code, text }
+
+    /// Extensions treated as written text when the kind isn't stated
+    /// explicitly (a drop on the page, or a path typed in the box).
+    static let textExtensions: Set<String> = ["txt", "text", "md", "markdown"]
+
+    static func inferredKind(for url: URL) -> SourceKind {
+        textExtensions.contains(url.pathExtension.lowercased()) ? .text : .code
+    }
+
     @Published var sourceFile: URL?
+    @Published var sourceKind: SourceKind = .code
     @Published var phase: Phase = .idle
     @Published var logLines: [String] = []
     @Published var scriptTitle: String?
@@ -181,14 +195,28 @@ final class CodeDocumentaryModel: ObservableObject {
         panel.message = "Choose the code file to make a documentary about"
         panel.prompt = "Choose"
         if panel.runModal() == .OK, let url = panel.url {
-            setSource(url)
+            setSource(url, kind: .code)
+        }
+    }
+
+    /// The .txt section's chooser: plain-text documents only.
+    func pickTextFile() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.plainText]
+        panel.message = "Choose the .txt file to make a documentary about"
+        panel.prompt = "Choose"
+        if panel.runModal() == .OK, let url = panel.url {
+            setSource(url, kind: .text)
         }
     }
 
     /// Accepts a file URL or a typed path. Rejects folders and anything that
-    /// isn't readable text.
+    /// isn't readable text. `kind` nil infers code vs text from the extension.
     @discardableResult
-    func setSource(_ url: URL) -> Bool {
+    func setSource(_ url: URL, kind: SourceKind? = nil) -> Bool {
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else {
             phase = .failed("\(url.lastPathComponent) isn't a file.")
@@ -200,6 +228,7 @@ final class CodeDocumentaryModel: ObservableObject {
             return false
         }
         sourceFile = url
+        sourceKind = kind ?? Self.inferredKind(for: url)
         if case .failed = phase { phase = .idle }
         return true
     }
@@ -216,9 +245,10 @@ final class CodeDocumentaryModel: ObservableObject {
     func generate() {
         guard !phase.isRunning else { return }
         guard let source = sourceFile else {
-            phase = .failed("Choose a code file first.")
+            phase = .failed("Choose a code or .txt file first.")
             return
         }
+        let kind = sourceKind
         guard pipelineReady else {
             phase = .failed("Pipeline not found at \(Self.pipelineDir.path). See the setup note below.")
             return
@@ -231,6 +261,7 @@ final class CodeDocumentaryModel: ObservableObject {
         scriptTitle = nil
         phase = .writingScript
         ActivityLog.recordAction("code-documentary", ["file": source.lastPathComponent,
+                                                      "kind": kind.rawValue,
                                                       "writer": scriptProvider == .claude ? "claude" : ollamaModel])
 
         Task {
@@ -240,7 +271,7 @@ final class CodeDocumentaryModel: ObservableObject {
                 append(scriptProvider == .claude
                        ? "Asking Claude for a documentary script…"
                        : "Asking \(scriptWriterLabel) on this Mac for a documentary script — nothing leaves the machine…")
-                let script = try await Self.writeScript(for: code, at: source, using: requester)
+                let script = try await Self.writeScript(for: code, at: source, kind: kind, using: requester)
                 guard gen == generation else { return }
                 scriptTitle = script["title"] as? String
                 let sceneCount = (script["scenes"] as? [[String: Any]])?.count ?? 0
@@ -1131,20 +1162,71 @@ final class CodeDocumentaryModel: ObservableObject {
     Rules: valid JSON only; ids unique; line ranges inside the file; no markdown anywhere.
     """
 
-    static func writeScript(for code: String, at source: URL, using request: JSONRequester) async throws -> [String: Any] {
+    /// The prose counterpart: same schema and scene kinds, but the file is an
+    /// essay, notes or an article, and the "code" scenes show passages of it.
+    static let textScriptSystemPrompt = """
+    You write scripts for short, Netflix-style mini documentaries that explain a single written \
+    document — an essay, an explainer, notes, an article — to someone who learns best by watching. \
+    The script is rendered by an animation pipeline, so you answer with ONE JSON object and nothing \
+    else — no prose outside the JSON, no code fences.
+
+    Voice: a calm, confident documentary narrator. Concrete, vivid, plain English. Build tension \
+    ("here is the idea everyone gets wrong…"), then resolve it. Never read the passage aloud word for \
+    word; explain what it means, why the author is making the point, and how it connects to what came \
+    before. If the document contains small code examples, treat them as illustrations of the idea, not \
+    the subject. 2–5 sentences per scene. Total runtime 2.5–4 minutes (roughly 350–550 spoken words).
+
+    Schema:
+    {
+      "title": "SHORT PUNCHY TITLE",          // 1–4 words, uppercase feel, drawn from the document's idea
+      "subtitle": "A short documentary about <the document's subject>",
+      "scenes": [ ... 8–12 scenes ... ]
+    }
+
+    Scene kinds (every scene has a unique snake_case "id" and a "narration" string):
+    1. {"id","kind":"title","narration"}                      — FIRST scene only: the cold open.
+    2. {"id","kind":"code","lines":[start,end],"heading","narration","illustration"?}
+       Shows lines start..end of the document (1-based, inclusive, must exist in the file) as a passage \
+    on screen with a highlight sweeping down while you narrate. Lines of prose are long, so keep ranges \
+    to 1–10 lines — one paragraph, one heading plus its paragraph, or one short example. "heading" is \
+    2–6 words. Most scenes are this kind. Walk the document roughly top to bottom; skip filler.
+    3. {"id","kind":"example","heading","steps":[["label","value"],...],"narration"}
+       A worked example: 3–6 [label, value] pairs shown one by one (e.g. the stages of the idea, or an \
+    analogy the author uses played out step by step).
+    4. {"id","kind":"list","heading","items":["...","..."],"narration"}   — 3–5 takeaways, near the end.
+    5. {"id","kind":"credits","narration"}                    — LAST scene only, one or two sentences.
+
+    Optional "illustration" on passage scenes (use on most of them — pick the metaphor that fits):
+      {"type":"flow","steps":["a","b","c"],"caption":"..."}                       — a sequence of 2–5 steps
+      {"type":"compare","left":{"label","value":0..1,"note"?},"right":{"label","value":0..1,"note"?},"caption"?}
+                                                                                   — two bars; a "note" on the left is struck out as the wrong idea, on the right shown as the right one
+      {"type":"filter","query":"term","total":12,"kept":4,"empty":false,"restore":false,"caption"?}
+                                                                                   — a list narrowing under a search; empty=true shows an empty state; restore=true brings it back
+      {"type":"pair","left":"A","right":"B","arrow":"relationship","caption"?}     — two related ideas
+      {"type":"checklist","items":["..."],"caption"?}                              — 2–6 things ticked off
+      {"type":"callout","code":"TERM","text":"what it means","bad":"wrong idea"?}  — one term explained
+    Keep captions and step labels under 5 words; keep illustration text short enough to fit beside the passage.
+
+    Rules: valid JSON only; ids unique; line ranges inside the file; no markdown anywhere.
+    """
+
+    static func writeScript(for code: String, at source: URL, kind: SourceKind = .code,
+                            using request: JSONRequester) async throws -> [String: Any] {
         let allLines = code.components(separatedBy: "\n")
         let numbered = allLines.enumerated()
             .map { String(format: "%4d| %@", $0.offset + 1, $0.element) }
             .joined(separator: "\n")
         let user = """
-        File: \(source.lastPathComponent)
+        \(kind == .text ? "Document" : "File"): \(source.lastPathComponent)
         Path: \(source.path)
         Lines: \(allLines.count)
 
         \(numbered)
         """
-        var json = try await request(scriptSystemPrompt, user)
+        var json = try await request(kind == .text ? textScriptSystemPrompt : scriptSystemPrompt, user)
         json["source"] = source.path
+        // The pipeline wraps and hides line numbers for "text"; absent means code as before.
+        if kind == .text { json["language"] = "text" }
         try validate(&json, lineCount: allLines.count)
         return json
     }
@@ -1310,6 +1392,7 @@ struct CodeDocumentaryView: View {
                 if let session = model.resumableSession { continueWatchingCard(session) }
                 if !model.pipelineReady { setupCard }
                 fileCard
+                textFileCard
                 optionsRow
                 runRow
                 if !model.logLines.isEmpty || model.phase.isRunning { progressCard }
@@ -2113,14 +2196,33 @@ struct CodeDocumentaryView: View {
         .background(card)
     }
 
+    /// The file shown in a card: only when it's of that card's kind, so a
+    /// chosen .txt lights up the text section and leaves the code one empty.
+    private func selectedFile(for kind: CodeDocumentaryModel.SourceKind) -> URL? {
+        model.sourceKind == kind ? model.sourceFile : nil
+    }
+
+    /// Drop handling for one card; the kind is fixed by which card was hit.
+    private func dropHandler(kind: CodeDocumentaryModel.SourceKind) -> ([NSItemProvider]) -> Bool {
+        { providers in
+            guard let provider = providers.first else { return false }
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                guard let url else { return }
+                Task { @MainActor in model.setSource(url, kind: kind) }
+            }
+            return true
+        }
+    }
+
     private var fileCard: some View {
-        HStack(spacing: 12) {
-            Image(systemName: model.sourceFile == nil ? "doc.badge.plus" : "doc.text.fill")
+        let selected = selectedFile(for: .code)
+        return HStack(spacing: 12) {
+            Image(systemName: selected == nil ? "doc.badge.plus" : "doc.text.fill")
                 .font(.system(size: 22))
-                .foregroundStyle(model.sourceFile == nil ? .white.opacity(0.35) : accent)
+                .foregroundStyle(selected == nil ? .white.opacity(0.35) : accent)
                 .frame(width: 30)
             VStack(alignment: .leading, spacing: 3) {
-                if let file = model.sourceFile {
+                if let file = selected {
                     Text(file.lastPathComponent)
                         .font(.system(size: 14, weight: .semibold, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.92))
@@ -2139,7 +2241,7 @@ struct CodeDocumentaryView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            Button(model.sourceFile == nil ? "Choose…" : "Change…") { model.pickFile() }
+            Button(selected == nil ? "Choose…" : "Change…") { model.pickFile() }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .disabled(model.phase.isRunning)
@@ -2149,13 +2251,73 @@ struct CodeDocumentaryView: View {
         .frame(maxWidth: .infinity)
         .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .onTapGesture { if !model.phase.isRunning { model.pickFile() } }
+        .onDrop(of: [.fileURL], isTargeted: nil, perform: dropHandler(kind: .code))
         .help("Click to choose a file, or drop one here")
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: model.sourceFile == nil ? [6, 5] : []))
-                .foregroundStyle(model.sourceFile == nil ? .white.opacity(0.18) : accent.opacity(0.45))
+                .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: selected == nil ? [6, 5] : []))
+                .foregroundStyle(selected == nil ? .white.opacity(0.18) : accent.opacity(0.45))
                 .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.03)))
         )
+    }
+
+    /// The written-word section: same pipeline, prose-minded script.
+    private var textFileCard: some View {
+        let selected = selectedFile(for: .text)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Text("OR A .TXT FILE")
+                    .font(.system(size: 10.5, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.45))
+                Text("· an essay, notes, an explainer — Peeky turns the writing into a mini documentary too")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.35))
+                    .lineLimit(1)
+            }
+            HStack(spacing: 12) {
+                Image(systemName: selected == nil ? "doc.plaintext" : "doc.plaintext.fill")
+                    .font(.system(size: 22))
+                    .foregroundStyle(selected == nil ? .white.opacity(0.35) : accent)
+                    .frame(width: 30)
+                VStack(alignment: .leading, spacing: 3) {
+                    if let file = selected {
+                        Text(file.lastPathComponent)
+                            .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.92))
+                        Text(file.deletingLastPathComponent().path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.4))
+                            .lineLimit(1)
+                            .truncationMode(.head)
+                    } else {
+                        Text("Drop a .txt file here")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.85))
+                        Text("or click to choose one — the passages appear on screen while the narrator explains them")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.white.opacity(0.4))
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Button(selected == nil ? "Choose…" : "Change…") { model.pickTextFile() }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(model.phase.isRunning)
+                    .fixedSize()
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity)
+            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .onTapGesture { if !model.phase.isRunning { model.pickTextFile() } }
+            .onDrop(of: [.fileURL], isTargeted: nil, perform: dropHandler(kind: .text))
+            .help("Click to choose a .txt file, or drop one here")
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: selected == nil ? [6, 5] : []))
+                    .foregroundStyle(selected == nil ? .white.opacity(0.18) : accent.opacity(0.45))
+                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.white.opacity(0.03)))
+            )
+        }
     }
 
     private var optionsRow: some View {
@@ -2323,7 +2485,7 @@ struct CodeDocumentaryView: View {
                 .buttonStyle(.plain)
                 .disabled(!canGenerate)
                 .keyboardShortcut(.return, modifiers: .command)
-                .help(canGenerate ? "Write the script, narrate and render (⌘↩)" : "Choose a code file first")
+                .help(canGenerate ? "Write the script, narrate and render (⌘↩)" : "Choose a code or .txt file first")
             }
             HStack {
                 if let title = model.scriptTitle {
@@ -2333,7 +2495,7 @@ struct CodeDocumentaryView: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)
-                Text(canGenerate ? "⌘↩ · renders in 1–3 min" : "choose a code file above to enable")
+                Text(canGenerate ? "⌘↩ · renders in 1–3 min" : "choose a code or .txt file above to enable")
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.35))
                     .lineLimit(1)

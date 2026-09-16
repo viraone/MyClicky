@@ -272,6 +272,14 @@ and [Manim](https://www.manim.community) renders the film to
 `~/code-documentary/projects/<file>-<stamp>/documentary.mp4`. The film plays right inside the tab (with rewind, play/pause and skip controls); recent films
 are listed on the tab.
 
+**Or a .txt file.** Below the code drop zone is a second one for written text —
+an essay, notes, an explainer (`.txt`, `.text`, `.md`). Same pipeline, same
+voice and quality pickers, but the script writer is briefed to explain a
+document rather than a program: the passages appear on screen word-wrapped
+without line numbers while the narrator unpacks what they mean. Dropping or
+typing a path to a `.txt` anywhere on the tab lands in this section
+automatically; the code drop zone itself is unchanged.
+
 **Ask about this moment.** While a film is up, Peeky Ask is about the frame you're
 on. Press **Ask** (⌘/), the mic, or type in the box — the film pauses, the
 status line reads `Ask about 2:14 · The helper`, and Peeky answers from the exact
