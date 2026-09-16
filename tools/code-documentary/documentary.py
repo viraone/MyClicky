@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import textwrap
 from pathlib import Path
 
 from manim import (
@@ -24,6 +25,11 @@ PROJECT = Path(os.environ.get("DOC_PROJECT", ROOT))
 SCRIPT = json.loads((PROJECT / "script.json").read_text())
 DURATIONS = json.loads((PROJECT / "audio" / "durations.json").read_text())
 SOURCE_LINES = Path(SCRIPT["source"]).read_text().splitlines()
+# Pygments lexer for the passages on screen. Peeky writes "text" for a .txt
+# documentary; absent means a code file, drawn as before.
+LANGUAGE = SCRIPT.get("language") or "typescript"
+PROSE = LANGUAGE in ("text", "markdown")
+PROSE_WIDTH = 72  # characters per line before a paragraph wraps
 
 config.background_color = "#0b0d12"
 ACCENT = "#e50914"  # that streaming-service red
@@ -84,11 +90,17 @@ class Documentary(Scene):
     def scene_code(self, scene: dict) -> None:
         self.add_sound(str(PROJECT / "audio" / f"{scene['id']}.wav"))
         start, end = scene["lines"]
-        snippet = "\n".join(SOURCE_LINES[start - 1 : end])
+        raw = SOURCE_LINES[start - 1 : end]
+        if PROSE:
+            # Paragraphs are one long line each; wrap so they read like a page
+            # rather than a ribbon shrunk to fit, and drop the line numbers.
+            raw = [textwrap.fill(line, PROSE_WIDTH) if line.strip() else "" for line in raw]
+        snippet = "\n".join(raw)
         code = Code(
             code_string=snippet,
-            language="typescript",
+            language=LANGUAGE,
             formatter_style="monokai",
+            add_line_numbers=not PROSE,
             line_numbers_from=start,
             background="rectangle",
             background_config={"fill_color": "#12151d", "stroke_color": "#2a2f3a", "stroke_width": 1},
