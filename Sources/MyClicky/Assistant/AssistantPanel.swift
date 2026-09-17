@@ -1557,9 +1557,18 @@ final class KeyablePanel: NSPanel {
     }
 }
 
+/// The text being typed into the panel's question field. It lives in its own
+/// object, held by the panel as plain `@State` (not `@StateObject`, which
+/// would subscribe the panel to it), so a keystroke re-renders only the
+/// field and the send button — not the whole panel with its code editor,
+/// file list and answer log, which is what made typing crawl.
+final class QuestionDraft: ObservableObject {
+    @Published var text = ""
+}
+
 struct AssistantPanelView: View {
     @ObservedObject var state: AssistantState
-    @State private var typedQuestion = ""
+    @State private var draft = QuestionDraft()
     /// What the hovered header button does, shown in the header itself —
     /// system tooltips never appear over a non-activating panel.
     @State private var headerHint: String?
@@ -2472,20 +2481,7 @@ struct AssistantPanelView: View {
     private var topInputRow: some View {
         HStack(spacing: 10) {
             if state.tab == .ask { historyButton }
-            ZStack(alignment: .leading) {
-                if typedQuestion.isEmpty {
-                    Text(inputPlaceholder)
-                        .font(.system(size: 17, design: .monospaced))
-                        .foregroundStyle(.white)
-                        .allowsHitTesting(false)
-                }
-                TextField("", text: $typedQuestion)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 17, design: .monospaced))
-                    .foregroundStyle(.white)
-                    .focused($fieldFocused)
-                    .onSubmit(submit)
-            }
+            TopInputField(draft: draft, placeholder: inputPlaceholder, fieldFocused: $fieldFocused, submit: submit)
         }
         .padding(.top, 4)
     }
@@ -4158,60 +4154,13 @@ struct AssistantPanelView: View {
     /// box is expected. It grows with what's in it — paste forty lines of
     /// code and you see them (⇧↩ adds a line; ↩ sends).
     private var bottomInputField: some View {
-        ZStack(alignment: .topLeading) {
-            if typedQuestion.isEmpty {
-                Text(inputPlaceholder)
-                    .font(.system(
-                        size: state.tab == .documentary ? 15 : 14,
-                        weight: .medium,
-                        design: state.tab == .documentary ? .default : .monospaced
-                    ))
-                    .foregroundStyle(.white.opacity(state.tab == .documentary ? 0.7 : 0.45))
-                    .lineLimit(1)
-                    .allowsHitTesting(false)
-                    .padding(.leading, 2)
-            }
-            TextField("", text: $typedQuestion, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(1...8)
-                .onChange(of: state.codePrefillQuestion) { text in
-                    guard let text else { return }
-                    typedQuestion = text
-                    fieldFocused = true
-                    state.codePrefillQuestion = nil
-                }
-                .font(.system(
-                    size: state.tab == .documentary ? 15 : 14,
-                    weight: .medium,
-                    design: state.tab == .documentary ? .default : .monospaced
-                ))
-                .foregroundStyle(.white)
-                .focused($fieldFocused)
-                .onKeyPress(.return, phases: .down) { press in
-                    if press.modifiers.contains(.shift) {
-                        if let fieldEditor = NSApp.keyWindow?.firstResponder as? NSTextView {
-                            fieldEditor.insertNewlineIgnoringFieldEditor(nil)
-                        } else {
-                            typedQuestion.append("\n")
-                        }
-                    } else {
-                        submit()
-                    }
-                    return .handled
-                }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .fill(state.tab == .documentary ? state.accent.opacity(0.10) : Color.white.opacity(0.06)))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .strokeBorder(
-                state.tab == .documentary
-                    ? state.accent.opacity(fieldFocused ? 0.85 : 0.45)
-                    : Color.white.opacity(fieldFocused ? 0.22 : 0.10),
-                lineWidth: state.tab == .documentary ? 1.5 : 1
-            ))
+        BottomInputField(
+            state: state,
+            draft: draft,
+            placeholder: inputPlaceholder,
+            fieldFocused: $fieldFocused,
+            submit: submit
+        )
     }
 
     private var promptReadout: some View {
@@ -4762,26 +4711,7 @@ struct AssistantPanelView: View {
     }
 
     private var sendButton: some View {
-        Button(action: submit) {
-            Image(systemName: "arrow.up")
-                .font(.system(size: 14, weight: .heavy))
-                .foregroundStyle(.black)
-                .frame(width: 26, height: 26)
-                .background(
-                Circle().fill(
-                    typedQuestion.isEmpty
-                        ? AnyShapeStyle(Color.white.opacity(0.14))
-                        : AnyShapeStyle(LinearGradient(
-                            colors: [.cyan, Color(red: 0.2, green: 0.55, blue: 0.95)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        ))
-                )
-                )
-        }
-        .buttonStyle(.plain)
-        .disabled(typedQuestion.isEmpty)
-        .help("Send")
+        SendButton(draft: draft, action: submit)
     }
 
     /// Red stop button shown while Peeky is thinking or speaking.
@@ -5052,9 +4982,9 @@ struct AssistantPanelView: View {
     }
 
     private func submit() {
-        let text = typedQuestion.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        typedQuestion = ""
+        draft.text = ""
         switch state.tab {
         case .talk: state.onDo?(text)
         case .code: state.onAskCode?(text)
@@ -5095,6 +5025,122 @@ struct AssistantPanelView: View {
             }
         }
         return true
+    }
+}
+
+/// The Ask/Talk tabs' big field at the top of the panel. Observes only the
+/// draft, so typing re-renders this view and nothing above it.
+private struct TopInputField: View {
+    @ObservedObject var draft: QuestionDraft
+    let placeholder: String
+    let fieldFocused: FocusState<Bool>.Binding
+    let submit: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            if draft.text.isEmpty {
+                Text(placeholder)
+                    .font(.system(size: 17, design: .monospaced))
+                    .foregroundStyle(.white)
+                    .allowsHitTesting(false)
+            }
+            TextField("", text: $draft.text)
+                .textFieldStyle(.plain)
+                .font(.system(size: 17, design: .monospaced))
+                .foregroundStyle(.white)
+                .focused(fieldFocused)
+                .onSubmit(submit)
+        }
+    }
+}
+
+/// The Code/Terminal/Doc tabs' question box in the bottom bar. See
+/// `QuestionDraft` for why it holds the text rather than the panel.
+private struct BottomInputField: View {
+    @ObservedObject var state: AssistantState
+    @ObservedObject var draft: QuestionDraft
+    let placeholder: String
+    let fieldFocused: FocusState<Bool>.Binding
+    let submit: () -> Void
+
+    var body: some View {
+        let isDoc = state.tab == .documentary
+        let focused = fieldFocused.wrappedValue
+        ZStack(alignment: .topLeading) {
+            if draft.text.isEmpty {
+                Text(placeholder)
+                    .font(.system(size: isDoc ? 15 : 14, weight: .medium, design: isDoc ? .default : .monospaced))
+                    .foregroundStyle(.white.opacity(isDoc ? 0.7 : 0.45))
+                    .lineLimit(1)
+                    .allowsHitTesting(false)
+                    .padding(.leading, 2)
+            }
+            TextField("", text: $draft.text, axis: .vertical)
+                .textFieldStyle(.plain)
+                .lineLimit(1...8)
+                .onChange(of: state.codePrefillQuestion) { text in
+                    guard let text else { return }
+                    draft.text = text
+                    fieldFocused.wrappedValue = true
+                    state.codePrefillQuestion = nil
+                }
+                .font(.system(size: isDoc ? 15 : 14, weight: .medium, design: isDoc ? .default : .monospaced))
+                .foregroundStyle(.white)
+                .focused(fieldFocused)
+                .onKeyPress(.return, phases: .down) { press in
+                    if press.modifiers.contains(.shift) {
+                        if let fieldEditor = NSApp.keyWindow?.firstResponder as? NSTextView {
+                            fieldEditor.insertNewlineIgnoringFieldEditor(nil)
+                        } else {
+                            draft.text.append("\n")
+                        }
+                    } else {
+                        submit()
+                    }
+                    return .handled
+                }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(isDoc ? state.accent.opacity(0.10) : Color.white.opacity(0.06)))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .strokeBorder(
+                isDoc
+                    ? state.accent.opacity(focused ? 0.85 : 0.45)
+                    : Color.white.opacity(focused ? 0.22 : 0.10),
+                lineWidth: isDoc ? 1.5 : 1
+            ))
+    }
+}
+
+/// The ↑ send button: lit while there is something to send.
+private struct SendButton: View {
+    @ObservedObject var draft: QuestionDraft
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "arrow.up")
+                .font(.system(size: 14, weight: .heavy))
+                .foregroundStyle(.black)
+                .frame(width: 26, height: 26)
+                .background(
+                    Circle().fill(
+                        draft.text.isEmpty
+                            ? AnyShapeStyle(Color.white.opacity(0.14))
+                            : AnyShapeStyle(LinearGradient(
+                                colors: [.cyan, Color(red: 0.2, green: 0.55, blue: 0.95)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            ))
+                    )
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(draft.text.isEmpty)
+        .help("Send")
     }
 }
 
