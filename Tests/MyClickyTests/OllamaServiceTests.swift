@@ -58,6 +58,8 @@ final class OllamaServiceTests: XCTestCase {
         XCTAssertFalse(system.contains("===== FILE: answer.ts"), "the focused file is not sent twice")
         XCTAssertTrue(system.contains("1 | export const answer = 42"),
                       "focused file rides in the system prefix, with line numbers, where Ollama can cache it")
+        XCTAssertTrue(system.hasSuffix(OllamaService.brevityRule),
+                      "brevity rule comes after the file so a small model still has it in view")
         let last = try XCTUnwrap(messages[3]["content"])
         XCTAssertTrue(last.hasPrefix("Make it 43"), "the question is all that changes between turns")
         XCTAssertTrue(last.hasSuffix(OllamaService.questionReminder), "reminder is the last thing the model reads")
