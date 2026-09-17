@@ -81,6 +81,45 @@ final class OllamaServiceTests: XCTestCase {
         XCTAssertLessThan(OllamaService.estimatedTokens(of: messages), 10_000)
     }
 
+    func testLargeFocusedFileIsExcerptedWithOriginalLineNumbers() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("peeky-ollama-large-focused-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let text = (1...3_000).map { "record \($0): \(String(repeating: "x", count: 40))" }
+            .joined(separator: "\n")
+        try text.write(to: root.appendingPathComponent("large.json"), atomically: true, encoding: .utf8)
+        let project = try XCTUnwrap(CodeProjectBundler.bundle(urls: [root]))
+
+        let messages = OllamaService.messages(question: "Summarize it", project: project,
+                                              focusedFile: "large.json", changedFiles: [], history: [])
+        let current = try XCTUnwrap(messages.last?["content"])
+        XCTAssertTrue(current.contains("1 | record 1:"))
+        XCTAssertTrue(current.contains("3000 | record 3000:"))
+        XCTAssertTrue(current.contains("lines omitted to keep local Qwen responsive"))
+        XCTAssertLessThan(current.count, OllamaService.maxLocalFocusedFileCharacters + 2_000)
+        XCTAssertLessThanOrEqual(
+            try XCTUnwrap(OllamaService.contextWindow(for: messages, limit: 262_144)),
+            32_768
+        )
+    }
+
+    func testFocusedChangedFileIsIncludedOnlyOnce() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("peeky-ollama-current-focused-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "old".write(to: root.appendingPathComponent("answer.ts"), atomically: true, encoding: .utf8)
+        let project = try XCTUnwrap(CodeProjectBundler.bundle(urls: [root]))
+
+        let messages = OllamaService.messages(question: "Review it", project: project,
+                                              focusedFile: "answer.ts",
+                                              changedFiles: [(path: "answer.ts", text: "unique-current-text")],
+                                              history: [])
+        let combined = messages.compactMap { $0["content"] }.joined(separator: "\n")
+        XCTAssertEqual(combined.components(separatedBy: "unique-current-text").count - 1, 1)
+    }
+
     func testNoFocusedFileUsesBoundedLocalProjectSlice() throws {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("peeky-ollama-slice-\(UUID().uuidString)")

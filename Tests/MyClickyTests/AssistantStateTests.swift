@@ -4,6 +4,24 @@ import XCTest
 
 @MainActor
 final class AssistantStateTests: XCTestCase {
+    func testFastQwenMigrationReplacesThePreviouslySelected80BModelOnce() throws {
+        let suiteName = "AssistantStateTests.\(UUID().uuidString)"
+        let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { suite.removePersistentDomain(forName: suiteName) }
+        suite.set("qwen3-coder-next:latest", forKey: AssistantState.codeOllamaModelKey)
+
+        XCTAssertEqual(
+            AssistantState.initialOllamaModel(forKey: AssistantState.codeOllamaModelKey, defaults: suite),
+            AssistantState.fastOllamaModel
+        )
+        suite.set("qwen3-coder-next:latest", forKey: AssistantState.codeOllamaModelKey)
+        XCTAssertEqual(
+            AssistantState.initialOllamaModel(forKey: AssistantState.codeOllamaModelKey, defaults: suite),
+            "qwen3-coder-next:latest",
+            "after migration, an explicit switch back to the quality model is preserved"
+        )
+    }
+
     func testChangingTheLocalModelReportsTheOneLeftBehind() {
         let saved = UserDefaults.standard.string(forKey: AssistantState.codeOllamaModelKey)
         defer {

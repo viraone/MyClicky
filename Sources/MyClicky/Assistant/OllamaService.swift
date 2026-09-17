@@ -30,9 +30,14 @@ final class OllamaService {
         onStatus?("\(model) · local text model")
         let body: [String: Any] = [
             "model": model,
+            "keep_alive": Self.keepAlive,
             "stream": false,
             "messages": messages,
-            "options": ["temperature": 0.3, "num_ctx": window],
+            "options": [
+                "temperature": 0.3,
+                "num_ctx": window,
+                "num_predict": Self.askMaxOutputTokens,
+            ],
         ]
         let data = try await post(path: "api/chat", body: body, timeout: 600)
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -86,9 +91,14 @@ final class OllamaService {
         onStatus?("\(model) · \(scope) · \(window / 1024)K context")
         let body: [String: Any] = [
             "model": model,
+            "keep_alive": Self.keepAlive,
             "stream": false,
             "messages": messages,
-            "options": ["temperature": 0.2, "num_ctx": window],
+            "options": [
+                "temperature": 0.2,
+                "num_ctx": window,
+                "num_predict": Self.codeMaxOutputTokens,
+            ],
         ]
         let data = try await post(path: "api/chat", body: body, timeout: 600)
         guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -125,6 +135,7 @@ final class OllamaService {
         onStatus?("\(model) · \(window / 1024)K context · JSON mode")
         let body: [String: Any] = [
             "model": model,
+            "keep_alive": Self.keepAlive,
             "stream": false,
             "format": "json",
             "messages": messages,
@@ -158,15 +169,18 @@ final class OllamaService {
                 + (project.guidanceText.map { "\n\n\($0)" } ?? "")
                 + "\n\n" + projectContext,
         ]]
-        for turn in history.suffix(AnthropicService.codeHistoryLimit) {
+        for turn in history.suffix(localCodeHistoryLimit) {
             messages.append(["role": "user", "content": turn.question])
             messages.append(["role": "assistant", "content": turn.answer])
         }
         var current = ""
-        if !changedFiles.isEmpty {
+        let supplementalChangedFiles = changedFiles.filter { $0.path != focusedFile }
+        if !supplementalChangedFiles.isEmpty {
             current += "Since the project snapshot was taken, these files changed. Use these current versions:\n\n"
-            for file in changedFiles {
-                current += "===== FILE: \(file.path) (current) =====\n\(file.text)\n\n"
+            for file in supplementalChangedFiles {
+                current += "===== FILE: \(file.path) (current) =====\n"
+                    + excerpt(file.text, maxCharacters: maxLocalChangedFileCharacters)
+                    + "\n\n"
             }
         }
         if let focusedFile {
@@ -176,7 +190,7 @@ final class OllamaService {
             if let text {
                 current += "Here is \(focusedFile) with line numbers. When the user refers to a line number, "
                     + "use these numbers exactly — do not count lines yourself:\n\n"
-                    + Self.numbered(text) + "\n\n"
+                    + Self.numberedExcerpt(text, maxCharacters: maxLocalFocusedFileCharacters) + "\n\n"
             }
         }
         current += question + "\n\n" + questionReminder
@@ -219,7 +233,13 @@ final class OllamaService {
         return out
     }
 
-    static let maxLocalProjectCharacters = 80_000
+    static let maxLocalProjectCharacters = 60_000
+    static let maxLocalFocusedFileCharacters = 60_000
+    static let maxLocalChangedFileCharacters = 30_000
+    static let localCodeHistoryLimit = 3
+    static let askMaxOutputTokens = 1_024
+    static let codeMaxOutputTokens = 2_048
+    static let keepAlive = "30m"
 
     /// Appended to the system prompt for local models only.
     static let editFormatReminder = """
@@ -288,6 +308,53 @@ final class OllamaService {
             let number = String(index + 1)
             return String(repeating: " ", count: width - number.count) + number + " | " + line
         }.joined(separator: "\n")
+    }
+
+    /// Keeps the beginning and end of unusually large files while preserving
+    /// their real line numbers. A bounded prompt makes local first-token
+    /// latency predictable instead of jumping to a 64K or 128K KV cache.
+    static func numberedExcerpt(_ text: String, maxCharacters: Int) -> String {
+        let lines = text.components(separatedBy: "\n")
+        let width = String(lines.count).count
+        let rendered = lines.enumerated().map { index, line in
+            let number = String(index + 1)
+            return String(repeating: " ", count: width - number.count) + number + " | " + line
+        }
+        let complete = rendered.joined(separator: "\n")
+        guard complete.count > maxCharacters, rendered.count > 2 else { return complete }
+
+        let halfBudget = max(1, (maxCharacters - 100) / 2)
+        var head: [String] = []
+        var headCount = 0
+        for line in rendered {
+            guard headCount + line.count + 1 <= halfBudget else { break }
+            head.append(line)
+            headCount += line.count + 1
+        }
+
+        var tail: [String] = []
+        var tailCount = 0
+        for line in rendered.reversed() {
+            guard tailCount + line.count + 1 <= halfBudget else { break }
+            tail.append(line)
+            tailCount += line.count + 1
+        }
+        tail.reverse()
+
+        let omitted = max(0, rendered.count - head.count - tail.count)
+        return head.joined(separator: "\n")
+            + "\n… \(omitted) lines omitted to keep local Qwen responsive …\n"
+            + tail.joined(separator: "\n")
+    }
+
+    private static func excerpt(_ text: String, maxCharacters: Int) -> String {
+        guard text.count > maxCharacters else { return text }
+        let half = maxCharacters / 2
+        let startEnd = text.index(text.startIndex, offsetBy: half)
+        let endStart = text.index(text.endIndex, offsetBy: -half)
+        return String(text[..<startEnd])
+            + "\n… middle omitted to keep local Qwen responsive …\n"
+            + String(text[endStart...])
     }
 
     private func ensureModel(_ model: String, onStatus: (@MainActor (String) -> Void)?) async throws {

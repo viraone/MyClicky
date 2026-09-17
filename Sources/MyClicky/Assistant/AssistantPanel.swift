@@ -662,6 +662,7 @@ final class AssistantState: ObservableObject {
     @Published var codeLiveCost: AnthropicService.LiveCost?
     static let codeProviderKey = "peeky.code.provider"
     static let codeOllamaModelKey = "peeky.code.ollamaModel"
+    static let fastOllamaModel = "qwen3-coder:30b"
     /// Menu and pill names for local models. Tags people recognise get the
     /// name they use for them; anything else shows its Ollama tag, minus a
     /// bare ":latest", so a freshly pulled model is still readable.
@@ -691,8 +692,7 @@ final class AssistantState: ObservableObject {
             onCodeProviderChanged?(codeAIProvider)
         }
     }
-    @Published var codeOllamaModel = UserDefaults.standard.string(forKey: codeOllamaModelKey)
-        ?? "qwen3-coder:30b" {
+    @Published var codeOllamaModel = AssistantState.initialOllamaModel(forKey: codeOllamaModelKey) {
         didSet {
             UserDefaults.standard.set(codeOllamaModel, forKey: Self.codeOllamaModelKey)
             if oldValue != codeOllamaModel { onCodeModelChanged?(oldValue, codeOllamaModel) }
@@ -812,8 +812,7 @@ final class AssistantState: ObservableObject {
             onAskProviderChanged?(askAIProvider)
         }
     }
-    @Published var askOllamaModel = UserDefaults.standard.string(forKey: askOllamaModelKey)
-        ?? "qwen3-coder:30b" {
+    @Published var askOllamaModel = AssistantState.initialOllamaModel(forKey: askOllamaModelKey) {
         didSet {
             UserDefaults.standard.set(askOllamaModel, forKey: Self.askOllamaModelKey)
             if oldValue != askOllamaModel { onAskModelChanged?(oldValue, askOllamaModel) }
@@ -821,6 +820,18 @@ final class AssistantState: ObservableObject {
     }
     @Published var askOllamaModels: [String] = []
     @Published var askOllamaStatus: String?
+
+    static func initialOllamaModel(forKey key: String, defaults: UserDefaults = .standard) -> String {
+        let migrationKey = "\(key).fastDefaultV1"
+        let saved = defaults.string(forKey: key)
+        guard !defaults.bool(forKey: migrationKey) else { return saved ?? fastOllamaModel }
+        defaults.set(true, forKey: migrationKey)
+        if saved == "qwen3-coder-next" || saved == "qwen3-coder-next:latest" {
+            defaults.set(fastOllamaModel, forKey: key)
+            return fastOllamaModel
+        }
+        return saved ?? fastOllamaModel
+    }
     var askAcceptsImages: Bool { askAIProvider == .claude }
     /// Every answered question, newest first — survives closing Peeky.
     @Published var askHistory: [AskHistoryEntry] = []
@@ -1491,34 +1502,6 @@ final class KeyablePanel: NSPanel {
         let ignore = !mouseInteractionRegion(point, contentView?.bounds ?? .zero)
         // Runs 20×/s; only poke AppKit when the answer actually changes.
         if ignoresMouseEvents != ignore { ignoresMouseEvents = ignore }
-    }
-
-    /// A mouse-down somewhere in this app. Only a click on the panel itself
-    /// brings it forward: clicks in the app's other windows — the "Choose a
-    /// project" open dialog, alerts — must not shove the panel on top of
-    /// them, or the dialog vanishes behind it mid-use.
-    func handleLocalMouseDown(in window: NSWindow?) {
-        guard window === self else { return }
-        raiseForPanelInteraction()
-    }
-
-    /// A mouse press or release in another app. See `backgroundPressOrigin`.
-    func handleBackgroundMouse(_ type: NSEvent.EventType, at location: NSPoint) {
-        switch type {
-        case .leftMouseDown:
-            backgroundPressOrigin = location
-        case .leftMouseUp:
-            guard let origin = backgroundPressOrigin else { return }
-            backgroundPressOrigin = nil
-            if hypot(location.x - origin.x, location.y - origin.y) < Self.backgroundDragSlop {
-                lowerForBackgroundInteraction()
-            }
-        case .rightMouseDown, .otherMouseDown:
-            backgroundPressOrigin = nil
-            lowerForBackgroundInteraction()
-        default:
-            break
-        }
     }
 
     /// A mouse-down somewhere in this app. Only a click on the panel itself
@@ -4062,13 +4045,13 @@ struct AssistantPanelView: View {
             Divider()
             Button {
                 state.askAIProvider = .ollama
-                state.askOllamaModel = "qwen3-coder:30b"
+                state.askOllamaModel = AssistantState.fastOllamaModel
             } label: {
-                Label("Qwen3-Coder 30B", systemImage:
-                    state.askAIProvider == .ollama && state.askOllamaModel == "qwen3-coder:30b"
+                Label("Qwen3-Coder 30B — Fast", systemImage:
+                    state.askAIProvider == .ollama && state.askOllamaModel == AssistantState.fastOllamaModel
                         ? "checkmark" : "desktopcomputer")
             }
-            ForEach(state.askOllamaModels.filter { $0 != "qwen3-coder:30b" }, id: \.self) { model in
+            ForEach(state.askOllamaModels.filter { $0 != AssistantState.fastOllamaModel }, id: \.self) { model in
                 Button {
                     state.askAIProvider = .ollama
                     state.askOllamaModel = model
@@ -4142,13 +4125,13 @@ struct AssistantPanelView: View {
             Divider()
             Button {
                 state.codeAIProvider = .ollama
-                state.codeOllamaModel = "qwen3-coder:30b"
+                state.codeOllamaModel = AssistantState.fastOllamaModel
             } label: {
-                Label("Qwen3-Coder 30B", systemImage:
-                    state.codeAIProvider == .ollama && state.codeOllamaModel == "qwen3-coder:30b"
+                Label("Qwen3-Coder 30B — Fast", systemImage:
+                    state.codeAIProvider == .ollama && state.codeOllamaModel == AssistantState.fastOllamaModel
                         ? "checkmark" : "desktopcomputer")
             }
-            ForEach(state.codeOllamaModels.filter { $0 != "qwen3-coder:30b" }, id: \.self) { model in
+            ForEach(state.codeOllamaModels.filter { $0 != AssistantState.fastOllamaModel }, id: \.self) { model in
                 Button {
                     state.codeAIProvider = .ollama
                     state.codeOllamaModel = model
