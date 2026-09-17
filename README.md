@@ -171,12 +171,25 @@ exit; click again to bring it back. The choice is remembered across launches.
 
 The provider menu beside Peeky Code's question box switches between Claude and
 a local Ollama model. Local mode starts Ollama when needed, defaults to
-`qwen3-coder:30b`, downloads a missing model once, and sends project context
-only to `127.0.0.1`; it has no per-message API charge. The context window is sized to
-the project in steps from 8K up to the model's limit, so a small project
-loads about 18 GB of model instead of the 45 GB a full 262K window costs. Only
-one local model is resident at a time: Peeky starts Ollama with a one-model
-limit, and picking a different model in the menu unloads the one you left.
+`qwen3-coder:30b` (the **Fast** choice), downloads a missing model once, and
+sends project context only to `127.0.0.1`; it has no per-message API charge.
+The context window is sized to the project in steps from 8K up to the model's
+limit. Very large focused files are sent as a line-numbered beginning/end
+excerpt, keeping routine requests at 32K or less instead of paying the latency
+of a 64K or 128K cache. The project slice, focused file and unsaved edits all
+travel in the system message, so Ollama can reuse its cached prefix from one
+question to the next; Peeky warms that cache in the background as soon as a
+project loads or a file is focused, so the first question pays only for its
+answer (a 14K-token project reads in 0.1 s warm versus 11 s cold). Each answer
+ends with a timing line — `read 14K tokens in 0.1 s (cached) · wrote 312 tokens
+in 4.3 s` — so a slow reply is easy to diagnose. Once the prompt is cached the
+answer's length is the whole wait (about 60 tokens a second), so the local
+system prompt asks for brief prose — overviews in a handful of lines, code only
+when you ask for a change — rather than capping output tokens, which would
+truncate a two-block code edit. Only one local model is
+resident at a time: Peeky keeps the active model warm for 30 minutes, starts
+Ollama with a one-model limit, and picking a different model in the menu
+unloads the one you left.
 Attached images remain a Claude-only feature: in Local mode the + image item is disabled, dropped or pasted images are refused with a HUD message, and Peeky Captures go to the Capture tab. Switching to Local removes any images already attached; switch back to Claude to attach again.
 
 Click the project card to browse its files and click one to preview it

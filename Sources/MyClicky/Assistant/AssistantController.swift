@@ -931,6 +931,7 @@ final class AssistantController {
         }
         panel.state.logCode(.question, question)
         busy = true
+        warmUpTask?.cancel()
         synthesizer.stopSpeaking(at: .immediate)
         panel.state.status = .thinking
         panel.state.errorText = nil
@@ -999,6 +1000,34 @@ final class AssistantController {
                 panel.state.codeOllamaStatus = models.isEmpty ? "No local models installed" : "Ollama ready"
             } catch {
                 panel.state.codeOllamaStatus = error.localizedDescription
+            }
+        }
+    }
+
+    /// Feeds the current project prompt to the local model a moment after
+    /// it changes, so the cache is warm by the time a question is typed.
+    /// Debounced: browsing files fires this on every click. Skipped while a
+    /// question is in flight — that request warms the same cache itself.
+    private var warmUpTask: Task<Void, Never>?
+    private func scheduleLocalCodeWarmUp() {
+        warmUpTask?.cancel()
+        guard panel.state.codeAIProvider == .ollama, panel.state.codeProject != nil, !busy else { return }
+        warmUpTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(1_200))
+            guard let self, !Task.isCancelled, !self.busy,
+                  let project = self.panel.state.codeProject else { return }
+            let focused = self.panel.state.codeFocusedFile
+            let changed = self.panel.state.codeChangedFiles
+            let model = self.panel.state.codeOllamaModel
+            let started = Date()
+            guard let window = try? await self.ollama.warmCodePrompt(
+                project: project, focusedFile: focused, changedFiles: changed, model: model
+            ), !Task.isCancelled else { return }
+            let seconds = Date().timeIntervalSince(started)
+            // Only worth a line when it did real work; a cache hit is silent.
+            if seconds >= 2 {
+                let scope = focused.map { ($0 as NSString).lastPathComponent } ?? "project slice"
+                self.panel.state.logCode(.status, "Warmed \(model) with \(scope) · \(window / 1024)K context · \(String(format: "%.0f", seconds)) s — questions about it are fast now.")
             }
         }
     }
@@ -1160,8 +1189,12 @@ final class AssistantController {
         panel.state.onRunExtensionAction = { [weak self] verb, params in self?.runExtensionAction(verb: verb, params: params, from: "panel") }
         startExtensions()
         panel.state.onCodeProviderChanged = { [weak self] provider in
-            if provider == .ollama { self?.refreshOllamaModels() }
+            if provider == .ollama {
+                self?.refreshOllamaModels()
+                self?.scheduleLocalCodeWarmUp()
+            }
         }
+        panel.state.onCodeContextChanged = { [weak self] in self?.scheduleLocalCodeWarmUp() }
         panel.state.onRefreshOllamaModels = { [weak self] in self?.refreshOllamaModels() }
         panel.state.onCodeModelChanged = { [weak self] previous, _ in
             // Otherwise the model just left behind stays resident for its
@@ -1170,6 +1203,7 @@ final class AssistantController {
                 guard let self, await self.ollama.unload(previous) else { return }
                 self.panel.state.logCode(.status, "Unloaded \(previous) from memory.")
             }
+            self?.scheduleLocalCodeWarmUp()
         }
         panel.state.onApplyCodeBlock = { [weak self] code, find, path in self?.applyCodeBlock(code, replacing: find, path: path) }
         panel.state.onAttachCodeProject = { [weak self] in self?.pickCodeProject() }
