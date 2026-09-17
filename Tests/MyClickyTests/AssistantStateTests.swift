@@ -142,6 +142,32 @@ final class AssistantStateTests: XCTestCase {
         XCTAssertEqual(state.codeDraft, "b")
     }
 
+    /// Answer links are cached (they cost a regex scan of the whole project
+    /// per name), so they must still follow the code when it changes.
+    func testAnswerLinksFollowProjectEdits() {
+        let state = AssistantState()
+        state.codeProject = CodeProject(root: URL(fileURLWithPath: "/tmp/PeekyLinks"),
+                                        name: "PeekyLinks",
+                                        files: [.init(path: "a.swift", text: "func greetEveryone() {}\n")],
+                                        profile: nil, detectedStack: [], skippedFolders: [], skippedFiles: [], truncated: false)
+        let prose = "Call `greetEveryone` first."
+        func linked() -> Bool {
+            state.codeLinkedProse(prose).runs.contains { $0.link != nil }
+        }
+        XCTAssertTrue(linked())
+        XCTAssertTrue(linked(), "the cached answer must match the fresh one")
+
+        state.codeEdits["a.swift"] = "func farewell() {}\n"
+        XCTAssertFalse(linked(), "a saved edit that removes the definition drops the link")
+
+        state.codeEdits = [:]
+        XCTAssertTrue(linked())
+
+        state.codeProject = nil
+        XCTAssertFalse(linked())
+        XCTAssertNil(state.codeXcodeContainer)
+    }
+
     func testProjectDisclosureWithoutAnOpenFile() {
         let state = AssistantState()
         state.showCodeFiles()
