@@ -246,6 +246,7 @@ final class OllamaService {
                              changedFiles: [(path: String, text: String)]) -> String {
         var system = AnthropicService.codeSystemPrompt
             + "\n\n" + editFormatReminder
+            + "\n\n" + brevityRule
             + (project.guidanceText.map { "\n\n\($0)" } ?? "")
             + "\n\n" + localProjectContext(project, focusedFile: focusedFile)
         let supplementalChangedFiles = changedFiles.filter { $0.path != focusedFile }
@@ -357,9 +358,23 @@ final class OllamaService {
     ```ts src/average.ts — ts for .ts files, swift for .swift files; never js for TypeScript.
     """
 
+    /// Local models write at about 60 tokens a second, so after the prompt
+    /// cache is warm the length of the answer is the whole wait. Asked for
+    /// in the system prompt rather than enforced with a token cap, so a
+    /// code fix still gets the room it needs to be complete.
+    static let brevityRule = """
+    Be brief — every sentence costs the user a second. For overview or "what does this do" \
+    questions, answer in 5 to 8 lines of plain prose, no headings, no bullet lists of every \
+    file. For specific questions, answer the question directly in a few sentences. Do not \
+    restate the question, do not summarize what you are about to say, and do not offer code \
+    unless the user asked to change or write code. When code is needed, give the code and one \
+    or two lines of explanation.
+    """
+
     /// Tacked onto the end of every question, where small models look last.
-    static let questionReminder = "(Reminder: to change existing code, first a fenced block quoting the current code "
-        + "exactly, then a second fenced block with the replacement. Tag both with language and file path.)"
+    static let questionReminder = "(Reminder: keep it short — brief prose, code only if asked. To change existing code, "
+        + "first a fenced block quoting the current code exactly, then a second fenced block with the replacement. "
+        + "Tag both with language and file path.)"
 
     /// Context windows worth asking for, smallest first. Ollama reloads
     /// the model whenever `num_ctx` changes, so requests snap to one of

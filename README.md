@@ -182,7 +182,11 @@ question to the next; Peeky warms that cache in the background as soon as a
 project loads or a file is focused, so the first question pays only for its
 answer (a 14K-token project reads in 0.1 s warm versus 11 s cold). Each answer
 ends with a timing line — `read 14K tokens in 0.1 s (cached) · wrote 312 tokens
-in 4.3 s` — so a slow reply is easy to diagnose. Only one local model is
+in 4.3 s` — so a slow reply is easy to diagnose. Once the prompt is cached the
+answer's length is the whole wait (about 60 tokens a second), so the local
+system prompt asks for brief prose — overviews in a handful of lines, code only
+when you ask for a change — rather than capping output tokens, which would
+truncate a two-block code edit. Only one local model is
 resident at a time: Peeky keeps the active model warm for 30 minutes, starts
 Ollama with a one-model limit, and picking a different model in the menu
 unloads the one you left.
