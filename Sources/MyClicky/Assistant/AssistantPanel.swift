@@ -377,7 +377,12 @@ final class AssistantState: ObservableObject {
     // MARK: Peeky Code
 
     /// The project dropped on the Code tab, nil until one is.
-    @Published var codeProject: CodeProject?
+    @Published var codeProject: CodeProject? {
+        didSet {
+            codeXcodeContainer = codeProject.flatMap { XcodeRunner.container(in: $0.root) }
+            invalidateCodeAnswerCaches()
+        }
+    }
     /// Git, GitHub CLI, branch, issue, and pull-request state for that project.
     let github = GitHubIntegrationModel()
     /// Installed extensions and the remote catalog. Owned here so the
@@ -426,13 +431,16 @@ final class AssistantState: ObservableObject {
             if codeFocusedFile != nil, codeFocusedFile != oldValue { codeViewerCollapsed = false; codeViewerExpanded = false; closeCodeFind() }
             codeDraft = codeFocusedFile.flatMap { codeCurrentText(of: $0) } ?? ""
             if let path = codeFocusedFile { onLSPFocusFile?(path, codeDraft) }
+            invalidateCodeAnswerCaches()
         }
     }
     /// Files Peeky has saved since the project was read, by path. The
     /// project snapshot (and so the cached block Claude sees) stays as
     /// loaded; these ride along with a question as a small addendum, which
     /// costs pennies where re-bundling would be a full-price cache write.
-    @Published var codeEdits: [String: String] = [:]
+    @Published var codeEdits: [String: String] = [:] {
+        didSet { invalidateCodeAnswerCaches() }
+    }
     /// The focused file's text as it stands in the editor.
     @Published var codeDraft = "" {
         didSet {
@@ -477,8 +485,9 @@ final class AssistantState: ObservableObject {
     @Published var codeCollapsedFolders: Set<String> = []
 
     // MARK: Run in Simulator
-    /// The Xcode project/workspace inside the loaded folder, if any — shows ▶ Run.
-    var codeXcodeContainer: URL? { codeProject.flatMap { XcodeRunner.container(in: $0.root) } }
+    /// The Xcode project/workspace inside the loaded folder, if any — shows
+    /// ▶ Run. Looked up once per project load, not on every re-render.
+    private(set) var codeXcodeContainer: URL?
     @Published var codeRunPhase: XcodeRunner.Phase = .idle
     @Published var codeBuildErrors: [XcodeRunner.BuildError] = []
     /// Set by an error row; the editor scrolls there once the file is open.
@@ -550,11 +559,28 @@ final class AssistantState: ObservableObject {
     }
     var codePaths: [String] { codeProject?.files.map(\.path) ?? [] }
 
+    /// Working out where an answer's code blocks and backticked names point
+    /// means regex-scanning every file in the project. The answer log
+    /// re-renders on many state changes, and redoing those scans each time
+    /// was a visible stutter on every keystroke in the question box. The
+    /// results only move when the project, the focused file or the saved
+    /// edits change, so they are kept until then.
+    private var codeLinkedProseCache: [String: AttributedString] = [:]
+    private var codeLocateCache: [String: CodeBlockLocator.Location?] = [:]
+    private func invalidateCodeAnswerCaches() {
+        codeLinkedProseCache.removeAll()
+        codeLocateCache.removeAll()
+    }
+
     /// Where a code block from an answer belongs — free, from the bundle.
     func codeLocate(code: String, find: String?, tagged: String?) -> CodeBlockLocator.Location? {
         guard codeProject != nil else { return nil }
-        return CodeBlockLocator.locate(code: code, find: find, tagged: tagged, focused: codeFocusedFile,
-                                       paths: codePaths, text: { self.codeLiveText(of: $0) })
+        let key = code + "\u{0}" + (find ?? "") + "\u{0}" + (tagged ?? "")
+        if let cached = codeLocateCache[key] { return cached }
+        let location = CodeBlockLocator.locate(code: code, find: find, tagged: tagged, focused: codeFocusedFile,
+                                               paths: codePaths, text: { self.codeLiveText(of: $0) })
+        codeLocateCache[key] = location
+        return location
     }
 
     /// Opens the file and puts the caret on the line.
@@ -569,10 +595,11 @@ final class AssistantState: ObservableObject {
 
     /// Prose with `identifiers` that exist in the project turned into links.
     func codeLinkedProse(_ prose: String) -> AttributedString {
+        guard codeProject != nil else { return AttributedString(prose) }
+        if let cached = codeLinkedProseCache[prose] { return cached }
         var out = AttributedString(prose)
-        guard codeProject != nil else { return out }
         let ns = prose as NSString
-        let regex = try! NSRegularExpression(pattern: "`([^`\\n]{3,80})`")
+        let regex = Self.backtickedNameRegex
         for m in regex.matches(in: prose, range: NSRange(location: 0, length: ns.length)) {
             let name = ns.substring(with: m.range(at: 1))
             let loc: CodeBlockLocator.Location?
@@ -588,8 +615,10 @@ final class AssistantState: ObservableObject {
             out[lower..<upper].underlineStyle = .single
             out[lower..<upper].foregroundColor = NSColor(AssistantPhase.working.color)
         }
+        codeLinkedProseCache[prose] = out
         return out
     }
+    private static let backtickedNameRegex = try! NSRegularExpression(pattern: "`([^`\\n]{3,80})`")
 
     static func jumpURL(for loc: CodeBlockLocator.Location) -> URL {
         var c = URLComponents()
@@ -1459,7 +1488,37 @@ final class KeyablePanel: NSPanel {
     func refreshMousePassthrough(at screenPoint: NSPoint = NSEvent.mouseLocation) {
         guard let mouseInteractionRegion, isVisible else { return }
         let point = convertPoint(fromScreen: screenPoint)
-        ignoresMouseEvents = !mouseInteractionRegion(point, contentView?.bounds ?? .zero)
+        let ignore = !mouseInteractionRegion(point, contentView?.bounds ?? .zero)
+        // Runs 20×/s; only poke AppKit when the answer actually changes.
+        if ignoresMouseEvents != ignore { ignoresMouseEvents = ignore }
+    }
+
+    /// A mouse-down somewhere in this app. Only a click on the panel itself
+    /// brings it forward: clicks in the app's other windows — the "Choose a
+    /// project" open dialog, alerts — must not shove the panel on top of
+    /// them, or the dialog vanishes behind it mid-use.
+    func handleLocalMouseDown(in window: NSWindow?) {
+        guard window === self else { return }
+        raiseForPanelInteraction()
+    }
+
+    /// A mouse press or release in another app. See `backgroundPressOrigin`.
+    func handleBackgroundMouse(_ type: NSEvent.EventType, at location: NSPoint) {
+        switch type {
+        case .leftMouseDown:
+            backgroundPressOrigin = location
+        case .leftMouseUp:
+            guard let origin = backgroundPressOrigin else { return }
+            backgroundPressOrigin = nil
+            if hypot(location.x - origin.x, location.y - origin.y) < Self.backgroundDragSlop {
+                lowerForBackgroundInteraction()
+            }
+        case .rightMouseDown, .otherMouseDown:
+            backgroundPressOrigin = nil
+            lowerForBackgroundInteraction()
+        default:
+            break
+        }
     }
 
     /// A mouse-down somewhere in this app. Only a click on the panel itself
@@ -1557,9 +1616,18 @@ final class KeyablePanel: NSPanel {
     }
 }
 
+/// The text being typed into the panel's question field. It lives in its own
+/// object, held by the panel as plain `@State` (not `@StateObject`, which
+/// would subscribe the panel to it), so a keystroke re-renders only the
+/// field and the send button — not the whole panel with its code editor,
+/// file list and answer log, which is what made typing crawl.
+final class QuestionDraft: ObservableObject {
+    @Published var text = ""
+}
+
 struct AssistantPanelView: View {
     @ObservedObject var state: AssistantState
-    @State private var typedQuestion = ""
+    @State private var draft = QuestionDraft()
     /// What the hovered header button does, shown in the header itself —
     /// system tooltips never appear over a non-activating panel.
     @State private var headerHint: String?
@@ -2472,20 +2540,7 @@ struct AssistantPanelView: View {
     private var topInputRow: some View {
         HStack(spacing: 10) {
             if state.tab == .ask { historyButton }
-            ZStack(alignment: .leading) {
-                if typedQuestion.isEmpty {
-                    Text(inputPlaceholder)
-                        .font(.system(size: 17, design: .monospaced))
-                        .foregroundStyle(.white)
-                        .allowsHitTesting(false)
-                }
-                TextField("", text: $typedQuestion)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 17, design: .monospaced))
-                    .foregroundStyle(.white)
-                    .focused($fieldFocused)
-                    .onSubmit(submit)
-            }
+            TopInputField(draft: draft, placeholder: inputPlaceholder, fieldFocused: $fieldFocused, submit: submit)
         }
         .padding(.top, 4)
     }
@@ -4158,60 +4213,13 @@ struct AssistantPanelView: View {
     /// box is expected. It grows with what's in it — paste forty lines of
     /// code and you see them (⇧↩ adds a line; ↩ sends).
     private var bottomInputField: some View {
-        ZStack(alignment: .topLeading) {
-            if typedQuestion.isEmpty {
-                Text(inputPlaceholder)
-                    .font(.system(
-                        size: state.tab == .documentary ? 15 : 14,
-                        weight: .medium,
-                        design: state.tab == .documentary ? .default : .monospaced
-                    ))
-                    .foregroundStyle(.white.opacity(state.tab == .documentary ? 0.7 : 0.45))
-                    .lineLimit(1)
-                    .allowsHitTesting(false)
-                    .padding(.leading, 2)
-            }
-            TextField("", text: $typedQuestion, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(1...8)
-                .onChange(of: state.codePrefillQuestion) { text in
-                    guard let text else { return }
-                    typedQuestion = text
-                    fieldFocused = true
-                    state.codePrefillQuestion = nil
-                }
-                .font(.system(
-                    size: state.tab == .documentary ? 15 : 14,
-                    weight: .medium,
-                    design: state.tab == .documentary ? .default : .monospaced
-                ))
-                .foregroundStyle(.white)
-                .focused($fieldFocused)
-                .onKeyPress(.return, phases: .down) { press in
-                    if press.modifiers.contains(.shift) {
-                        if let fieldEditor = NSApp.keyWindow?.firstResponder as? NSTextView {
-                            fieldEditor.insertNewlineIgnoringFieldEditor(nil)
-                        } else {
-                            typedQuestion.append("\n")
-                        }
-                    } else {
-                        submit()
-                    }
-                    return .handled
-                }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .fill(state.tab == .documentary ? state.accent.opacity(0.10) : Color.white.opacity(0.06)))
-        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
-            .strokeBorder(
-                state.tab == .documentary
-                    ? state.accent.opacity(fieldFocused ? 0.85 : 0.45)
-                    : Color.white.opacity(fieldFocused ? 0.22 : 0.10),
-                lineWidth: state.tab == .documentary ? 1.5 : 1
-            ))
+        BottomInputField(
+            state: state,
+            draft: draft,
+            placeholder: inputPlaceholder,
+            fieldFocused: $fieldFocused,
+            submit: submit
+        )
     }
 
     private var promptReadout: some View {
@@ -4762,26 +4770,7 @@ struct AssistantPanelView: View {
     }
 
     private var sendButton: some View {
-        Button(action: submit) {
-            Image(systemName: "arrow.up")
-                .font(.system(size: 14, weight: .heavy))
-                .foregroundStyle(.black)
-                .frame(width: 26, height: 26)
-                .background(
-                Circle().fill(
-                    typedQuestion.isEmpty
-                        ? AnyShapeStyle(Color.white.opacity(0.14))
-                        : AnyShapeStyle(LinearGradient(
-                            colors: [.cyan, Color(red: 0.2, green: 0.55, blue: 0.95)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        ))
-                )
-                )
-        }
-        .buttonStyle(.plain)
-        .disabled(typedQuestion.isEmpty)
-        .help("Send")
+        SendButton(draft: draft, action: submit)
     }
 
     /// Red stop button shown while Peeky is thinking or speaking.
@@ -5052,9 +5041,9 @@ struct AssistantPanelView: View {
     }
 
     private func submit() {
-        let text = typedQuestion.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        typedQuestion = ""
+        draft.text = ""
         switch state.tab {
         case .talk: state.onDo?(text)
         case .code: state.onAskCode?(text)
@@ -5095,6 +5084,122 @@ struct AssistantPanelView: View {
             }
         }
         return true
+    }
+}
+
+/// The Ask/Talk tabs' big field at the top of the panel. Observes only the
+/// draft, so typing re-renders this view and nothing above it.
+private struct TopInputField: View {
+    @ObservedObject var draft: QuestionDraft
+    let placeholder: String
+    let fieldFocused: FocusState<Bool>.Binding
+    let submit: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            if draft.text.isEmpty {
+                Text(placeholder)
+                    .font(.system(size: 17, design: .monospaced))
+                    .foregroundStyle(.white)
+                    .allowsHitTesting(false)
+            }
+            TextField("", text: $draft.text)
+                .textFieldStyle(.plain)
+                .font(.system(size: 17, design: .monospaced))
+                .foregroundStyle(.white)
+                .focused(fieldFocused)
+                .onSubmit(submit)
+        }
+    }
+}
+
+/// The Code/Terminal/Doc tabs' question box in the bottom bar. See
+/// `QuestionDraft` for why it holds the text rather than the panel.
+private struct BottomInputField: View {
+    @ObservedObject var state: AssistantState
+    @ObservedObject var draft: QuestionDraft
+    let placeholder: String
+    let fieldFocused: FocusState<Bool>.Binding
+    let submit: () -> Void
+
+    var body: some View {
+        let isDoc = state.tab == .documentary
+        let focused = fieldFocused.wrappedValue
+        ZStack(alignment: .topLeading) {
+            if draft.text.isEmpty {
+                Text(placeholder)
+                    .font(.system(size: isDoc ? 15 : 14, weight: .medium, design: isDoc ? .default : .monospaced))
+                    .foregroundStyle(.white.opacity(isDoc ? 0.7 : 0.45))
+                    .lineLimit(1)
+                    .allowsHitTesting(false)
+                    .padding(.leading, 2)
+            }
+            TextField("", text: $draft.text, axis: .vertical)
+                .textFieldStyle(.plain)
+                .lineLimit(1...8)
+                .onChange(of: state.codePrefillQuestion) { text in
+                    guard let text else { return }
+                    draft.text = text
+                    fieldFocused.wrappedValue = true
+                    state.codePrefillQuestion = nil
+                }
+                .font(.system(size: isDoc ? 15 : 14, weight: .medium, design: isDoc ? .default : .monospaced))
+                .foregroundStyle(.white)
+                .focused(fieldFocused)
+                .onKeyPress(.return, phases: .down) { press in
+                    if press.modifiers.contains(.shift) {
+                        if let fieldEditor = NSApp.keyWindow?.firstResponder as? NSTextView {
+                            fieldEditor.insertNewlineIgnoringFieldEditor(nil)
+                        } else {
+                            draft.text.append("\n")
+                        }
+                    } else {
+                        submit()
+                    }
+                    return .handled
+                }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(isDoc ? state.accent.opacity(0.10) : Color.white.opacity(0.06)))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .strokeBorder(
+                isDoc
+                    ? state.accent.opacity(focused ? 0.85 : 0.45)
+                    : Color.white.opacity(focused ? 0.22 : 0.10),
+                lineWidth: isDoc ? 1.5 : 1
+            ))
+    }
+}
+
+/// The ↑ send button: lit while there is something to send.
+private struct SendButton: View {
+    @ObservedObject var draft: QuestionDraft
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "arrow.up")
+                .font(.system(size: 14, weight: .heavy))
+                .foregroundStyle(.black)
+                .frame(width: 26, height: 26)
+                .background(
+                    Circle().fill(
+                        draft.text.isEmpty
+                            ? AnyShapeStyle(Color.white.opacity(0.14))
+                            : AnyShapeStyle(LinearGradient(
+                                colors: [.cyan, Color(red: 0.2, green: 0.55, blue: 0.95)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            ))
+                    )
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(draft.text.isEmpty)
+        .help("Send")
     }
 }
 
