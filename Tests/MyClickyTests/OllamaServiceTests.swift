@@ -55,11 +55,49 @@ final class OllamaServiceTests: XCTestCase {
         XCTAssertTrue(system.contains(AnthropicService.codeSystemPrompt), "same prompt Claude gets")
         XCTAssertTrue(system.contains(OllamaService.editFormatReminder), "plus the local-model reminder")
         XCTAssertTrue(system.contains("  answer.ts"), "the project tree remains available")
-        XCTAssertFalse(system.contains("===== FILE: answer.ts"), "the focused file is not duplicated in the system prompt")
+        XCTAssertFalse(system.contains("===== FILE: answer.ts"), "the focused file is not sent twice")
+        XCTAssertTrue(system.contains("1 | export const answer = 42"),
+                      "focused file rides in the system prefix, with line numbers, where Ollama can cache it")
         let last = try XCTUnwrap(messages[3]["content"])
-        XCTAssertTrue(last.contains("Make it 43"))
-        XCTAssertTrue(last.contains("1 | export const answer = 42"), "focused file rides along with line numbers")
+        XCTAssertTrue(last.hasPrefix("Make it 43"), "the question is all that changes between turns")
         XCTAssertTrue(last.hasSuffix(OllamaService.questionReminder), "reminder is the last thing the model reads")
+    }
+
+    func testSystemPrefixIsIdenticalAcrossTurnsSoOllamaCanCacheIt() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("peeky-ollama-prefix-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "export const answer = 42\n".write(
+            to: root.appendingPathComponent("answer.ts"), atomically: true, encoding: .utf8)
+        let project = try XCTUnwrap(CodeProjectBundler.bundle(urls: [root]))
+
+        let first = OllamaService.messages(question: "What is this?", project: project, focusedFile: "answer.ts",
+                                           changedFiles: [], history: [])
+        let second = OllamaService.messages(question: "Make it 43", project: project, focusedFile: "answer.ts",
+                                            changedFiles: [], history: [(question: "What is this?", answer: "A constant.")])
+        XCTAssertEqual(first[0], second[0], "same system message → Ollama reuses the cached prefix")
+        XCTAssertEqual(second.count, 4)
+        XCTAssertLessThan(second[3]["content"]?.count ?? .max, 400, "the new turn is tiny")
+    }
+
+    func testSlicePutsReadmeManifestsAndEntryPointsFirst() {
+        func file(_ path: String) -> CodeProject.File { .init(path: path, text: "x") }
+        let files = [file("zeta.ts"), file("src/util/helper.ts"), file("src/index.ts"),
+                     file("docs/GUIDE.md"), file("package.json"), file("README.md"), file("alpha.ts")]
+        let ordered = OllamaService.slicePriority(files).map(\.path)
+        XCTAssertEqual(ordered, ["README.md", "package.json", "src/index.ts", "docs/GUIDE.md",
+                                 "zeta.ts", "alpha.ts", "src/util/helper.ts"])
+    }
+
+    func testTimingLineReportsCacheHits() {
+        let hit = OllamaService.timingLine(["prompt_eval_count": 17_412, "prompt_eval_duration": 120_000_000,
+                                            "eval_count": 312, "eval_duration": 4_300_000_000])
+        XCTAssertEqual(hit, "read 17K tokens in 0.1 s (cached) · wrote 312 tokens in 4.3 s")
+        let miss = OllamaService.timingLine(["prompt_eval_count": 17_412, "prompt_eval_duration": 30_000_000_000,
+                                             "eval_count": 1_200, "eval_duration": 8_000_000_000])
+        XCTAssertEqual(miss, "read 17K tokens in 30.0 s · wrote 1K tokens in 8.0 s")
+        XCTAssertNil(OllamaService.timingLine(["message": ["content": "hi"]]))
     }
 
     func testFocusedFileOmitsLargeUnrelatedFilesFromLocalPrompt() throws {
@@ -93,11 +131,11 @@ final class OllamaServiceTests: XCTestCase {
 
         let messages = OllamaService.messages(question: "Summarize it", project: project,
                                               focusedFile: "large.json", changedFiles: [], history: [])
-        let current = try XCTUnwrap(messages.last?["content"])
-        XCTAssertTrue(current.contains("1 | record 1:"))
-        XCTAssertTrue(current.contains("3000 | record 3000:"))
-        XCTAssertTrue(current.contains("lines omitted to keep local Qwen responsive"))
-        XCTAssertLessThan(current.count, OllamaService.maxLocalFocusedFileCharacters + 2_000)
+        let system = try XCTUnwrap(messages.first?["content"])
+        XCTAssertTrue(system.contains("1 | record 1:"))
+        XCTAssertTrue(system.contains("3000 | record 3000:"))
+        XCTAssertTrue(system.contains("lines omitted to keep local Qwen responsive"))
+        XCTAssertLessThan(system.count, OllamaService.maxLocalFocusedFileCharacters + 6_000)
         XCTAssertLessThanOrEqual(
             try XCTUnwrap(OllamaService.contextWindow(for: messages, limit: 262_144)),
             32_768

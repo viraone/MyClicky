@@ -570,6 +570,7 @@ final class AssistantState: ObservableObject {
     private func invalidateCodeAnswerCaches() {
         codeLinkedProseCache.removeAll()
         codeLocateCache.removeAll()
+        onCodeContextChanged?()
     }
 
     /// Where a code block from an answer belongs — free, from the bundle.
@@ -926,6 +927,9 @@ final class AssistantState: ObservableObject {
     /// Badge click: stop the language server (keep the project) or start it again.
     var onToggleLSP: (() -> Void)?
     var onCodeProviderChanged: ((CodeAIProvider) -> Void)?
+    /// The project, focused file or saved edits changed — what a local
+    /// question would send is different now.
+    var onCodeContextChanged: (() -> Void)?
     /// (previous model, new model) — the previous one can be let go of.
     var onCodeModelChanged: ((_ from: String, _ to: String) -> Void)?
     var onRefreshOllamaModels: (() -> Void)?

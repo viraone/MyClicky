@@ -84,8 +84,13 @@ final class OllamaService {
         let messages = Self.messages(question: question, project: project, focusedFile: focusedFile,
                                      changedFiles: changedFiles, history: history)
         let limit = await contextLength(of: model)
-        guard let window = Self.contextWindow(for: messages, limit: limit) else {
+        guard var window = Self.contextWindow(for: messages, limit: limit) else {
             throw OllamaError.tooLarge(tokens: Self.estimatedTokens(of: messages), limit: limit)
+        }
+        // Stay on the window the warm-up used: Ollama reloads the model and
+        // drops the prompt cache whenever num_ctx changes.
+        if let warm = warmWindows[Self.warmKey(model: model, system: messages[0]["content"] ?? "")], warm >= window {
+            window = warm
         }
         let scope = focusedFile == nil ? "project slice" : "focused file"
         onStatus?("\(model) · \(scope) · \(window / 1024)K context")
@@ -107,7 +112,65 @@ final class OllamaService {
               !text.isEmpty else {
             throw OllamaError.emptyResponse
         }
+        if let timing = Self.timingLine(json) { onStatus?("\(model) · \(timing)") }
         return text
+    }
+
+    /// Runs the project prompt through the model ahead of any question so
+    /// its key/value cache is already resident. Ollama reuses the cached
+    /// prefix for the next request with the same system message and
+    /// num_ctx, so the question itself only has to process its own few
+    /// tokens — measured at 35 s cold versus under a second warm for a
+    /// 25K-token project. Returns the window it warmed, nil when the prompt
+    /// doesn't fit the model.
+    @discardableResult
+    func warmCodePrompt(project: CodeProject, focusedFile: String?,
+                        changedFiles: [(path: String, text: String)], model: String) async throws -> Int? {
+        try await ensureRunning()
+        try await ensureModel(model, onStatus: nil)
+        let messages = Self.messages(question: "Ready.", project: project, focusedFile: focusedFile,
+                                     changedFiles: changedFiles, history: [])
+        let limit = await contextLength(of: model)
+        // Leave room for a few turns of conversation so the real question
+        // lands in this same window rather than the next bucket up.
+        guard let window = Self.contextWindow(for: messages, limit: limit,
+                                              headroom: Self.answerHeadroom + Self.conversationHeadroom) else {
+            return nil
+        }
+        let key = Self.warmKey(model: model, system: messages[0]["content"] ?? "")
+        let body: [String: Any] = [
+            "model": model,
+            "keep_alive": Self.keepAlive,
+            "stream": false,
+            "messages": messages,
+            "options": ["temperature": 0.2, "num_ctx": window, "num_predict": 1],
+        ]
+        _ = try await post(path: "api/chat", body: body, timeout: 600)
+        try Task.checkCancellation()
+        warmWindows[key] = window
+        return window
+    }
+
+    /// Windows warmed per model and system prompt, so a question reuses the
+    /// exact num_ctx the cache was built with.
+    private var warmWindows: [String: Int] = [:]
+    private static func warmKey(model: String, system: String) -> String {
+        "\(model)|\(system.count)|\(system.hashValue)"
+    }
+
+    /// "read 17K tokens in 0.1 s (cached) · wrote 312 tokens in 4.3 s".
+    static func timingLine(_ json: [String: Any]) -> String? {
+        guard let promptTokens = json["prompt_eval_count"] as? Int,
+              let promptNanos = json["prompt_eval_duration"] as? Int,
+              let outputTokens = json["eval_count"] as? Int,
+              let outputNanos = json["eval_duration"] as? Int else { return nil }
+        let promptSeconds = Double(promptNanos) / 1e9
+        let outputSeconds = Double(outputNanos) / 1e9
+        // A cache hit reads thousands of tokens in well under a second.
+        let cached = promptTokens > 1_024 && promptSeconds < 1.5
+        func tokens(_ n: Int) -> String { n >= 1_000 ? "\(n / 1_000)K tokens" : "\(n) tokens" }
+        return "read \(tokens(promptTokens)) in \(String(format: "%.1f", promptSeconds)) s\(cached ? " (cached)" : "")"
+            + " · wrote \(tokens(outputTokens)) in \(String(format: "%.1f", outputSeconds)) s"
     }
 
     /// One-shot structured request: a system prompt plus one user message,
@@ -158,44 +221,53 @@ final class OllamaService {
     /// prompt and project bundle Claude gets, plus a blunt restatement of
     /// the two-block edit format. Local models otherwise tend to answer
     /// with only the replacement, which leaves Apply nothing to match.
+    ///
+    /// Everything heavy — project slice, focused file, unsaved edits — sits
+    /// in the system message, ahead of the conversation. Ollama caches the
+    /// key/value state of the longest prefix it has seen, so keeping that
+    /// text in a fixed position means the second question about a file
+    /// costs a second, not the thirty the first one did.
     static func messages(question: String, project: CodeProject, focusedFile: String?,
                          changedFiles: [(path: String, text: String)],
                          history: [(question: String, answer: String)]) -> [[String: String]] {
-        let projectContext = localProjectContext(project, focusedFile: focusedFile)
         var messages: [[String: String]] = [[
             "role": "system",
-            "content": AnthropicService.codeSystemPrompt
-                + "\n\n" + editFormatReminder
-                + (project.guidanceText.map { "\n\n\($0)" } ?? "")
-                + "\n\n" + projectContext,
+            "content": systemPrompt(project: project, focusedFile: focusedFile, changedFiles: changedFiles),
         ]]
         for turn in history.suffix(localCodeHistoryLimit) {
             messages.append(["role": "user", "content": turn.question])
             messages.append(["role": "assistant", "content": turn.answer])
         }
-        var current = ""
+        messages.append(["role": "user", "content": question + "\n\n" + questionReminder])
+        return messages
+    }
+
+    static func systemPrompt(project: CodeProject, focusedFile: String?,
+                             changedFiles: [(path: String, text: String)]) -> String {
+        var system = AnthropicService.codeSystemPrompt
+            + "\n\n" + editFormatReminder
+            + (project.guidanceText.map { "\n\n\($0)" } ?? "")
+            + "\n\n" + localProjectContext(project, focusedFile: focusedFile)
         let supplementalChangedFiles = changedFiles.filter { $0.path != focusedFile }
         if !supplementalChangedFiles.isEmpty {
-            current += "Since the project snapshot was taken, these files changed. Use these current versions:\n\n"
+            system += "\n\nSince the project snapshot was taken, these files changed. Use these current versions:\n\n"
             for file in supplementalChangedFiles {
-                current += "===== FILE: \(file.path) (current) =====\n"
+                system += "===== FILE: \(file.path) (current) =====\n"
                     + excerpt(file.text, maxCharacters: maxLocalChangedFileCharacters)
                     + "\n\n"
             }
         }
         if let focusedFile {
-            current += "The user currently has \(focusedFile) open. Their question is about that file unless stated otherwise.\n\n"
+            system += "\n\nThe user currently has \(focusedFile) open. Their question is about that file unless stated otherwise.\n\n"
             let text = changedFiles.first(where: { $0.path == focusedFile })?.text
                 ?? project.files.first(where: { $0.path == focusedFile })?.text
             if let text {
-                current += "Here is \(focusedFile) with line numbers. When the user refers to a line number, "
+                system += "Here is \(focusedFile) with line numbers. When the user refers to a line number, "
                     + "use these numbers exactly — do not count lines yourself:\n\n"
-                    + Self.numberedExcerpt(text, maxCharacters: maxLocalFocusedFileCharacters) + "\n\n"
+                    + numberedExcerpt(text, maxCharacters: maxLocalFocusedFileCharacters)
             }
         }
-        current += question + "\n\n" + questionReminder
-        messages.append(["role": "user", "content": current])
-        return messages
+        return system
     }
 
     /// Local models pay the full prompt cost on every question and allocate
@@ -217,7 +289,7 @@ final class OllamaService {
         out += "\nProject slice for local analysis:\n"
         var remaining = maxLocalProjectCharacters
         var included = 0
-        for file in project.files {
+        for file in slicePriority(project.files) {
             let header = "===== FILE: \(file.path) =====\n"
             let needed = header.count + file.text.count + 2
             guard needed <= remaining else { continue }
@@ -233,12 +305,47 @@ final class OllamaService {
         return out
     }
 
+    /// The slice is a budget, so spend it on what explains a project:
+    /// READMEs and manifests first, then entry points, then everything
+    /// else shallowest-first. Alphabetical order would spend it on
+    /// whatever sorts before "src".
+    static func slicePriority(_ files: [CodeProject.File]) -> [CodeProject.File] {
+        func rank(_ path: String) -> Int {
+            let name = (path as NSString).lastPathComponent.lowercased()
+            let stem = (name as NSString).deletingPathExtension
+            if name.hasPrefix("readme") { return 0 }
+            if manifestNames.contains(name) { return 1 }
+            if entryPointStems.contains(stem) { return 2 }
+            if name.hasSuffix(".md") { return 3 }
+            return 4
+        }
+        return files.enumerated().sorted { a, b in
+            let ra = rank(a.element.path), rb = rank(b.element.path)
+            if ra != rb { return ra < rb }
+            let da = a.element.path.filter { $0 == "/" }.count, db = b.element.path.filter { $0 == "/" }.count
+            if da != db { return da < db }
+            return a.offset < b.offset
+        }.map(\.element)
+    }
+
+    private static let manifestNames: Set<String> = [
+        "package.json", "package.swift", "pyproject.toml", "requirements.txt", "setup.py",
+        "cargo.toml", "go.mod", "gemfile", "pom.xml", "build.gradle", "build.gradle.kts",
+        "composer.json", "mix.exs", "pubspec.yaml", "project.pbxproj", "makefile", "dockerfile",
+        "docker-compose.yml", "tsconfig.json",
+    ]
+    private static let entryPointStems: Set<String> = [
+        "main", "index", "app", "server", "cli", "daily", "__main__", "manage", "program",
+    ]
+
     static let maxLocalProjectCharacters = 60_000
     static let maxLocalFocusedFileCharacters = 60_000
     static let maxLocalChangedFileCharacters = 30_000
     static let localCodeHistoryLimit = 3
     static let askMaxOutputTokens = 1_024
     static let codeMaxOutputTokens = 2_048
+    /// Tokens a warm-up leaves free for the questions that follow it.
+    static let conversationHeadroom = 4_096
     static let keepAlive = "30m"
 
     /// Appended to the system prompt for local models only.
