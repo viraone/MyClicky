@@ -156,6 +156,50 @@ final class TerminalShortcutTests: XCTestCase {
         XCTAssertEqual(panel.level, .floating)
     }
 
+    func testDraggingAFolderFromFinderKeepsPanelInFront() {
+        let panel = panel()
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.orderFrontRegardless()
+        defer { panel.close() }
+        panel.raiseForPanelInteraction()
+
+        // Grab a folder in Finder and drag it over: press, travel, release.
+        panel.handleBackgroundMouse(.leftMouseDown, at: NSPoint(x: 100, y: 100))
+        XCTAssertEqual(panel.level, .floating, "the press alone must not hide the drop target")
+        panel.handleBackgroundMouse(.leftMouseUp, at: NSPoint(x: 400, y: 300))
+        XCTAssertEqual(panel.level, .floating, "a drag is not a click on a background window")
+
+        // A plain click in another app still sends the panel back.
+        panel.handleBackgroundMouse(.leftMouseDown, at: NSPoint(x: 100, y: 100))
+        panel.handleBackgroundMouse(.leftMouseUp, at: NSPoint(x: 101, y: 102))
+        XCTAssertEqual(panel.level, .normal)
+
+        // A stray release with no press recorded is ignored.
+        panel.raiseForPanelInteraction()
+        panel.handleBackgroundMouse(.leftMouseUp, at: NSPoint(x: 100, y: 100))
+        XCTAssertEqual(panel.level, .floating)
+    }
+
+    func testClickingTheOpenDialogDoesNotRaisePanelOverIt() {
+        let panel = panel()
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.orderFrontRegardless()
+        defer { panel.close() }
+        panel.lowerForBackgroundInteraction()
+        XCTAssertEqual(panel.level, .normal)
+
+        let dialog = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 300, height: 200),
+                             styleMask: [.titled], backing: .buffered, defer: false)
+        defer { dialog.close() }
+        panel.handleLocalMouseDown(in: dialog)
+        XCTAssertEqual(panel.level, .normal, "a click in another window of the app leaves the panel where it is")
+        panel.handleLocalMouseDown(in: nil)
+        XCTAssertEqual(panel.level, .normal)
+
+        panel.handleLocalMouseDown(in: panel)
+        XCTAssertEqual(panel.level, .floating)
+    }
+
     func testFocusOnMountDoesNotStealLaterFieldFocus() async {
         let panel = panel()
         panel.orderFrontRegardless()

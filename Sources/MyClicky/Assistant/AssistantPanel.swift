@@ -1395,6 +1395,14 @@ final class KeyablePanel: NSPanel {
     private var localMouseMonitor: Any?
     private var globalMouseMonitor: Any?
     private var mousePassthroughTimer: Timer?
+    /// Where the last mouse-down in another app landed. Set on the press,
+    /// judged on the release: a press-and-release in place is a click on a
+    /// background window (lower the panel so that app comes forward); a
+    /// press that travels is a drag — usually a Finder folder heading for
+    /// the Code tab — and the panel must stay in front to catch the drop.
+    private var backgroundPressOrigin: NSPoint?
+    /// Pointer travel, in points, past which a background press counts as a drag.
+    static let backgroundDragSlop: CGFloat = 4
     /// Return true to consume Esc (e.g. to stop an in-flight answer) instead of closing.
     var onCancel: (() -> Bool)?
     /// ⌘V anywhere in the panel. Return true for terminal paste or a Code
@@ -1417,22 +1425,25 @@ final class KeyablePanel: NSPanel {
         mouseInteractionRegion = interactiveRegion
         self.shouldLowerForBackgroundClick = shouldLowerForBackgroundClick
         acceptsMouseMovedEvents = true
-        let mouseEvents: NSEvent.EventTypeMask = [
+        let localEvents: NSEvent.EventTypeMask = [
             .mouseMoved, .leftMouseDown, .rightMouseDown, .otherMouseDown,
         ]
-        localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: mouseEvents) { [weak self] event in
+        localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: localEvents) { [weak self] event in
             if event.type == .mouseMoved {
                 self?.refreshMousePassthrough()
             } else {
-                self?.raiseForPanelInteraction()
+                self?.handleLocalMouseDown(in: event.window)
             }
             return event
         }
-        globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: mouseEvents) { [weak self] event in
+        let globalEvents: NSEvent.EventTypeMask = [
+            .mouseMoved, .leftMouseDown, .leftMouseUp, .rightMouseDown, .otherMouseDown,
+        ]
+        globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: globalEvents) { [weak self] event in
             if event.type == .mouseMoved {
                 self?.refreshMousePassthrough()
             } else {
-                self?.lowerForBackgroundInteraction()
+                self?.handleBackgroundMouse(event.type, at: NSEvent.mouseLocation)
             }
         }
         let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
@@ -1449,6 +1460,34 @@ final class KeyablePanel: NSPanel {
         guard let mouseInteractionRegion, isVisible else { return }
         let point = convertPoint(fromScreen: screenPoint)
         ignoresMouseEvents = !mouseInteractionRegion(point, contentView?.bounds ?? .zero)
+    }
+
+    /// A mouse-down somewhere in this app. Only a click on the panel itself
+    /// brings it forward: clicks in the app's other windows — the "Choose a
+    /// project" open dialog, alerts — must not shove the panel on top of
+    /// them, or the dialog vanishes behind it mid-use.
+    func handleLocalMouseDown(in window: NSWindow?) {
+        guard window === self else { return }
+        raiseForPanelInteraction()
+    }
+
+    /// A mouse press or release in another app. See `backgroundPressOrigin`.
+    func handleBackgroundMouse(_ type: NSEvent.EventType, at location: NSPoint) {
+        switch type {
+        case .leftMouseDown:
+            backgroundPressOrigin = location
+        case .leftMouseUp:
+            guard let origin = backgroundPressOrigin else { return }
+            backgroundPressOrigin = nil
+            if hypot(location.x - origin.x, location.y - origin.y) < Self.backgroundDragSlop {
+                lowerForBackgroundInteraction()
+            }
+        case .rightMouseDown, .otherMouseDown:
+            backgroundPressOrigin = nil
+            lowerForBackgroundInteraction()
+        default:
+            break
+        }
     }
 
     func raiseForPanelInteraction() {
