@@ -981,17 +981,45 @@ final class AssistantPanelController {
         if state.collapsed { expand() }
         let visible = screen.visibleFrame
         // Respect wherever the user dragged the panel — including onto another
-        // display: only reposition when it isn't visible anywhere. A fresh
-        // open starts at bottom-center of the given screen.
-        let visibleSomewhere = panel.isVisible
-            && NSScreen.screens.contains { panel.frame.intersects($0.visibleFrame) }
-        if !visibleSomewhere {
+        // display — as long as all of it can be seen. A panel left hanging
+        // off an edge is pulled back onto the display showing most of it: a
+        // break check-in with half its words past the screen edge can't be
+        // read. Off every display entirely, or on a fresh open, it starts at
+        // bottom-center of the given screen.
+        if panel.isVisible, let home = Self.screenShowingMost(of: panel.frame) {
+            let frame = Self.frame(panel.frame, keptWithin: home.visibleFrame)
+            if frame != panel.frame { panel.setFrame(frame, display: true, animate: false) }
+        } else {
             panel.setFrameOrigin(NSPoint(
                 x: visible.midX - Self.expandedSize.width / 2,
                 y: visible.minY + 120
             ))
         }
         panel.orderFrontRegardless()
+    }
+
+    /// The display whose visible area overlaps `frame` the most, or nil when
+    /// the frame is off every display.
+    static func screenShowingMost(of frame: NSRect) -> NSScreen? {
+        var best: (screen: NSScreen, area: CGFloat)?
+        for screen in NSScreen.screens {
+            let overlap = screen.visibleFrame.intersection(frame)
+            guard !overlap.isNull else { continue }
+            let area = overlap.width * overlap.height
+            if area > 0, area > (best?.area ?? 0) { best = (screen, area) }
+        }
+        return best?.screen
+    }
+
+    /// `frame` moved (never resized) so it sits inside `visible` with the
+    /// same 8pt margin the size presets use. When it's too big to fit, the
+    /// left and top edges win — that's where the header and its controls are.
+    static func frame(_ frame: NSRect, keptWithin visible: NSRect, margin: CGFloat = 8) -> NSRect {
+        var origin = frame.origin
+        origin.x = max(min(origin.x, visible.maxX - frame.width - margin), visible.minX + margin)
+        origin.y = max(origin.y, visible.minY + margin)
+        origin.y = min(origin.y, visible.maxY - frame.height - margin)
+        return NSRect(origin: origin, size: frame.size)
     }
 
     /// Parks the panel in the top-right corner of `screen` — the resting spot

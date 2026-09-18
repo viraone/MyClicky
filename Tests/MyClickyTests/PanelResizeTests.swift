@@ -68,3 +68,33 @@ final class PanelResizeTests: XCTestCase {
         XCTAssertEqual(ends, 2)
     }
 }
+
+@MainActor
+final class PanelKeptOnScreenTests: XCTestCase {
+    let visible = NSRect(x: 0, y: 0, width: 1600, height: 1000)
+
+    func testFullyVisibleFrameIsLeftAlone() {
+        let frame = NSRect(x: 300, y: 200, width: 600, height: 400)
+        XCTAssertEqual(AssistantPanelController.frame(frame, keptWithin: visible), frame)
+    }
+
+    func testFrameHangingOffLeftEdgeIsPulledBack() {
+        let frame = NSRect(x: -250, y: 200, width: 600, height: 400)
+        XCTAssertEqual(AssistantPanelController.frame(frame, keptWithin: visible),
+                       NSRect(x: 8, y: 200, width: 600, height: 400))
+    }
+
+    func testFrameHangingOffTopRightIsPulledBack() {
+        let frame = NSRect(x: 1400, y: 900, width: 600, height: 400)
+        XCTAssertEqual(AssistantPanelController.frame(frame, keptWithin: visible),
+                       NSRect(x: 992, y: 592, width: 600, height: 400))
+    }
+
+    func testOversizedFrameKeepsLeftAndTopEdges() {
+        let frame = NSRect(x: -100, y: -100, width: 2000, height: 1400)
+        let kept = AssistantPanelController.frame(frame, keptWithin: visible)
+        XCTAssertEqual(kept.minX, 8)
+        XCTAssertEqual(kept.maxY, 992)
+        XCTAssertEqual(kept.size, frame.size)
+    }
+}

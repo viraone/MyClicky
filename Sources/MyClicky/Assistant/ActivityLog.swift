@@ -9,6 +9,15 @@ enum ActivityLog {
     private static var sampleTimer: Timer?
     private static var lastSampleKey: String?
 
+    /// Daily log files older than this are deleted as new ones are written.
+    /// The ClickyLogs dashboard only ever looks at the trailing 7 days, so
+    /// keeping a month around is already generous headroom.
+    private static let retention: TimeInterval = 30 * 24 * 60 * 60
+
+    /// Prune runs at most once per launch (further gated to once per day
+    /// below), so day-old data isn't rescanned on every single event.
+    private static var lastPruneDay: String?
+
     private static let browserBundleIDs: Set<String> = [
         "com.google.Chrome", "com.apple.Safari", "company.thebrowser.Browser",
         "com.microsoft.edgemac", "com.brave.Browser",
@@ -18,6 +27,12 @@ enum ActivityLog {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("MyClicky/ClickyLogs", isDirectory: true)
     }
+
+    private static let dayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
 
     /// Records one event. `details` values are short strings (question text,
     /// URL, app name, file name…).
@@ -30,9 +45,8 @@ enum ActivityLog {
         let dir = logDirectory
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
-        let day = DateFormatter()
-        day.dateFormat = "yyyy-MM-dd"
-        let file = dir.appendingPathComponent("events-\(day.string(from: Date())).jsonl")
+        let today = dayFormatter.string(from: Date())
+        let file = dir.appendingPathComponent("events-\(today).jsonl")
 
         var line = data
         line.append(0x0A) // newline
@@ -42,6 +56,30 @@ enum ActivityLog {
             try? handle.write(contentsOf: line)
         } else {
             try? line.write(to: file)
+        }
+
+        pruneOldLogsIfNeeded(dir: dir, today: today)
+    }
+
+    /// Deletes `events-*.jsonl` files older than `retention`. Cheap to call
+    /// often since it no-ops after the first run each day, but still called
+    /// from `record` (rather than only from `startSampling`) so logging-only
+    /// runs — tests, or a build with sampling disabled — still get swept.
+    private static func pruneOldLogsIfNeeded(dir: URL, today: String) {
+        guard lastPruneDay != today else { return }
+        lastPruneDay = today
+
+        let cutoff = Date().addingTimeInterval(-retention)
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: nil
+        ) else { return }
+
+        for url in entries {
+            let name = url.lastPathComponent
+            guard name.hasPrefix("events-"), name.hasSuffix(".jsonl") else { continue }
+            let dayString = String(name.dropFirst("events-".count).dropLast(".jsonl".count))
+            guard let day = dayFormatter.date(from: dayString), day < cutoff else { continue }
+            try? FileManager.default.removeItem(at: url)
         }
     }
 
