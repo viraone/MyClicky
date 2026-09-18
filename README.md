@@ -351,6 +351,8 @@ The dashboard lives at
 (bookmark it); a LaunchAgent (`com.myclicky.clickylogs`) regenerates
 `data.js` every 5 minutes. Source is in `ClickyLogs/`; after editing it run
 `./scripts/clickylogs.sh` to reinstall and open it. Data never leaves the Mac.
+Daily log files older than 30 days are deleted automatically (the dashboard
+only ever shows the trailing 7 days).
 
 ## Architecture
 

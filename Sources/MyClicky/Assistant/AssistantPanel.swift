@@ -981,17 +981,45 @@ final class AssistantPanelController {
         if state.collapsed { expand() }
         let visible = screen.visibleFrame
         // Respect wherever the user dragged the panel — including onto another
-        // display: only reposition when it isn't visible anywhere. A fresh
-        // open starts at bottom-center of the given screen.
-        let visibleSomewhere = panel.isVisible
-            && NSScreen.screens.contains { panel.frame.intersects($0.visibleFrame) }
-        if !visibleSomewhere {
+        // display — as long as all of it can be seen. A panel left hanging
+        // off an edge is pulled back onto the display showing most of it: a
+        // break check-in with half its words past the screen edge can't be
+        // read. Off every display entirely, or on a fresh open, it starts at
+        // bottom-center of the given screen.
+        if panel.isVisible, let home = Self.screenShowingMost(of: panel.frame) {
+            let frame = Self.frame(panel.frame, keptWithin: home.visibleFrame)
+            if frame != panel.frame { panel.setFrame(frame, display: true, animate: false) }
+        } else {
             panel.setFrameOrigin(NSPoint(
                 x: visible.midX - Self.expandedSize.width / 2,
                 y: visible.minY + 120
             ))
         }
         panel.orderFrontRegardless()
+    }
+
+    /// The display whose visible area overlaps `frame` the most, or nil when
+    /// the frame is off every display.
+    static func screenShowingMost(of frame: NSRect) -> NSScreen? {
+        var best: (screen: NSScreen, area: CGFloat)?
+        for screen in NSScreen.screens {
+            let overlap = screen.visibleFrame.intersection(frame)
+            guard !overlap.isNull else { continue }
+            let area = overlap.width * overlap.height
+            if area > 0, area > (best?.area ?? 0) { best = (screen, area) }
+        }
+        return best?.screen
+    }
+
+    /// `frame` moved (never resized) so it sits inside `visible` with the
+    /// same 8pt margin the size presets use. When it's too big to fit, the
+    /// left and top edges win — that's where the header and its controls are.
+    static func frame(_ frame: NSRect, keptWithin visible: NSRect, margin: CGFloat = 8) -> NSRect {
+        var origin = frame.origin
+        origin.x = max(min(origin.x, visible.maxX - frame.width - margin), visible.minX + margin)
+        origin.y = max(origin.y, visible.minY + margin)
+        origin.y = min(origin.y, visible.maxY - frame.height - margin)
+        return NSRect(origin: origin, size: frame.size)
     }
 
     /// Parks the panel in the top-right corner of `screen` — the resting spot
@@ -1051,7 +1079,9 @@ final class AssistantPanelController {
     // Card is 960x220 by default (960x520 when stretched tall via the header
     // button); the window carries an extra margin so the outer glow isn't
     // clipped. The user can also freely drag any corner — see `resize(_:)`.
-    static let glowMargin: CGFloat = 24
+    static let glowMargin: CGFloat = 36
+    /// Corner radius of the card itself.
+    static let cardRadius: CGFloat = 28
     private static let expandedSize = NSSize(width: 960 + glowMargin * 2, height: 220 + glowMargin * 2)
     private static let tallSize = NSSize(width: 960 + glowMargin * 2, height: 520 + glowMargin * 2)
     /// Half the tall card's width, at its full height.
@@ -1302,7 +1332,7 @@ final class AssistantPanelController {
                     return true
                 }
                 let card = bounds.insetBy(dx: Self.glowMargin, dy: Self.glowMargin)
-                let radius: CGFloat = state.strip ? 16 : 22
+                let radius: CGFloat = state.strip ? 16 : Self.cardRadius
                 return NSBezierPath(roundedRect: card, xRadius: radius, yRadius: radius).contains(point)
             },
             shouldLowerForBackgroundClick: { [weak state] in
@@ -1889,11 +1919,11 @@ struct AssistantPanelView: View {
         .background(
             ZStack {
                 // Flat, near-black terminal background.
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                RoundedRectangle(cornerRadius: AssistantPanelController.cardRadius, style: .continuous)
                     .fill(Color(red: 0.094, green: 0.094, blue: 0.098))
                 // A wash of the phase colour from the top, strong enough while
                 // recording that the whole panel reads as "live" at a glance.
-                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                RoundedRectangle(cornerRadius: AssistantPanelController.cardRadius, style: .continuous)
                     .fill(
                         RadialGradient(
                             colors: [state.accent.opacity(state.phase == .recording ? 0.22 : 0.10), .clear],
@@ -1906,7 +1936,7 @@ struct AssistantPanelView: View {
         )
         // Crisp rim in the phase colour, heavier while recording.
         .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
+            RoundedRectangle(cornerRadius: AssistantPanelController.cardRadius, style: .continuous)
                 .strokeBorder(
                     LinearGradient(
                         colors: [
@@ -1920,7 +1950,7 @@ struct AssistantPanelView: View {
                     lineWidth: state.phase == .recording || state.phase == .paused ? 2 : 1
                 )
         )
-        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: AssistantPanelController.cardRadius, style: .continuous))
         .overlay(alignment: .trailing) {
             edgeChevron(expanded: true)
                 .padding(.trailing, 14)
@@ -1932,24 +1962,26 @@ struct AssistantPanelView: View {
         .overlay(alignment: .topTrailing) { resizeHandle(.topTrailing) }
         .overlay(alignment: .bottomLeading) { resizeHandle(.bottomLeading) }
         .overlay(alignment: .bottomTrailing) { resizeHandle(.bottomTrailing) }
-        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: AssistantPanelController.cardRadius, style: .continuous))
         .compositingGroup()
         // Soft outer halo (Spotlight-style) drawn as a blurred rounded rect so
-        // the corners stay round, plus a grounding drop shadow.
+        // the corners stay round, plus a grounding drop shadow. Strong enough
+        // to read as a soft edge on a light desktop, not just a black cut-out.
         .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(state.accent.opacity(breathing ? (state.phase == .recording ? 0.6 : 0.42) : 0.16))
-                .blur(radius: breathing ? 18 : 10)
+            RoundedRectangle(cornerRadius: AssistantPanelController.cardRadius, style: .continuous)
+                .fill(state.accent.opacity(breathing ? (state.phase == .recording ? 0.85 : 0.65) : 0.4))
+                .padding(-6)
+                .blur(radius: breathing ? 26 : 16)
                 // The halo breathes slowly at rest and quickly while recording,
                 // so a live mic is visible even from across the room.
                 .animation(.easeInOut(duration: state.phase == .recording ? 0.9 : 2.2)
                     .repeatForever(autoreverses: true), value: breathing)
         )
         .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(Color.black.opacity(0.35))
-                .blur(radius: 10)
-                .offset(y: 6)
+            RoundedRectangle(cornerRadius: AssistantPanelController.cardRadius, style: .continuous)
+                .fill(Color.black.opacity(0.45))
+                .blur(radius: 16)
+                .offset(y: 8)
         )
         .padding(AssistantPanelController.glowMargin)
         .onAppear { breathing = true }
