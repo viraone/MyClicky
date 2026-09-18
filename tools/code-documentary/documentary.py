@@ -96,6 +96,8 @@ class Documentary(Scene):
             # rather than a ribbon shrunk to fit, and drop the line numbers.
             raw = [textwrap.fill(line, PROSE_WIDTH) if line.strip() else "" for line in raw]
         snippet = "\n".join(raw)
+        if not snippet.strip():
+            snippet = "[Source passage unavailable]"
         code = Code(
             code_string=snippet,
             language=LANGUAGE,
