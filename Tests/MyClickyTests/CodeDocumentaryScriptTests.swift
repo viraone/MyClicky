@@ -64,6 +64,20 @@ final class CodeDocumentaryScriptTests: XCTestCase {
         XCTAssertEqual(model.phase, .idle)
     }
 
+    func testStagesStableSourceSnapshotForPipeline() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("documentary-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let original = URL(fileURLWithPath: "/tmp/constructor notes.txt")
+        let snapshot = try CodeDocumentaryModel.stageSource("Original contents", original: original, in: root)
+
+        XCTAssertEqual(snapshot.lastPathComponent, original.lastPathComponent)
+        XCTAssertEqual(snapshot.deletingLastPathComponent().lastPathComponent, "source")
+        XCTAssertEqual(try String(contentsOf: snapshot, encoding: .utf8), "Original contents")
+    }
+
     func testWriteScriptFeedsNumberedFileToRequesterAndValidates() async throws {
         let source = URL(fileURLWithPath: "/tmp/hello.swift")
         var seen: (system: String, user: String)?

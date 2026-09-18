@@ -271,13 +271,15 @@ final class CodeDocumentaryModel: ObservableObject {
                 append(scriptProvider == .claude
                        ? "Asking Claude for a documentary script…"
                        : "Asking \(scriptWriterLabel) on this Mac for a documentary script — nothing leaves the machine…")
-                let script = try await Self.writeScript(for: code, at: source, kind: kind, using: requester)
+                var script = try await Self.writeScript(for: code, at: source, kind: kind, using: requester)
                 guard gen == generation else { return }
                 scriptTitle = script["title"] as? String
                 let sceneCount = (script["scenes"] as? [[String: Any]])?.count ?? 0
                 append("Script ready: \"\(scriptTitle ?? "Untitled")\" · \(sceneCount) scenes")
 
                 let project = try Self.makeProjectDir(for: source)
+                let stagedSource = try Self.stageSource(code, original: source, in: project)
+                script["source"] = stagedSource.path
                 let data = try JSONSerialization.data(withJSONObject: script, options: [.prettyPrinted, .sortedKeys])
                 try data.write(to: project.appendingPathComponent("script.json"))
                 append("Project: \(project.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))")
@@ -1045,6 +1047,15 @@ final class CodeDocumentaryModel: ObservableObject {
         let dir = projectsDir.appendingPathComponent("\(stem.isEmpty ? "code" : stem)-\(stamp)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
+    }
+
+    static func stageSource(_ contents: String, original: URL, in project: URL) throws -> URL {
+        let sourceDir = project.appendingPathComponent("source", isDirectory: true)
+        try FileManager.default.createDirectory(at: sourceDir, withIntermediateDirectories: true)
+        let name = original.lastPathComponent.isEmpty ? "source.txt" : original.lastPathComponent
+        let snapshot = sourceDir.appendingPathComponent(name)
+        try contents.write(to: snapshot, atomically: true, encoding: .utf8)
+        return snapshot
     }
 
     private func runPipeline(project: URL, generation gen: Int) async throws {
@@ -2533,9 +2544,8 @@ struct CodeDocumentaryView: View {
                     }
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
                     .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
+                    .padding(.vertical, 8)
                     .background(
                         RoundedRectangle(cornerRadius: 9, style: .continuous)
                             .fill(canGenerate ? Color(red: 0.90, green: 0.04, blue: 0.08) : Color.white.opacity(0.12))
