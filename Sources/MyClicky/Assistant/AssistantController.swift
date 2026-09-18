@@ -931,7 +931,7 @@ final class AssistantController {
         }
         panel.state.logCode(.question, question)
         busy = true
-        warmUpTask?.cancel()
+        warmUpDebounce?.cancel()
         synthesizer.stopSpeaking(at: .immediate)
         panel.state.status = .thinking
         panel.state.errorText = nil
@@ -949,6 +949,10 @@ final class AssistantController {
             do {
                 let answerText: String
                 if provider == .ollama {
+                    if let warmUp = warmUpInFlight {
+                        panel.state.logCode(.status, "Letting the cache warm-up finish first…")
+                        await warmUp.value
+                    }
                     answerText = try await ollama.askAboutCode(
                         question: question, project: project, focusedFile: focusedFile,
                         changedFiles: changedFiles, history: history,
@@ -1008,27 +1012,42 @@ final class AssistantController {
     /// it changes, so the cache is warm by the time a question is typed.
     /// Debounced: browsing files fires this on every click. Skipped while a
     /// question is in flight — that request warms the same cache itself.
-    private var warmUpTask: Task<Void, Never>?
+    ///
+    /// Only the debounce is ever cancelled. Once a warm-up request has been
+    /// sent it always runs to completion: dropping the connection makes
+    /// Ollama abort a model load in progress or discard the half-read
+    /// prompt, so a cancelled warm-up costs more than a finished one. The
+    /// next warm-up or question simply queues behind it.
+    private var warmUpDebounce: Task<Void, Never>?
+    private var warmUpInFlight: Task<Void, Never>?
     private func scheduleLocalCodeWarmUp() {
-        warmUpTask?.cancel()
+        warmUpDebounce?.cancel()
         guard panel.state.codeAIProvider == .ollama, panel.state.codeProject != nil, !busy else { return }
-        warmUpTask = Task { [weak self] in
+        warmUpDebounce = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(1_200))
-            guard let self, !Task.isCancelled, !self.busy,
-                  let project = self.panel.state.codeProject else { return }
+            guard let self, !Task.isCancelled else { return }
+            await self.warmUpInFlight?.value
+            // Re-read after waiting: the user may have moved on to another file.
+            guard !Task.isCancelled, !self.busy, let project = self.panel.state.codeProject else { return }
             let focused = self.panel.state.codeFocusedFile
             let changed = self.panel.state.codeChangedFiles
             let model = self.panel.state.codeOllamaModel
-            let started = Date()
-            guard let window = try? await self.ollama.warmCodePrompt(
-                project: project, focusedFile: focused, changedFiles: changed, model: model
-            ), !Task.isCancelled else { return }
-            let seconds = Date().timeIntervalSince(started)
-            // Only worth a line when it did real work; a cache hit is silent.
-            if seconds >= 2 {
-                let scope = focused.map { ($0 as NSString).lastPathComponent } ?? "project slice"
-                self.panel.state.logCode(.status, "Warmed \(model) with \(scope) · \(window / 1024)K context · \(String(format: "%.0f", seconds)) s — questions about it are fast now.")
+            let request = Task { [weak self] in
+                guard let self else { return }
+                let started = Date()
+                guard let window = try? await self.ollama.warmCodePrompt(
+                    project: project, focusedFile: focused, changedFiles: changed, model: model
+                ) else { return }
+                let seconds = Date().timeIntervalSince(started)
+                // Only worth a line when it did real work; a cache hit is silent.
+                if seconds >= 2 {
+                    let scope = focused.map { ($0 as NSString).lastPathComponent } ?? "project slice"
+                    self.panel.state.logCode(.status, "Warmed \(model) with \(scope) · \(window / 1024)K context · \(String(format: "%.0f", seconds)) s — questions about it are fast now.")
+                }
             }
+            self.warmUpInFlight = request
+            await request.value
+            if self.warmUpInFlight == request { self.warmUpInFlight = nil }
         }
     }
 
