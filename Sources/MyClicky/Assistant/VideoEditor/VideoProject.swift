@@ -113,18 +113,22 @@ struct VideoProject: Codable, Equatable {
     var spokenLanguage: String
     /// A language to add under every subtitle, or nil for none.
     var translationLanguage: String?
+    /// The look of every subtitle — a `SubtitleStylePreset` by name.
+    var subtitleStyle: String
 
     init(name: String, clips: [EditClip] = [], created: Date = Date(), transcripts: [String: [SpokenWord]] = [:],
-         spokenLanguage: String = VideoProject.defaultSpokenLanguage, translationLanguage: String? = nil) {
+         spokenLanguage: String = VideoProject.defaultSpokenLanguage, translationLanguage: String? = nil,
+         subtitleStyle: String = SubtitleStylePreset.default.rawValue) {
         self.name = name
         self.clips = clips
         self.created = created
         self.transcripts = transcripts
         self.spokenLanguage = spokenLanguage
         self.translationLanguage = translationLanguage
+        self.subtitleStyle = subtitleStyle
     }
 
-    private enum CodingKeys: String, CodingKey { case version, name, clips, created, transcripts, spokenLanguage, translationLanguage }
+    private enum CodingKeys: String, CodingKey { case version, name, clips, created, transcripts, spokenLanguage, translationLanguage, subtitleStyle }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -136,7 +140,10 @@ struct VideoProject: Codable, Equatable {
         // Projects saved before languages existed were all English.
         spokenLanguage = try c.decodeIfPresent(String.self, forKey: .spokenLanguage) ?? Self.defaultSpokenLanguage
         translationLanguage = try c.decodeIfPresent(String.self, forKey: .translationLanguage)
+        subtitleStyle = try c.decodeIfPresent(String.self, forKey: .subtitleStyle) ?? SubtitleStylePreset.default.rawValue
     }
+
+    var stylePreset: SubtitleStylePreset { SubtitleStylePreset(rawValue: subtitleStyle) ?? .default }
 
     var duration: Double { clips.reduce(0) { $0 + $1.duration } }
 
@@ -188,6 +195,27 @@ struct VideoProject: Codable, Equatable {
 
     func cue(at time: Double) -> TimelineCue? {
         timelineCues.first { time >= $0.start && time < $0.end }
+    }
+
+    /// When each word of a subtitle starts, in timeline seconds: the
+    /// recogniser's timings when they line up with the words on the line,
+    /// otherwise spread evenly across the cue (a line that's been edited).
+    func wordStarts(for cue: TimelineCue) -> [Double] {
+        let count = cue.text.split(whereSeparator: { $0 == " " }).count
+        guard count > 0 else { return [] }
+        let even = (0..<count).map { cue.start + (cue.end - cue.start) * Double($0) / Double(count) }
+        for (clip, start) in zip(clips, clipStarts) {
+            guard let source = clip.cues.first(where: { $0.id == cue.id }) else { continue }
+            let heard = (transcripts[clip.source.path] ?? []).filter { $0.start >= source.start - 0.01 && $0.start < source.end }
+            guard heard.count == count else { return even }
+            return heard.map { min(cue.end, max(cue.start, $0.start - clip.inPoint + start)) }
+        }
+        return even
+    }
+
+    /// Which word of `cue` is being spoken at `time`.
+    func wordIndex(in cue: TimelineCue, at time: Double) -> Int {
+        max(0, wordStarts(for: cue).lastIndex { $0 <= time } ?? 0)
     }
 
     // MARK: Edits

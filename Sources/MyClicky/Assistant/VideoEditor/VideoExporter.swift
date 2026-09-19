@@ -2,26 +2,6 @@ import AppKit
 import AVFoundation
 import QuartzCore
 
-/// How burned-in captions look. One style for the whole project, sized for
-/// a 1080×1920 frame and kept clear of the strips TikTok and Instagram
-/// cover with their own controls.
-struct CaptionStyle: Equatable {
-    var fontSize: CGFloat = 64
-    var textColor = NSColor.white
-    var pillColor = NSColor.black.withAlphaComponent(0.65)
-    var cornerRadius: CGFloat = 20
-    var horizontalPadding: CGFloat = 32
-    var verticalPadding: CGFloat = 18
-    /// Widest a caption may be, as a share of the frame width.
-    var maxWidthShare: CGFloat = 0.84
-    /// Where the caption's centre sits, as a share of the frame height from
-    /// the bottom. 0.30 clears the ~350px caption/controls strip at the foot
-    /// of a Reel and still reads as "lower third".
-    var centreFromBottom: CGFloat = 0.30
-
-    var font: NSFont { NSFont.systemFont(ofSize: fontSize, weight: .heavy) }
-}
-
 /// Turns a `VideoProject` into an AVFoundation composition — for the preview
 /// player and for the exported file — and writes the finished MP4.
 enum VideoExporter {
@@ -125,15 +105,17 @@ enum VideoExporter {
     // MARK: Captions
 
     /// The pill a caption sits in, and where, for a frame of `render`.
+    /// `text` is taken as already spelled by the style.
     static func captionFrame(for text: String, style: CaptionStyle, render: CGSize = renderSize) -> (pill: CGRect, textSize: CGSize) {
-        let maxWidth = render.width * style.maxWidthShare - style.horizontalPadding * 2
+        let inset = style.strokeColor == nil ? 0 : style.strokeWidth
+        let maxWidth = render.width * style.maxWidthShare - style.horizontalPadding * 2 - inset * 2
         let attributes: [NSAttributedString.Key: Any] = [.font: style.font]
         let bounds = (text as NSString).boundingRect(
             with: CGSize(width: maxWidth, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading],
             attributes: attributes
         )
-        let textSize = CGSize(width: ceil(bounds.width), height: ceil(bounds.height))
+        let textSize = CGSize(width: ceil(bounds.width) + inset * 2, height: ceil(bounds.height) + inset * 2)
         let pillSize = CGSize(width: textSize.width + style.horizontalPadding * 2,
                               height: textSize.height + style.verticalPadding * 2)
         let pill = CGRect(x: (render.width - pillSize.width) / 2,
@@ -142,43 +124,121 @@ enum VideoExporter {
         return (pill.integral, textSize)
     }
 
-    /// A layer per caption, each visible only for its own stretch of the
-    /// video. Core Animation's timeline is the video's, so a plain opacity
-    /// animation with a begin time does the scheduling.
+    /// One caption drawn in `style` at its place in a `render`-sized frame:
+    /// the box (if any), an outline behind the letters (if any), the letters,
+    /// with the `highlight`-th word of the first line in the accent colour.
+    /// The same layer serves the export, the preview and the style tiles.
     @MainActor
-    static func captionOverlay(for cues: [TimelineCue], style: CaptionStyle, render: CGSize = renderSize) -> CALayer {
+    static func captionLayer(text raw: String, highlight: Int? = nil, style: CaptionStyle, render: CGSize = renderSize) -> CALayer {
+        let shown = style.display(raw)
+        let (pill, textSize) = captionFrame(for: shown, style: style, render: render)
+        let container = CALayer()
+        container.frame = pill
+        container.backgroundColor = (style.pillColor ?? .clear).cgColor
+        container.cornerRadius = style.cornerRadius
+        container.masksToBounds = false
+
+        let textFrame = CGRect(x: (pill.width - textSize.width) / 2,
+                               y: (pill.height - textSize.height) / 2,
+                               width: textSize.width, height: textSize.height)
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        var fill: [NSAttributedString.Key: Any] = [
+            .font: style.font, .foregroundColor: style.textColor, .paragraphStyle: paragraph,
+        ]
+        let inset = style.strokeColor == nil ? 0 : style.strokeWidth
+        // A stroke centred on the outline would eat into the letters, so
+        // outlines are their own layer underneath, stroke only.
+        var backmost: CALayer?
+        if let strokeColor = style.strokeColor, style.strokeWidth > 0 {
+            var outline = fill
+            outline[.strokeColor] = strokeColor
+            outline[.strokeWidth] = style.strokeWidth * 2 / style.fontSize * 100
+            let layer = textLayer(shown, attributes: outline, frame: textFrame.insetBy(dx: inset, dy: inset))
+            container.addSublayer(layer)
+            backmost = layer
+        }
+        let letters = NSMutableAttributedString(string: shown, attributes: fill)
+        if let highlight, let accent = style.accentColor,
+           let range = wordRanges(in: shown).dropFirst(highlight).first {
+            letters.addAttribute(.foregroundColor, value: accent, range: range)
+        }
+        let face = textLayer(letters, frame: textFrame.insetBy(dx: inset, dy: inset))
+        container.addSublayer(face)
+        if let shadowColor = style.shadowColor {
+            let target = backmost ?? face
+            target.shadowColor = shadowColor.cgColor
+            target.shadowOpacity = 1
+            target.shadowRadius = style.shadowRadius
+            target.shadowOffset = style.shadowOffset
+        }
+        return container
+    }
+
+    private static func textLayer(_ text: String, attributes: [NSAttributedString.Key: Any], frame: CGRect) -> CATextLayer {
+        textLayer(NSAttributedString(string: text, attributes: attributes), frame: frame)
+    }
+
+    private static func textLayer(_ text: NSAttributedString, frame: CGRect) -> CATextLayer {
+        let layer = CATextLayer()
+        layer.string = text
+        layer.alignmentMode = .center
+        layer.isWrapped = true
+        layer.contentsScale = 2
+        layer.masksToBounds = false
+        layer.frame = frame
+        return layer
+    }
+
+    /// Where each word of the first line sits in `text`, split on spaces
+    /// so contractions stay whole.
+    static func wordRanges(in text: String) -> [NSRange] {
+        let ns = text as NSString
+        let firstLine = ns.range(of: "\n").location
+        var ranges: [NSRange] = []
+        var index = 0
+        let limit = firstLine == NSNotFound ? ns.length : firstLine
+        while index < limit {
+            while index < limit, ns.character(at: index) == 0x20 { index += 1 }
+            let start = index
+            while index < limit, ns.character(at: index) != 0x20 { index += 1 }
+            if index > start { ranges.append(NSRange(location: start, length: index - start)) }
+        }
+        return ranges
+    }
+
+    /// A layer per caption, each visible only for its own stretch of the
+    /// video — or one per *word* when the style follows the speaker. Core
+    /// Animation's timeline is the video's, so a plain opacity animation
+    /// with a begin time does the scheduling.
+    @MainActor
+    static func captionOverlay(for cues: [TimelineCue], style: CaptionStyle, render: CGSize = renderSize,
+                               wordStarts: (TimelineCue) -> [Double] = { _ in [] }) -> CALayer {
         let overlay = CALayer()
         overlay.frame = CGRect(origin: .zero, size: render)
         for cue in cues where !cue.text.trimmingCharacters(in: .whitespaces).isEmpty && cue.end > cue.start {
             let shown = cue.displayText
-            let (pill, textSize) = captionFrame(for: shown, style: style, render: render)
-            let container = CALayer()
-            container.frame = pill
-            container.backgroundColor = style.pillColor.cgColor
-            container.cornerRadius = style.cornerRadius
-            container.opacity = 0
-
-            let text = CATextLayer()
-            text.string = NSAttributedString(string: shown, attributes: [
-                .font: style.font,
-                .foregroundColor: style.textColor,
-            ])
-            text.alignmentMode = .center
-            text.isWrapped = true
-            text.contentsScale = 2
-            text.frame = CGRect(x: (pill.width - textSize.width) / 2,
-                                y: (pill.height - textSize.height) / 2,
-                                width: textSize.width, height: textSize.height)
-            container.addSublayer(text)
-
-            let show = CABasicAnimation(keyPath: "opacity")
-            show.fromValue = 1
-            show.toValue = 1
-            show.beginTime = cue.start <= 0 ? AVCoreAnimationBeginTimeAtZero : cue.start
-            show.duration = cue.end - cue.start
-            show.isRemovedOnCompletion = false
-            container.add(show, forKey: "visible")
-            overlay.addSublayer(container)
+            var stretches: [(highlight: Int?, start: Double, end: Double)] = [(nil, cue.start, cue.end)]
+            if style.accentColor != nil {
+                let starts = wordStarts(cue).filter { $0 >= cue.start && $0 < cue.end }
+                if !starts.isEmpty {
+                    stretches = starts.indices.map { i in
+                        (i, i == 0 ? cue.start : starts[i], i + 1 < starts.count ? starts[i + 1] : cue.end)
+                    }
+                }
+            }
+            for stretch in stretches where stretch.end > stretch.start {
+                let container = captionLayer(text: shown, highlight: stretch.highlight, style: style, render: render)
+                container.opacity = 0
+                let show = CABasicAnimation(keyPath: "opacity")
+                show.fromValue = 1
+                show.toValue = 1
+                show.beginTime = stretch.start <= 0 ? AVCoreAnimationBeginTimeAtZero : stretch.start
+                show.duration = stretch.end - stretch.start
+                show.isRemovedOnCompletion = false
+                container.add(show, forKey: "visible")
+                overlay.addSublayer(container)
+            }
         }
         return overlay
     }
@@ -197,7 +257,7 @@ enum VideoExporter {
         let videoLayer = CALayer()
         videoLayer.frame = parent.frame
         parent.addSublayer(videoLayer)
-        parent.addSublayer(captionOverlay(for: project.timelineCues, style: style))
+        parent.addSublayer(captionOverlay(for: project.timelineCues, style: style) { project.wordStarts(for: $0) })
         timeline.videoComposition.animationTool = AVVideoCompositionCoreAnimationTool(postProcessingAsVideoLayer: videoLayer, in: parent)
 
         guard let session = AVAssetExportSession(asset: timeline.composition, presetName: AVAssetExportPresetHighestQuality) else {

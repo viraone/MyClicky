@@ -68,7 +68,9 @@ final class VideoEditorModel: ObservableObject {
     /// Bumped each time the Subtitles panel should run a translation pass;
     /// the view owns the `TranslationSession`, so it watches this.
     @Published private(set) var translationJob = 0
-    var style = CaptionStyle()
+    /// How subtitles look, from the project's chosen preset.
+    var style: CaptionStyle { stylePreset.style }
+    var stylePreset: SubtitleStylePreset { project?.stylePreset ?? .default }
 
     /// A protocol line for the Peeky Remote phone app (VIDEO_STATE).
     var onRemoteLine: ((String) -> Void)?
@@ -382,6 +384,13 @@ final class VideoEditorModel: ObservableObject {
     }
 
     // MARK: Subtitles
+
+    func setSubtitleStyle(_ preset: SubtitleStylePreset) {
+        guard var p = project, p.stylePreset != preset else { return }
+        p.subtitleStyle = preset.rawValue
+        project = p
+        save()
+    }
 
     func setCueText(_ id: UUID, _ text: String) {
         guard var p = project else { return }
