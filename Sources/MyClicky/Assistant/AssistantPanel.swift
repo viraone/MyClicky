@@ -1021,10 +1021,14 @@ final class AssistantPanelController {
         // off an edge is pulled back onto the display showing most of it: a
         // break check-in with half its words past the screen edge can't be
         // read. Off every display entirely, or on a fresh open, it starts at
-        // bottom-center of the given screen.
+        // bottom-center of the given screen. Only the card has to be seen:
+        // its glow margin may hang past the edge, as it does at Full.
         if panel.isVisible, let home = Self.screenShowingMost(of: panel.frame) {
-            let frame = Self.frame(panel.frame, keptWithin: home.visibleFrame)
-            if frame != panel.frame { panel.setFrame(frame, display: true, animate: false) }
+            let card = panel.frame.insetBy(dx: Self.glowMargin, dy: Self.glowMargin)
+            let kept = Self.frame(card, keptWithin: home.visibleFrame)
+            if kept != card {
+                panel.setFrame(kept.insetBy(dx: -Self.glowMargin, dy: -Self.glowMargin), display: true, animate: false)
+            }
         } else {
             panel.setFrameOrigin(NSPoint(
                 x: visible.midX - Self.expandedSize.width / 2,
@@ -1128,10 +1132,28 @@ final class AssistantPanelController {
         case .normal: return expandedSize
         case .tall: return tallSize
         case .full:
-            // The whole screen, edge to edge, never smaller than Tall.
+            // The whole screen, edge to edge, never smaller than Tall. The
+            // window is oversized by the glow margin so that hangs past the
+            // screen edges and the card itself sits `edgeInset` from them.
             let visible = (screen ?? NSScreen.main)?.visibleFrame.size ?? tallSize
-            return NSSize(width: max(tallSize.width, visible.width - 16), height: max(tallSize.height, visible.height - 16))
+            let extra = (glowMargin - edgeInset) * 2
+            return NSSize(width: max(tallSize.width, visible.width + extra), height: max(tallSize.height, visible.height + extra))
         }
+    }
+    /// Gap kept between a window and the screen edge — or, for a window
+    /// bigger than the screen, between the card and the screen edge.
+    static let edgeInset: CGFloat = 8
+    /// Where a window of `size` goes, starting from `origin`, so it stays
+    /// `edgeInset` inside `visible`. A window wider or taller than the
+    /// screen — Full, with its glow margin past the edges — is centered on
+    /// that axis instead, so the card sits evenly inside the screen.
+    static func origin(_ origin: NSPoint, of size: NSSize, keptWithin visible: NSRect) -> NSPoint {
+        func place(_ value: CGFloat, length: CGFloat, from lo: CGFloat, to hi: CGFloat) -> CGFloat {
+            let low = lo + edgeInset, high = hi - length - edgeInset
+            return high >= low ? Swift.min(Swift.max(value, low), high) : (lo + hi - length) / 2
+        }
+        return NSPoint(x: place(origin.x, length: size.width, from: visible.minX, to: visible.maxX),
+                       y: place(origin.y, length: size.height, from: visible.minY, to: visible.maxY))
     }
     private static let collapsedSize = NSSize(width: 56, height: 56)
     private static let stripSize = NSSize(width: 420 + glowMargin * 2, height: 52 + glowMargin * 2)
@@ -1157,8 +1179,7 @@ final class AssistantPanelController {
             let screen = panel.screen ?? NSScreen.main
             let visible = screen?.visibleFrame ?? .zero
             var origin = NSPoint(x: panel.frame.maxX - size.width, y: panel.frame.maxY - size.height)
-            origin.x = min(max(origin.x, visible.minX + 8), visible.maxX - size.width - 8)
-            origin.y = min(max(origin.y, visible.minY + 8), visible.maxY - size.height - 8)
+            origin = Self.origin(origin, of: size, keptWithin: visible)
             panel.setFrame(NSRect(origin: origin, size: size), display: true, animate: true)
         } else {
             savedFrame = panel.frame
@@ -1192,8 +1213,7 @@ final class AssistantPanelController {
             x: visible.maxX - size.width - 12,
             y: visible.minY + 12
         )
-        origin.x = min(max(origin.x, visible.minX + 8), visible.maxX - size.width - 8)
-        origin.y = min(max(origin.y, visible.minY + 8), visible.maxY - size.height - 8)
+        origin = Self.origin(origin, of: size, keptWithin: visible)
         panel.setFrame(NSRect(origin: origin, size: size), display: true, animate: true)
     }
 
@@ -1237,9 +1257,7 @@ final class AssistantPanelController {
         let width = (size == .half || wasHalf || size == .full || wasFull) ? target.width : panel.frame.width
         var origin = panel.frame.origin
         origin.x = panel.frame.maxX - width
-        origin.x = min(max(origin.x, visible.minX + 8), visible.maxX - width - 8)
-        origin.y = min(origin.y, visible.maxY - height - 8)
-        origin.y = max(origin.y, visible.minY + 8)
+        origin = Self.origin(origin, of: NSSize(width: width, height: height), keptWithin: visible)
         panel.setFrame(NSRect(x: origin.x, y: origin.y, width: width, height: height),
                         display: true, animate: true)
     }
@@ -1489,8 +1507,7 @@ final class AssistantPanelController {
         } else {
             origin = NSPoint(x: visible.midX - size.width / 2, y: visible.minY + 120)
         }
-        origin.x = min(max(origin.x, visible.minX + 8), visible.maxX - size.width - 8)
-        origin.y = min(max(origin.y, visible.minY + 8), visible.maxY - size.height - 8)
+        origin = Self.origin(origin, of: size, keptWithin: visible)
         panel.setFrame(NSRect(origin: origin, size: size), display: true, animate: panel.isVisible)
         panel.orderFrontRegardless()
         noteScreenChange()
@@ -1500,6 +1517,10 @@ final class AssistantPanelController {
 
 final class KeyablePanel: NSPanel {
     override var canBecomeKey: Bool { true }
+    /// AppKit would push a window that pokes past the screen edge back
+    /// inside. At Full only the transparent glow margin pokes out, and it
+    /// must stay there or the card creeps in from the edges.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
     private var mouseInteractionRegion: ((NSPoint, NSRect) -> Bool)?
     private var shouldLowerForBackgroundClick: (() -> Bool)?
     private var localMouseMonitor: Any?
