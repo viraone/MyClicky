@@ -8,12 +8,16 @@ struct CaptionCue: Codable, Equatable, Identifiable {
     var start: Double
     var end: Double
     var text: String
+    /// The same line in the project's translation language, when the user
+    /// turned "Add translation" on. Shown under the original.
+    var translation: String?
 
-    init(id: UUID = UUID(), start: Double, end: Double, text: String) {
+    init(id: UUID = UUID(), start: Double, end: Double, text: String, translation: String? = nil) {
         self.id = id
         self.start = start
         self.end = end
         self.text = text
+        self.translation = translation
     }
 
     var duration: Double { max(0, end - start) }
@@ -79,6 +83,14 @@ struct TimelineCue: Equatable, Identifiable {
     var start: Double
     var end: Double
     var text: String
+    var translation: String? = nil
+
+    /// What goes on screen: the line, with its translation beneath if
+    /// there is one.
+    var displayText: String {
+        guard let translation, !translation.trimmingCharacters(in: .whitespaces).isEmpty else { return text }
+        return text + "\n" + translation
+    }
 }
 
 /// Everything the editor needs to rebuild a video: an ordered list of clips
@@ -88,6 +100,7 @@ struct VideoProject: Codable, Equatable {
     /// The shortest clip the editor will make — a split or trim closer than
     /// this to an edge is refused rather than leaving a sliver.
     static let minimumClipDuration = 0.1
+    static let defaultSpokenLanguage = "en-US"
 
     var version = VideoProject.currentVersion
     var name: String
@@ -96,12 +109,33 @@ struct VideoProject: Codable, Equatable {
     /// Every word heard in each source file, by path, so re-captioning
     /// after a split or trim doesn't listen to the whole take again.
     var transcripts: [String: [SpokenWord]]
+    /// The locale the takes are spoken in — what the recogniser listens for.
+    var spokenLanguage: String
+    /// A language to add under every subtitle, or nil for none.
+    var translationLanguage: String?
 
-    init(name: String, clips: [EditClip] = [], created: Date = Date(), transcripts: [String: [SpokenWord]] = [:]) {
+    init(name: String, clips: [EditClip] = [], created: Date = Date(), transcripts: [String: [SpokenWord]] = [:],
+         spokenLanguage: String = VideoProject.defaultSpokenLanguage, translationLanguage: String? = nil) {
         self.name = name
         self.clips = clips
         self.created = created
         self.transcripts = transcripts
+        self.spokenLanguage = spokenLanguage
+        self.translationLanguage = translationLanguage
+    }
+
+    private enum CodingKeys: String, CodingKey { case version, name, clips, created, transcripts, spokenLanguage, translationLanguage }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = try c.decodeIfPresent(Int.self, forKey: .version) ?? Self.currentVersion
+        name = try c.decode(String.self, forKey: .name)
+        clips = try c.decode([EditClip].self, forKey: .clips)
+        created = try c.decode(Date.self, forKey: .created)
+        transcripts = try c.decodeIfPresent([String: [SpokenWord]].self, forKey: .transcripts) ?? [:]
+        // Projects saved before languages existed were all English.
+        spokenLanguage = try c.decodeIfPresent(String.self, forKey: .spokenLanguage) ?? Self.defaultSpokenLanguage
+        translationLanguage = try c.decodeIfPresent(String.self, forKey: .translationLanguage)
     }
 
     var duration: Double { clips.reduce(0) { $0 + $1.duration } }
@@ -145,7 +179,7 @@ struct VideoProject: Codable, Equatable {
                 let s = max(cue.start, clip.inPoint) - clip.inPoint + start
                 let e = min(cue.end, clip.outPoint) - clip.inPoint + start
                 if e - s > 0.01 {
-                    out.append(TimelineCue(id: cue.id, start: s, end: e, text: cue.text))
+                    out.append(TimelineCue(id: cue.id, start: s, end: e, text: cue.text, translation: cue.translation))
                 }
             }
         }
@@ -276,7 +310,20 @@ struct VideoProject: Codable, Equatable {
     mutating func setCueText(_ cueID: UUID, _ text: String) {
         for c in clips.indices {
             if let i = clips[c].cues.firstIndex(where: { $0.id == cueID }) {
-                clips[c].cues[i].text = text
+                if clips[c].cues[i].text != text {
+                    clips[c].cues[i].text = text
+                    // The old translation no longer matches what's said.
+                    clips[c].cues[i].translation = nil
+                }
+                return
+            }
+        }
+    }
+
+    mutating func setCueTranslation(_ cueID: UUID, _ text: String?) {
+        for c in clips.indices {
+            if let i = clips[c].cues.firstIndex(where: { $0.id == cueID }) {
+                clips[c].cues[i].translation = text
                 return
             }
         }
@@ -284,6 +331,28 @@ struct VideoProject: Codable, Equatable {
 
     mutating func removeCue(_ cueID: UUID) {
         for c in clips.indices { clips[c].cues.removeAll { $0.id == cueID } }
+    }
+
+    // MARK: Translation
+
+    /// Cues on the timeline that still need a translated line.
+    var untranslatedCues: [TimelineCue] {
+        timelineCues.filter { $0.translation == nil && !$0.text.trimmingCharacters(in: .whitespaces).isEmpty }
+    }
+
+    /// Store translated lines, keyed by cue id.
+    mutating func setTranslations(_ translations: [UUID: String]) {
+        for c in clips.indices {
+            for i in clips[c].cues.indices {
+                if let t = translations[clips[c].cues[i].id] { clips[c].cues[i].translation = t }
+            }
+        }
+    }
+
+    mutating func clearTranslations() {
+        for c in clips.indices {
+            for i in clips[c].cues.indices { clips[c].cues[i].translation = nil }
+        }
     }
 
     /// Replace a clip's captions with cues built from what was heard in its
@@ -301,14 +370,21 @@ struct VideoProject: Codable, Equatable {
         }
     }
 
-    /// Source files that still need listening to.
+    /// Source files that still need listening to. A transcript with no
+    /// actual words in it doesn't count as heard: a silent take is cheap to
+    /// listen to again, and it's what a stopped pass could leave behind.
     var untranscribedSources: [URL] {
         var seen = Set<String>()
         return clips.compactMap { clip in
-            guard transcripts[clip.source.path] == nil, !seen.contains(clip.source.path) else { return nil }
+            guard !isTranscribed(clip.source), !seen.contains(clip.source.path) else { return nil }
             seen.insert(clip.source.path)
             return clip.source
         }
+    }
+
+    func isTranscribed(_ source: URL) -> Bool {
+        guard let words = transcripts[source.path] else { return false }
+        return words.contains { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
 
     // MARK: Transcript
@@ -321,10 +397,11 @@ struct VideoProject: Codable, Equatable {
             .joined(separator: " ")
     }
 
-    /// SubRip subtitles, the format every editor and platform accepts.
+    /// SubRip subtitles, the format every editor and platform accepts. A
+    /// translated line, if any, sits under the original.
     var srt: String {
         timelineCues.enumerated().map { index, cue in
-            "\(index + 1)\n\(Self.srtTime(cue.start)) --> \(Self.srtTime(cue.end))\n\(cue.text)\n"
+            "\(index + 1)\n\(Self.srtTime(cue.start)) --> \(Self.srtTime(cue.end))\n\(cue.displayText)\n"
         }.joined(separator: "\n")
     }
 

@@ -73,12 +73,12 @@ final class ClickyClient: ObservableObject {
         var clipCount = 0
         var zoom = 1.0
         var hasCaptions = false
-        /// IDLE, IMPORTING, TRANSCRIBING, EXPORTING, EXPORTED or FAILED.
+        /// IDLE, IMPORTING, TRANSCRIBING, TRANSLATING, SUBTITLED, EXPORTING, EXPORTED or FAILED.
         var phase = "IDLE"
 
         var open: Bool { state != "NONE" }
         var playing: Bool { state == "PLAYING" }
-        var busy: Bool { phase == "IMPORTING" || phase == "TRANSCRIBING" || phase == "EXPORTING" }
+        var busy: Bool { phase == "IMPORTING" || phase == "TRANSCRIBING" || phase == "TRANSLATING" || phase == "EXPORTING" }
         /// m:ss.ff — frames matter when you're nudging a cut.
         var timecode: String { Self.code(position) }
         var durationCode: String { Self.code(duration) }

@@ -32,7 +32,7 @@ struct VideoEditorView: View {
                     Text("Peeky Video")
                         .font(.system(size: 20, weight: .bold, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.95))
-                    Text("Turn your takes into a captioned 9:16 video for Reels, TikTok and your portfolio.")
+                    Text("Turn your takes into a subtitled 9:16 video for Reels, TikTok and your portfolio.")
                         .foregroundStyle(.white.opacity(0.6))
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: 420)
@@ -129,22 +129,26 @@ struct VideoEditorView: View {
 
     private var editor: some View {
         GeometryReader { geo in
-            // Scrolls when the panel is shorter than the editor; at full
-            // height it's a no-op and everything is where it always was.
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 10) {
-                    header
-                    coachLine
-                    // The video sits on top, centred, like a phone held up,
-                    // and takes the lion's share of the height the way an
-                    // editor's canvas does; everything else is underneath.
-                    preview(height: max(220, min(geo.size.height * 0.56, 820)))
-                        .frame(maxWidth: .infinity)
-                    timelineCard
-                    controlsCard
-                    captionsCard
+            VStack(alignment: .leading, spacing: 10) {
+                // The header and the "what to do next" line stay put, so
+                // the guidance is always in view however far you scroll.
+                header
+                coachLine
+                // Scrolls when the panel is shorter than the editor; at full
+                // height it's a no-op and everything is where it always was.
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        // The video sits on top, centred, like a phone held up,
+                        // and takes the lion's share of the height the way an
+                        // editor's canvas does; everything else is underneath.
+                        preview(height: max(220, min(geo.size.height * 0.56, 820)))
+                            .frame(maxWidth: .infinity)
+                        timelineCard
+                        controlsCard
+                        captionsCard
+                    }
+                    .frame(width: geo.size.width, alignment: .top)
                 }
-                .frame(width: geo.size.width, alignment: .top)
             }
             .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
         }
@@ -180,7 +184,7 @@ struct VideoEditorView: View {
             pillButton("Export video", icon: "square.and.arrow.up", prominent: true) { model.export() }
                 .disabled(!hasClips)
                 .opacity(hasClips ? 1 : 0.45)
-                .help("Save the finished MP4 at 1080 × 1920 with captions burned in")
+                .help("Save the finished MP4 at 1080 × 1920 with subtitles burned in")
         }
         .disabled(model.phase.isBusy)
     }
@@ -194,7 +198,7 @@ struct VideoEditorView: View {
             switch self {
             case .importClips: "Import"
             case .trim: "Trim"
-            case .captions: "Captions"
+            case .captions: "Subtitles"
             case .export: "Export"
             }
         }
@@ -293,7 +297,7 @@ struct VideoEditorView: View {
         switch step {
         case .importClips: "Choose the takes and screen recordings for this video"
         case .trim: "Watch it back and cut out the bits you don't want"
-        case .captions: "Listen to every take and lay word-timed captions on the video"
+        case .captions: "Listen to every take and lay word-timed subtitles on the video"
         case .export: "Save the finished MP4 (1080 × 1920) with its .srt and transcript"
         }
     }
@@ -307,15 +311,25 @@ struct VideoEditorView: View {
             case .importing(let i, let n):
                 ProgressView().controlSize(.small).tint(accent)
                 coachText("Reading clip \(i) of \(n)…")
-            case .transcribing(let name, let i, let n):
+            case .transcribing(let l):
+                ProgressView(value: l.fraction).frame(width: 160).tint(accent)
+                coachText(l.count > 1
+                          ? "Listening to take \(l.index) of \(l.count) — \(VideoEditorModel.clock(l.secondsHeard)) of \(VideoEditorModel.clock(l.duration)) heard. Words appear below as it goes."
+                          : "Listening — \(VideoEditorModel.clock(l.secondsHeard)) of \(VideoEditorModel.clock(l.duration)) heard. Words appear below as it goes.")
+            case .translating(let n):
                 ProgressView().controlSize(.small).tint(accent)
-                coachText("Listening to \(name) — take \(i) of \(n). This takes about as long as the clip.")
+                coachText("Translating \(n) subtitle\(n == 1 ? "" : "s") into \(SubtitleLanguages.name(ofLanguage: model.translationLanguage ?? ""))…")
             case .exporting(let p):
                 ProgressView(value: p).frame(width: 160).tint(accent)
                 coachText("Exporting your video… \(Int(p * 100))%")
+            case .subtitled(let n):
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                coachText("Done! \(n) subtitle\(n == 1 ? "" : "s") ready — they're on the video and listed below. Click a word to fix it, then press Export video.")
+                Spacer()
+                dismissButton
             case .exported(let url):
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                coachText("Done! Saved \(url.lastPathComponent) with its captions (.srt) and transcript (.txt).")
+                coachText("Done! Saved \(url.lastPathComponent) with its subtitles (.srt) and transcript (.txt).")
                 Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
                     .buttonStyle(.plain).foregroundStyle(accent).fontWeight(.semibold)
                 Spacer()
@@ -343,7 +357,7 @@ struct VideoEditorView: View {
 
     private func isTerminal(_ phase: VideoEditorModel.Phase) -> Bool {
         switch phase {
-        case .exported, .failed: true
+        case .subtitled, .exported, .failed: true
         default: false
         }
     }
@@ -367,13 +381,13 @@ struct VideoEditorView: View {
         case .importClips:
             "Step 1 — Press Import clips (top right) or drop your video files here."
         case .trim:
-            "Step 2 — Press Play to watch. Stop where you want to cut, then use Split, Cut before or Cut after. When it looks right, press Captions."
+            "Step 2 — Press Play to watch. Stop where you want to cut, then use Split, Cut before or Cut after. When it looks right, press Auto-subtitle."
         case .captions:
-            "Step 3 — Press Captions to transcribe your takes."
+            "Step 3 — Press Auto-subtitle to transcribe your takes."
         case .export:
             hasExport
                 ? "All done. Import more clips or re-export any time."
-                : "Step 4 — Read the captions below and fix any words. Then press Export video."
+                : "Step 4 — Read the subtitles below and fix any words. Then press Export video."
         }
     }
 
@@ -404,7 +418,7 @@ struct VideoEditorView: View {
             if let cue = model.currentCue {
                 VStack {
                     Spacer()
-                    Text(cue.text)
+                    Text(cue.displayText)
                         .font(.system(size: max(11, height * 0.028), weight: .heavy, design: .rounded))
                         .foregroundStyle(.white)
                         .multilineTextAlignment(.center)
@@ -821,31 +835,234 @@ struct VideoEditorView: View {
         .help(help)
     }
 
-    // MARK: Captions
+    // MARK: Subtitles
 
+    /// VEED's Subtitles panel, at home in Peeky: pick the spoken language,
+    /// optionally a translation, press the big green button, then fix any
+    /// words in the list below.
     private var captionsCard: some View {
-        card(title: nil, trailing: nil) {
-            if let cues = model.project?.timelineCues, !cues.isEmpty {
-                ScrollView {
-                    VStack(spacing: 4) {
-                        ForEach(cues) { cue in cueRow(cue) }
-                    }
+        let count = model.project?.timelineCues.count ?? 0
+        return card(title: "SUBTITLES", trailing: hasCaptions ? "\(count) line\(count == 1 ? "" : "s") · click a time to jump, click words to edit" : nil) {
+            VStack(alignment: .leading, spacing: 12) {
+                if hasClips {
+                    subtitleSettings
+                } else {
+                    emptyRow(icon: "captions.bubble",
+                             text: "Import clips first — then Peeky can transcribe them into subtitles.")
                 }
-                .frame(maxHeight: .infinity)
-            } else {
-                VStack(alignment: .leading, spacing: 12) {
-                    if !hasClips {
-                        emptyRow(icon: "captions.bubble",
-                                 text: "Import clips first — then Peeky can transcribe them into captions.")
+                if let cues = model.project?.timelineCues, !cues.isEmpty {
+                    Divider().overlay(Color.white.opacity(0.08))
+                    ScrollView {
+                        VStack(spacing: 4) {
+                            ForEach(cues) { cue in cueRow(cue) }
+                        }
                     }
-                    if hasClips {
-                        pillButton("Generate captions", icon: "waveform", prominent: true) { model.generateCaptions() }
-                            .disabled(model.phase.isBusy)
-                    }
+                    .frame(maxHeight: .infinity)
                 }
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
+        .background(translationRunner)
+    }
+
+    private var subtitleSettings: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("What language is being spoken?")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.9))
+            spokenLanguagePicker
+
+            HStack(spacing: 10) {
+                Text("Add translation")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+                if model.translationEnabled {
+                    translationLanguagePicker
+                }
+                Spacer()
+                Toggle("", isOn: Binding(
+                    get: { model.translationEnabled },
+                    set: { model.setTranslationEnabled($0) }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .tint(accent)
+                .help("Put a second, translated line under every subtitle")
+            }
+            .frame(minHeight: 28)
+
+            if case .transcribing(let listening) = model.phase {
+                listeningPanel(listening)
+            } else {
+                autoSubtitleButton
+            }
+        }
+    }
+
+    /// What replaces the green button while Peeky listens: how far it is,
+    /// the words as they arrive, and a way to stop.
+    private func listeningPanel(_ l: VideoEditorModel.Listening) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                ProgressView().controlSize(.small).tint(accent)
+                Text(l.count > 1 ? "Listening to \(l.clipName) — take \(l.index) of \(l.count)" : "Listening to \(l.clipName)")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .lineLimit(1)
+                Spacer()
+                Text("\(VideoEditorModel.clock(l.secondsHeard)) / \(VideoEditorModel.clock(l.duration))")
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(accent)
+                Text("\(Int(l.fraction * 100))%")
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.7))
+                    .frame(width: 40, alignment: .trailing)
+            }
+            ProgressView(value: l.fraction)
+                .tint(accent)
+                .frame(maxWidth: .infinity)
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "quote.opening")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.white.opacity(0.35))
+                    .padding(.top, 2)
+                Text(l.latestText.isEmpty ? "Warming up — the first words take a few seconds…" : "…\(l.latestText)")
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(l.latestText.isEmpty ? .white.opacity(0.45) : .white.opacity(0.85))
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .animation(.easeOut(duration: 0.15), value: l.latestText)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(0.05)))
+            HStack(spacing: 10) {
+                Text("Peeky is turning the speech into text on this Mac — nothing is uploaded. It runs about as fast as the clip plays; you can keep trimming meanwhile.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                pillButton("Stop", icon: "stop.fill") { model.stopSubtitling() }
+                    .help("Stop listening. What's been heard so far is kept, so you can carry on later.")
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(accent.opacity(0.08)))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(accent.opacity(0.35), lineWidth: 1))
+    }
+
+    private var spokenLanguagePicker: some View {
+        let locale = model.spokenLocale
+        return HStack(spacing: 10) {
+            Text(SubtitleLanguages.regionChip(of: locale))
+                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.85))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.white.opacity(0.12)))
+            Text(SubtitleLanguages.name(of: locale))
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.95))
+            Text(SubtitleLanguages.fullName(of: locale))
+                .font(.system(size: 13))
+                .foregroundStyle(.white.opacity(0.45))
+                .lineLimit(1)
+            Spacer()
+            Text("Change")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(accent)
+            Image(systemName: "chevron.down")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.6))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.07)))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+        .overlay(invisibleMenu {
+            ForEach(VideoTranscriber.supportedLocales, id: \.identifier) { option in
+                Button {
+                    model.setSpokenLanguage(option.identifier)
+                } label: {
+                    HStack {
+                        Text("\(SubtitleLanguages.name(of: option)) — \(SubtitleLanguages.fullName(of: option))")
+                        if option.identifier == locale.identifier { Image(systemName: "checkmark") }
+                    }
+                }
+            }
+        })
+        .help("The language Peeky listens for when it transcribes — click to change")
+    }
+
+    private var translationLanguagePicker: some View {
+        let current = model.translationLanguage ?? ""
+        return HStack(spacing: 5) {
+            Image(systemName: "arrow.right").font(.system(size: 9, weight: .bold))
+            Text(SubtitleLanguages.name(ofLanguage: current))
+                .font(.system(size: 12, weight: .semibold))
+            Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
+        }
+        .foregroundStyle(accent)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 4)
+        .background(Capsule().fill(accent.opacity(0.14)))
+        .overlay(invisibleMenu {
+            ForEach(SubtitleLanguages.translationTargets, id: \.self) { code in
+                Button {
+                    model.setTranslationLanguage(code)
+                } label: {
+                    HStack {
+                        Text(SubtitleLanguages.name(ofLanguage: code))
+                        if code == current { Image(systemName: "checkmark") }
+                    }
+                }
+            }
+        })
+        .help("The language to translate every subtitle into — click to change")
+    }
+
+    /// A menu that fills whatever it's laid over and draws nothing itself.
+    /// macOS collapses a `Menu`'s custom label to its first piece of text,
+    /// so the visible row is drawn separately and this catches the click.
+    private func invisibleMenu<Items: View>(@ViewBuilder items: () -> Items) -> some View {
+        Menu(content: items) { Color.clear.contentShape(Rectangle()) }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .disabled(model.phase.isBusy)
+    }
+
+    /// The one big button, VEED-green: "Auto-subtitle in English".
+    private var autoSubtitleButton: some View {
+        let lime = Color(red: 0.78, green: 0.95, blue: 0.40)
+        let language = SubtitleLanguages.name(of: model.spokenLocale)
+        let title = hasCaptions ? "Re-subtitle in \(language)" : "Auto-subtitle in \(language)"
+        return Button { model.generateCaptions() } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "captions.bubble")
+                    .font(.system(size: 13, weight: .semibold))
+                Text(title)
+                    .font(.system(size: 14, weight: .semibold))
+            }
+            .foregroundStyle(Color.black.opacity(0.85))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 11)
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(lime))
+        }
+        .buttonStyle(.plain)
+        .disabled(model.phase.isBusy)
+        .opacity(model.phase.isBusy ? 0.5 : 1)
+        .help(hasCaptions
+              ? "Listen again to any take that hasn't been heard in \(language) and rewrite the subtitles"
+              : "Listen to every take and write word-timed subtitles in \(language)")
+    }
+
+    /// Hosts Apple's on-device translator. It has to live in a view, so the
+    /// model asks for a pass by bumping `translationJob` and this runs it.
+    @ViewBuilder private var translationRunner: some View {
+        if #available(macOS 15, *) {
+            SubtitleTranslationRunner(model: model)
+        }
     }
 
     private func cueRow(_ cue: TimelineCue) -> some View {
@@ -859,19 +1076,31 @@ struct VideoEditorView: View {
             }
             .buttonStyle(.plain)
             .help("Jump to this moment")
-            TextField("", text: Binding(
-                get: { cue.text },
-                set: { model.setCueText(cue.id, $0) }
-            ))
-            .textFieldStyle(.plain)
-            .font(.system(size: 13, weight: live ? .semibold : .regular, design: .monospaced))
-            .foregroundStyle(.white.opacity(0.92))
+            VStack(alignment: .leading, spacing: 2) {
+                TextField("", text: Binding(
+                    get: { cue.text },
+                    set: { model.setCueText(cue.id, $0) }
+                ))
+                .textFieldStyle(.plain)
+                .font(.system(size: 13, weight: live ? .semibold : .regular, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.92))
+                if model.translationEnabled {
+                    TextField(cue.translation == nil ? "translating…" : "", text: Binding(
+                        get: { cue.translation ?? "" },
+                        set: { model.setCueTranslation(cue.id, $0) }
+                    ))
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(accent.opacity(0.85))
+                    .disabled(cue.translation == nil)
+                }
+            }
             Button { model.removeCue(cue.id) } label: {
                 Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
             }
             .buttonStyle(.plain)
             .foregroundStyle(.white.opacity(0.35))
-            .help("Remove this caption")
+            .help("Remove this subtitle")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
