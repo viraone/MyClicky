@@ -824,7 +824,7 @@ struct VideoEditorView: View {
     // MARK: Captions
 
     private var captionsCard: some View {
-        card(title: "CAPTIONS", trailing: hasCaptions ? "\(model.project?.timelineCues.count ?? 0) lines · click a time to jump, click words to edit" : nil) {
+        card(title: nil, trailing: nil) {
             if let cues = model.project?.timelineCues, !cues.isEmpty {
                 ScrollView {
                     VStack(spacing: 4) {
@@ -834,10 +834,10 @@ struct VideoEditorView: View {
                 .frame(maxHeight: .infinity)
             } else {
                 VStack(alignment: .leading, spacing: 12) {
-                    emptyRow(icon: "captions.bubble",
-                             text: hasClips
-                             ? "Peeky listens to your takes and writes word-timed captions. You then fix any words it misheard."
-                             : "Import clips first — then Peeky can transcribe them into captions.")
+                    if !hasClips {
+                        emptyRow(icon: "captions.bubble",
+                                 text: "Import clips first — then Peeky can transcribe them into captions.")
+                    }
                     if hasClips {
                         pillButton("Generate captions", icon: "waveform", prominent: true) { model.generateCaptions() }
                             .disabled(model.phase.isBusy)
