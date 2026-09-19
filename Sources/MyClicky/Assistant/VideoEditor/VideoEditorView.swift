@@ -129,22 +129,26 @@ struct VideoEditorView: View {
 
     private var editor: some View {
         GeometryReader { geo in
-            // Scrolls when the panel is shorter than the editor; at full
-            // height it's a no-op and everything is where it always was.
-            ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 10) {
-                    header
-                    coachLine
-                    // The video sits on top, centred, like a phone held up,
-                    // and takes the lion's share of the height the way an
-                    // editor's canvas does; everything else is underneath.
-                    preview(height: max(220, min(geo.size.height * 0.56, 820)))
-                        .frame(maxWidth: .infinity)
-                    timelineCard
-                    controlsCard
-                    captionsCard
+            VStack(alignment: .leading, spacing: 10) {
+                // The header and the "what to do next" line stay put, so
+                // the guidance is always in view however far you scroll.
+                header
+                coachLine
+                // Scrolls when the panel is shorter than the editor; at full
+                // height it's a no-op and everything is where it always was.
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        // The video sits on top, centred, like a phone held up,
+                        // and takes the lion's share of the height the way an
+                        // editor's canvas does; everything else is underneath.
+                        preview(height: max(220, min(geo.size.height * 0.56, 820)))
+                            .frame(maxWidth: .infinity)
+                        timelineCard
+                        controlsCard
+                        captionsCard
+                    }
+                    .frame(width: geo.size.width, alignment: .top)
                 }
-                .frame(width: geo.size.width, alignment: .top)
             }
             .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
         }
@@ -886,7 +890,34 @@ struct VideoEditorView: View {
 
     private var spokenLanguagePicker: some View {
         let locale = model.spokenLocale
-        return Menu {
+        return HStack(spacing: 10) {
+            Text(SubtitleLanguages.regionChip(of: locale))
+                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.85))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.white.opacity(0.12)))
+            Text(SubtitleLanguages.name(of: locale))
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.95))
+            Text(SubtitleLanguages.fullName(of: locale))
+                .font(.system(size: 13))
+                .foregroundStyle(.white.opacity(0.45))
+                .lineLimit(1)
+            Spacer()
+            Text("Change")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(accent)
+            Image(systemName: "chevron.down")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.6))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.07)))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
+        .overlay(invisibleMenu {
             ForEach(VideoTranscriber.supportedLocales, id: \.identifier) { option in
                 Button {
                     model.setSpokenLanguage(option.identifier)
@@ -897,42 +928,23 @@ struct VideoEditorView: View {
                     }
                 }
             }
-        } label: {
-            HStack(spacing: 10) {
-                Text(SubtitleLanguages.regionChip(of: locale))
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.85))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.white.opacity(0.12)))
-                Text(SubtitleLanguages.name(of: locale))
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.95))
-                Text(SubtitleLanguages.fullName(of: locale))
-                    .font(.system(size: 13))
-                    .foregroundStyle(.white.opacity(0.45))
-                    .lineLimit(1)
-                Spacer()
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.6))
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 9)
-            .frame(maxWidth: .infinity)
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.white.opacity(0.07)))
-            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
-            .contentShape(Rectangle())
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .disabled(model.phase.isBusy)
-        .help("The language Peeky listens for when it transcribes")
+        })
+        .help("The language Peeky listens for when it transcribes — click to change")
     }
 
     private var translationLanguagePicker: some View {
         let current = model.translationLanguage ?? ""
-        return Menu {
+        return HStack(spacing: 5) {
+            Image(systemName: "arrow.right").font(.system(size: 9, weight: .bold))
+            Text(SubtitleLanguages.name(ofLanguage: current))
+                .font(.system(size: 12, weight: .semibold))
+            Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
+        }
+        .foregroundStyle(accent)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 4)
+        .background(Capsule().fill(accent.opacity(0.14)))
+        .overlay(invisibleMenu {
             ForEach(SubtitleLanguages.translationTargets, id: \.self) { code in
                 Button {
                     model.setTranslationLanguage(code)
@@ -943,23 +955,18 @@ struct VideoEditorView: View {
                     }
                 }
             }
-        } label: {
-            HStack(spacing: 5) {
-                Image(systemName: "arrow.right").font(.system(size: 9, weight: .bold))
-                Text(SubtitleLanguages.name(ofLanguage: current))
-                    .font(.system(size: 12, weight: .semibold))
-                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
-            }
-            .foregroundStyle(accent)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 4)
-            .background(Capsule().fill(accent.opacity(0.14)))
-            .contentShape(Capsule())
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .disabled(model.phase.isBusy)
-        .help("The language to translate every subtitle into")
+        })
+        .help("The language to translate every subtitle into — click to change")
+    }
+
+    /// A menu that fills whatever it's laid over and draws nothing itself.
+    /// macOS collapses a `Menu`'s custom label to its first piece of text,
+    /// so the visible row is drawn separately and this catches the click.
+    private func invisibleMenu<Items: View>(@ViewBuilder items: () -> Items) -> some View {
+        Menu(content: items) { Color.clear.contentShape(Rectangle()) }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .disabled(model.phase.isBusy)
     }
 
     /// The one big button, VEED-green: "Auto-subtitle in English".
