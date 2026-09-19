@@ -125,20 +125,22 @@ struct VideoEditorView: View {
     // MARK: - Editor
 
     private var editor: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            header
-            stepTracker
-            coachLine
-            HStack(alignment: .top, spacing: 16) {
-                preview
-                VStack(alignment: .leading, spacing: 14) {
-                    timelineCard
-                    controlsCard
+        GeometryReader { geo in
+            VStack(alignment: .leading, spacing: 12) {
+                header
+                stepTracker
+                coachLine
+                // The video sits on top, centred, like a phone held up;
+                // everything you do to it is laid out underneath.
+                preview(height: max(220, min(geo.size.height * 0.42, 520)))
+                    .frame(maxWidth: .infinity)
+                timelineCard
+                HStack(alignment: .top, spacing: 14) {
+                    controlsCard.fixedSize(horizontal: true, vertical: false)
                     captionsCard
                 }
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -368,74 +370,64 @@ struct VideoEditorView: View {
 
     // MARK: Preview
 
-    private var preview: some View {
-        GeometryReader { geo in
-            let height = min(max(geo.size.height, 200), previewWidth * 16 / 9)
-            let width = height * 9 / 16
-            ZStack {
-                VideoEditorSurface(player: model.player)
-                if !hasClips {
-                    VStack(spacing: 10) {
-                        Image(systemName: "iphone").font(.system(size: 36, weight: .thin))
-                        Text("Your video shows here").font(.system(size: 12, design: .monospaced))
-                    }
-                    .foregroundStyle(.white.opacity(0.35))
-                } else if !model.isPlaying {
-                    // A big, obvious play button while paused.
-                    Button { model.togglePlay() } label: {
-                        Image(systemName: "play.fill")
-                            .font(.system(size: 26, weight: .bold))
-                            .foregroundStyle(.white)
-                            .frame(width: 64, height: 64)
-                            .background(Circle().fill(Color.black.opacity(0.55)))
-                            .overlay(Circle().strokeBorder(Color.white.opacity(0.35), lineWidth: 1))
-                    }
-                    .buttonStyle(.plain)
+    private func preview(height: CGFloat) -> some View {
+        let width = height * 9 / 16
+        return ZStack {
+            VideoEditorSurface(player: model.player)
+            if !hasClips {
+                VStack(spacing: 10) {
+                    Image(systemName: "iphone").font(.system(size: 36, weight: .thin))
+                    Text("Your video shows here").font(.system(size: 12, design: .monospaced))
                 }
-                if let cue = model.currentCue {
-                    VStack {
-                        Spacer()
-                        Text(cue.text)
-                            .font(.system(size: max(11, height * 0.028), weight: .heavy, design: .rounded))
-                            .foregroundStyle(.white)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 5)
-                            .background(RoundedRectangle(cornerRadius: 7).fill(Color.black.opacity(0.65)))
-                            .padding(.horizontal, width * 0.08)
-                        // Same spot as the burned-in caption: its centre 30% up.
-                        Spacer().frame(height: height * model.style.centreFromBottom - 14)
-                    }
+                .foregroundStyle(.white.opacity(0.35))
+            } else if !model.isPlaying {
+                // A big, obvious play button while paused.
+                Button { model.togglePlay() } label: {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 26, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 64, height: 64)
+                        .background(Circle().fill(Color.black.opacity(0.55)))
+                        .overlay(Circle().strokeBorder(Color.white.opacity(0.35), lineWidth: 1))
                 }
-                if hasClips {
-                    VStack {
+                .buttonStyle(.plain)
+            }
+            if let cue = model.currentCue {
+                VStack {
+                    Spacer()
+                    Text(cue.text)
+                        .font(.system(size: max(11, height * 0.028), weight: .heavy, design: .rounded))
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(RoundedRectangle(cornerRadius: 7).fill(Color.black.opacity(0.65)))
+                        .padding(.horizontal, width * 0.08)
+                    // Same spot as the burned-in caption: its centre 30% up.
+                    Spacer().frame(height: height * model.style.centreFromBottom - 14)
+                }
+            }
+            if hasClips {
+                VStack {
+                    Spacer()
+                    HStack {
                         Spacer()
-                        HStack {
-                            Spacer()
-                            Text("9:16")
-                                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                .foregroundStyle(.white.opacity(0.5))
-                                .padding(.horizontal, 6).padding(.vertical, 3)
-                                .background(Capsule().fill(Color.black.opacity(0.5)))
-                                .padding(8)
-                        }
+                        Text("9:16")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.5))
+                            .padding(.horizontal, 6).padding(.vertical, 3)
+                            .background(Capsule().fill(Color.black.opacity(0.5)))
+                            .padding(8)
                     }
                 }
             }
-            .frame(width: width, height: height)
-            .background(Color.black)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
-            .onTapGesture { if hasClips { model.togglePlay() } }
-            .frame(width: width)
         }
-        .frame(width: previewWidth)
-        .frame(minHeight: 320, maxHeight: .infinity)
+        .frame(width: width, height: height)
+        .background(Color.black)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
+        .onTapGesture { if hasClips { model.togglePlay() } }
     }
-
-    // The preview's height comes from the column beside it (capped at 9:16
-    // of this width) so the layout doesn't jump as cards grow.
-    private var previewWidth: CGFloat { 300 }
 
     // MARK: Timeline
 
