@@ -280,6 +280,20 @@ final class VideoProjectTests: XCTestCase {
         XCTAssertEqual(project.transcript, "Hi there", "the transcript stays in the spoken language")
     }
 
+    func testLongTakesAreHeardAMinuteAtATime() {
+        XCTAssertEqual(VideoTranscriber.chunkRanges(duration: 0), [])
+        XCTAssertEqual(VideoTranscriber.chunkRanges(duration: .nan), [])
+        XCTAssertEqual(VideoTranscriber.chunkRanges(duration: 45), [0...45])
+        XCTAssertEqual(VideoTranscriber.chunkRanges(duration: 60), [0...60], "no sliver after an exact minute")
+        XCTAssertEqual(VideoTranscriber.chunkRanges(duration: 60.02), [0...60], "nor after a hair over")
+        let ten = VideoTranscriber.chunkRanges(duration: 611.13)
+        XCTAssertEqual(ten.count, 11)
+        XCTAssertEqual(ten.first, 0...60)
+        XCTAssertEqual(ten.last?.lowerBound, 600)
+        XCTAssertEqual(ten.last?.upperBound ?? 0, 611.13, accuracy: 1e-9)
+        for (a, b) in zip(ten, ten.dropFirst()) { XCTAssertEqual(a.upperBound, b.lowerBound, "no gaps, no overlaps") }
+    }
+
     func testSubtitleLanguageNamesAndDefaults() {
         XCTAssertEqual(SubtitleLanguages.regionChip(of: Locale(identifier: "en-US")), "US")
         XCTAssertEqual(SubtitleLanguages.regionChip(of: Locale(identifier: "zh-Hans")), "HA")

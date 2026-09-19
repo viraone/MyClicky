@@ -73,7 +73,7 @@ final class ClickyClient: ObservableObject {
         var clipCount = 0
         var zoom = 1.0
         var hasCaptions = false
-        /// IDLE, IMPORTING, TRANSCRIBING, TRANSLATING, EXPORTING, EXPORTED or FAILED.
+        /// IDLE, IMPORTING, TRANSCRIBING, TRANSLATING, SUBTITLED, EXPORTING, EXPORTED or FAILED.
         var phase = "IDLE"
 
         var open: Bool { state != "NONE" }

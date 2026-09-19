@@ -322,6 +322,11 @@ struct VideoEditorView: View {
             case .exporting(let p):
                 ProgressView(value: p).frame(width: 160).tint(accent)
                 coachText("Exporting your video… \(Int(p * 100))%")
+            case .subtitled(let n):
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                coachText("Done! \(n) subtitle\(n == 1 ? "" : "s") ready — they're on the video and listed below. Click a word to fix it, then press Export video.")
+                Spacer()
+                dismissButton
             case .exported(let url):
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
                 coachText("Done! Saved \(url.lastPathComponent) with its subtitles (.srt) and transcript (.txt).")
@@ -352,7 +357,7 @@ struct VideoEditorView: View {
 
     private func isTerminal(_ phase: VideoEditorModel.Phase) -> Bool {
         switch phase {
-        case .exported, .failed: true
+        case .subtitled, .exported, .failed: true
         default: false
         }
     }

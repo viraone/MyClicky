@@ -26,6 +26,8 @@ final class VideoEditorModel: ObservableObject {
         case importing(Int, Int)
         case transcribing(Listening)
         case translating(Int)
+        /// Auto-subtitle finished: this many lines are ready.
+        case subtitled(Int)
         case exporting(Double)
         case exported(URL)
         case failed(String)
@@ -549,10 +551,16 @@ final class VideoEditorModel: ObservableObject {
         p.recaptionAll()
         project = p
         save()
-        phase = .idle
-        let count = p.timelineCues.count
-        note = count == 0 ? "Didn't hear any words in these clips." : "\(count) subtitle\(count == 1 ? "" : "s") ready — fix any wording below."
-        if count > 0 { requestTranslation() }
+        let cues = p.timelineCues
+        if cues.isEmpty {
+            phase = .idle
+            note = "Didn't hear any words in these clips."
+            return
+        }
+        // Land on the first line so a subtitle is on the video right away.
+        if let first = cues.first, project?.cue(at: currentTime) == nil { seek(to: first.start + 0.05) }
+        phase = .subtitled(cues.count)
+        if translationEnabled { requestTranslation() }
     }
 
     // MARK: Preview
@@ -659,6 +667,7 @@ final class VideoEditorModel: ObservableObject {
         case .transcribing: phaseName = "TRANSCRIBING"
         case .translating: phaseName = "TRANSLATING"
         case .exporting: phaseName = "EXPORTING"
+        case .subtitled: phaseName = "SUBTITLED"
         case .exported: phaseName = "EXPORTED"
         case .failed: phaseName = "FAILED"
         }
