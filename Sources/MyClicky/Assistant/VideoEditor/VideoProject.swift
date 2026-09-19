@@ -199,6 +199,29 @@ struct VideoProject: Codable, Equatable {
         return true
     }
 
+    /// True when the clip at `index` and the one after it are two halves of
+    /// the same footage lying back to back — a split, or a trim that met its
+    /// neighbour — so joining them loses nothing.
+    func canRejoin(after index: Int) -> Bool {
+        guard clips.indices.contains(index), clips.indices.contains(index + 1) else { return false }
+        let a = clips[index], b = clips[index + 1]
+        return a.source == b.source && abs(a.outPoint - b.inPoint) < 0.001
+    }
+
+    /// Merge the clip at `index` with the one after it back into one clip.
+    /// The first clip keeps its identity; captions from both come along.
+    /// The second's zoom is dropped in favour of the first's.
+    @discardableResult
+    mutating func rejoin(after index: Int) -> Bool {
+        guard canRejoin(after: index) else { return false }
+        var joined = clips[index]
+        let tail = clips[index + 1]
+        joined.outPoint = tail.outPoint
+        joined.cues = (joined.cues + tail.cues).sorted { $0.start < $1.start }
+        clips.replaceSubrange(index...(index + 1), with: [joined])
+        return true
+    }
+
     /// Drop everything in the clip under `time` before that instant.
     @discardableResult
     mutating func trimStart(at time: Double) -> Bool {

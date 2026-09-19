@@ -23,7 +23,8 @@ import Network
 ///                    SKIP <±seconds>, SEEK <seconds>, JOG <±frames> (the
 ///                    phone's dial: one frame per detent), TRIM_START <±frames>
 ///                    / TRIM_END <±frames> (nudge the selected clip's cut),
-///                    SPLIT, CUT_BEFORE, CUT_AFTER, ZOOM_IN, ZOOM_OUT, FILL,
+///                    SPLIT, CUT_BEFORE, CUT_AFTER, REJOIN (undo the split
+///                    nearest the playhead), ZOOM_IN, ZOOM_OUT, FILL,
 ///                    FIT, EARLIER, LATER, REMOVE, CAPTIONS, EXPORT. The Mac
 ///                    answers with VIDEO_STATE (see VideoEditorModel).
 ///   DOC <action>   – Peeky Code Doc, the film playing in the tab: ASK (pause

@@ -311,6 +311,16 @@ final class VideoEditorModel: ObservableObject {
         if let (index, _) = project?.locate(t) { selectedClipID = project?.clips[index].id }
     }
 
+    /// Glue the clip at `index` back onto the one after it — the spatial
+    /// undo for a split. The playhead lands on the healed seam.
+    func rejoin(after index: Int) {
+        guard let p = project, p.canRejoin(after: index) else { return }
+        let seam = p.clipStarts[index] + p.clips[index].duration
+        edit(seekTo: seam) { $0.rejoin(after: index) }
+        selectedClipID = project?.clips[safe: index]?.id
+        note = "Rejoined into one clip."
+    }
+
     func trimStartToPlayhead() {
         let t = currentTime
         guard let (index, _) = project?.locate(t), let start = project?.clipStarts[index] else { return }
@@ -544,6 +554,18 @@ final class VideoEditorModel: ObservableObject {
         case "EARLIER": moveSelectedClip(by: -1)
         case "LATER": moveSelectedClip(by: 1)
         case "REMOVE": removeSelectedClip()
+        case "REJOIN":
+            // Heal the seam nearest the playhead, if it's a healable one.
+            if let p = project, let (index, _) = p.locate(currentTime) {
+                let before = index - 1, after = index
+                if p.canRejoin(after: after), !p.canRejoin(after: before) { rejoin(after: after) }
+                else if p.canRejoin(after: before), !p.canRejoin(after: after) { rejoin(after: before) }
+                else if p.canRejoin(after: before) {
+                    let toStart = currentTime - p.clipStarts[index]
+                    let toEnd = p.clipStarts[index] + p.clips[index].duration - currentTime
+                    rejoin(after: toStart <= toEnd ? before : after)
+                }
+            }
         case "CAPTIONS": if !phase.isBusy { generateCaptions() }
         case "EXPORT": if !phase.isBusy { export() }
         default: break

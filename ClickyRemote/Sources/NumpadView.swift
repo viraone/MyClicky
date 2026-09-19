@@ -1378,6 +1378,7 @@ struct NumpadView: View {
                     spotifyTile("scissors", "Split", accent: Snes.video.lighter(0.3)) { videoTapped("SPLIT") }
                     spotifyTile("arrow.right.to.line", "Cut before") { videoTapped("CUT_BEFORE") }
                     spotifyTile("arrow.left.to.line", "Cut after") { videoTapped("CUT_AFTER") }
+                    spotifyTile("arrow.left.and.right", "Rejoin") { videoTapped("REJOIN") }
                 }
                 .frame(maxWidth: .infinity)
 
@@ -1479,6 +1480,7 @@ struct NumpadView: View {
         case "SPLIT": statusText = "Peeky Video — split the clip at the playhead"
         case "CUT_BEFORE": statusText = "Peeky Video — cut everything before the playhead"
         case "CUT_AFTER": statusText = "Peeky Video — cut everything after the playhead"
+        case "REJOIN": statusText = "Peeky Video — glue the split nearest the playhead back together"
         case "ZOOM_IN": statusText = "Peeky Video — zoom in on this clip"
         case "ZOOM_OUT": statusText = "Peeky Video — zoom out"
         case "FILL": statusText = "Peeky Video — fill the 9:16 frame (no black bars)"

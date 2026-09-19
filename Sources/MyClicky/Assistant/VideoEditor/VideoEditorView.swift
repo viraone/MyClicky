@@ -511,12 +511,41 @@ struct VideoEditorView: View {
                 .offset(x: x - 5)
                 .shadow(color: accent.opacity(0.7), radius: 3)
                 .allowsHitTesting(false)
+
+                // Seams that can be healed: a faint stitch mark always, and
+                // a Rejoin pill when the mouse rests near one.
+                if let project = model.project {
+                    ForEach(healableSeams(in: project), id: \.self) { index in
+                        let seamX = geo.size.width * project.clipStarts[index + 1] / total
+                        let near = hoverX.map { abs($0 - seamX) < 16 } ?? false
+                        if near {
+                            rejoinPill(index: index)
+                                .position(x: seamX, y: 34)
+                                .transition(.opacity.combined(with: .scale(scale: 0.9)))
+                        } else {
+                            Image(systemName: "arrow.left.and.right")
+                                .font(.system(size: 8, weight: .black))
+                                .foregroundStyle(.white.opacity(0.75))
+                                .frame(width: 14, height: 14)
+                                .background(Circle().fill(Color.black.opacity(0.7)))
+                                .position(x: seamX, y: 34)
+                                .allowsHitTesting(false)
+                        }
+                    }
+                }
             }
             .frame(height: 68)
             .contentShape(Rectangle())
             .onHover { inside in
-                if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+                if inside { NSCursor.pointingHand.push() } else { NSCursor.pop(); hoverX = nil }
             }
+            .onContinuousHover { phase in
+                switch phase {
+                case .active(let point): hoverX = point.x
+                case .ended: hoverX = nil
+                }
+            }
+            .animation(.easeOut(duration: 0.12), value: hoverX == nil)
             // One gesture covers both a click (jump there) and a drag (scrub).
             // The clip under the new time becomes the selected clip.
             .gesture(
@@ -535,6 +564,30 @@ struct VideoEditorView: View {
     }
 
     @State private var scrubbing = false
+    /// Where the mouse is over the timeline strip, for the Rejoin pill.
+    @State private var hoverX: CGFloat?
+
+    /// Indices i where clip i and clip i+1 are the same footage back to back.
+    private func healableSeams(in project: VideoProject) -> [Int] {
+        project.clips.indices.dropLast().filter { project.canRejoin(after: $0) }
+    }
+
+    /// Straddles a healed-able seam: one click glues the two halves back.
+    private func rejoinPill(index: Int) -> some View {
+        Button { model.rejoin(after: index) } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.left.and.right").font(.system(size: 10, weight: .black))
+                Text("Rejoin").font(.system(size: 11, weight: .bold, design: .monospaced))
+            }
+            .foregroundStyle(.black)
+            .padding(.horizontal, 9).padding(.vertical, 5)
+            .background(Capsule().fill(accent))
+            .overlay(Capsule().strokeBorder(.white.opacity(0.35), lineWidth: 1))
+            .shadow(color: .black.opacity(0.6), radius: 4, y: 1)
+        }
+        .buttonStyle(.plain)
+        .help("These two pieces are the same footage back to back — click to make them one clip again")
+    }
 
     private func clipBlock(_ clip: EditClip, width: CGFloat) -> some View {
         let selected = clip.id == model.selectedClipID
