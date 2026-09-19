@@ -206,6 +206,78 @@ final class VideoProjectTests: XCTestCase {
         XCTAssertEqual(loaded.transcripts, project.transcripts)
         XCTAssertEqual(loaded.version, VideoProject.currentVersion)
     }
+
+    // MARK: Subtitles & translation
+
+    func testProjectWithoutLanguageKeysDecodesToEnglishWithNoTranslation() throws {
+        let json = Data("""
+        {"version":1,"name":"old","clips":[],"created":"2026-01-01T00:00:00Z","transcripts":{}}
+        """.utf8)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let project = try decoder.decode(VideoProject.self, from: json)
+        XCTAssertEqual(project.spokenLanguage, "en-US")
+        XCTAssertNil(project.translationLanguage)
+    }
+
+    func testLanguagesAndTranslationsSurviveARoundTrip() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("VideoProjectTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        var project = VideoProject(name: "Bonjour", spokenLanguage: "fr-FR", translationLanguage: "en")
+        project.append(clip("a", duration: 10, cues: [CaptionCue(start: 1, end: 2, text: "salut", translation: "hi")]))
+        try project.save(to: folder)
+        let loaded = try VideoProject.load(from: folder)
+        XCTAssertEqual(loaded.spokenLanguage, "fr-FR")
+        XCTAssertEqual(loaded.translationLanguage, "en")
+        XCTAssertEqual(loaded.clips[0].cues[0].translation, "hi")
+    }
+
+    func testTranslationsFillOnlyTheMissingLinesAndEditsInvalidateThem() {
+        var project = VideoProject(name: "t", translationLanguage: "es")
+        let a = CaptionCue(start: 0, end: 1, text: "hello")
+        let b = CaptionCue(start: 1, end: 2, text: "friend", translation: "amigo")
+        let blank = CaptionCue(start: 2, end: 3, text: "  ")
+        project.append(clip("a", duration: 4, cues: [a, b, blank]))
+        XCTAssertEqual(project.untranslatedCues.map(\.id), [a.id], "blank lines and translated lines aren't pending")
+
+        project.setTranslations([a.id: "hola"])
+        XCTAssertTrue(project.untranslatedCues.isEmpty)
+        XCTAssertEqual(project.timelineCues.map(\.displayText), ["hello\nhola", "friend\namigo", "  "])
+
+        project.setCueText(a.id, "hello!")
+        XCTAssertNil(project.clips[0].cues[0].translation, "changing the words drops the stale translation")
+        project.setCueText(b.id, "friend")
+        XCTAssertEqual(project.clips[0].cues[1].translation, "amigo", "setting the same words keeps it")
+
+        project.setCueTranslation(a.id, "¡hola!")
+        XCTAssertEqual(project.clips[0].cues[0].translation, "¡hola!")
+
+        project.clearTranslations()
+        XCTAssertTrue(project.clips[0].cues.allSatisfy { $0.translation == nil })
+    }
+
+    func testSRTPutsTheTranslationUnderTheLine() {
+        var project = VideoProject(name: "t", translationLanguage: "es")
+        project.append(clip("a", duration: 5, cues: [CaptionCue(start: 0.5, end: 2, text: "Hi there", translation: "Hola")]))
+        XCTAssertEqual(project.srt, """
+        1
+        00:00:00,500 --> 00:00:02,000
+        Hi there
+        Hola
+
+        """)
+        XCTAssertEqual(project.transcript, "Hi there", "the transcript stays in the spoken language")
+    }
+
+    func testSubtitleLanguageNamesAndDefaults() {
+        XCTAssertEqual(SubtitleLanguages.regionChip(of: Locale(identifier: "en-US")), "US")
+        XCTAssertEqual(SubtitleLanguages.regionChip(of: Locale(identifier: "zh-Hans")), "HA")
+        XCTAssertEqual(SubtitleLanguages.defaultTranslationTarget(for: "en-US"), "es")
+        XCTAssertEqual(SubtitleLanguages.defaultTranslationTarget(for: "fr-FR"), "en")
+        XCTAssertFalse(SubtitleLanguages.name(of: Locale(identifier: "en-US")).isEmpty)
+        XCTAssertFalse(SubtitleLanguages.name(ofLanguage: "pt-BR").isEmpty)
+        XCTAssertFalse(VideoTranscriber.supportedLocales.isEmpty)
+    }
 }
 
 final class CaptionBuilderTests: XCTestCase {
@@ -353,6 +425,20 @@ final class VideoEditorModelTests: XCTestCase {
         }
         XCTAssertNil(model.project)
         XCTAssertEqual(model.currentTime, 0)
+    }
+
+    func testTranslationControlsWithoutAProjectAreHarmless() async {
+        let model = VideoEditorModel()
+        XCTAssertFalse(model.translationEnabled)
+        XCTAssertEqual(model.spokenLocale.identifier, "en-US")
+        model.setTranslationEnabled(true)
+        model.setTranslationLanguage("fr")
+        model.setSpokenLanguage("de-DE")
+        model.requestTranslation()
+        XCTAssertEqual(model.translationJob, 0, "nothing to translate, so no pass was asked for")
+        await model.translateMissingCues { XCTFail("shouldn't be called"); return $0 }
+        XCTAssertEqual(model.phase, .idle)
+        XCTAssertNil(model.project)
     }
 
     func testFolderNamesAreSafeAndUnique() {

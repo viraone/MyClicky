@@ -12,13 +12,14 @@ final class VideoEditorModel: ObservableObject {
         case idle
         case importing(Int, Int)
         case transcribing(String, Int, Int)
+        case translating(Int)
         case exporting(Double)
         case exported(URL)
         case failed(String)
 
         var isBusy: Bool {
             switch self {
-            case .importing, .transcribing, .exporting: true
+            case .importing, .transcribing, .translating, .exporting: true
             default: false
             }
         }
@@ -49,6 +50,9 @@ final class VideoEditorModel: ObservableObject {
     /// The most recent finished export this session, so the step tracker
     /// can show Export as done.
     @Published private(set) var lastExport: URL?
+    /// Bumped each time the Subtitles panel should run a translation pass;
+    /// the view owns the `TranslationSession`, so it watches this.
+    @Published private(set) var translationJob = 0
     var style = CaptionStyle()
 
     /// A protocol line for the Peeky Remote phone app (VIDEO_STATE).
@@ -362,11 +366,18 @@ final class VideoEditorModel: ObservableObject {
         }
     }
 
-    // MARK: Captions
+    // MARK: Subtitles
 
     func setCueText(_ id: UUID, _ text: String) {
         guard var p = project else { return }
         p.setCueText(id, text)
+        project = p
+        save()
+    }
+
+    func setCueTranslation(_ id: UUID, _ text: String) {
+        guard var p = project else { return }
+        p.setCueTranslation(id, text)
         project = p
         save()
     }
@@ -378,7 +389,95 @@ final class VideoEditorModel: ObservableObject {
         save()
     }
 
-    /// Listen to every take that hasn't been heard yet, then lay captions
+    /// What the takes are spoken in.
+    var spokenLocale: Locale { Locale(identifier: project?.spokenLanguage ?? VideoProject.defaultSpokenLanguage) }
+
+    /// Choose the language the recogniser listens for. Anything already
+    /// heard was heard in the old language, so it's forgotten — the next
+    /// Auto-subtitle listens again.
+    func setSpokenLanguage(_ identifier: String) {
+        guard var p = project, p.spokenLanguage != identifier else { return }
+        p.spokenLanguage = identifier
+        p.transcripts = [:]
+        project = p
+        save()
+        if hasSubtitles { note = "Press Auto-subtitle in \(SubtitleLanguages.name(of: spokenLocale)) to listen again." }
+    }
+
+    var hasSubtitles: Bool { !(project?.timelineCues.isEmpty ?? true) }
+    var translationEnabled: Bool { project?.translationLanguage != nil }
+    var translationLanguage: String? { project?.translationLanguage }
+
+    /// Turn "Add translation" on or off. On translates every subtitle there
+    /// is (and every one made later); off drops the translated lines.
+    func setTranslationEnabled(_ on: Bool) {
+        guard var p = project, on != (p.translationLanguage != nil) else { return }
+        if on {
+            p.translationLanguage = lastTranslationLanguage ?? SubtitleLanguages.defaultTranslationTarget(for: p.spokenLanguage)
+            project = p
+            save()
+            requestTranslation()
+        } else {
+            lastTranslationLanguage = p.translationLanguage
+            p.translationLanguage = nil
+            p.clearTranslations()
+            project = p
+            save()
+            if isTranslating { phase = .idle }
+        }
+    }
+
+    private var lastTranslationLanguage: String?
+    private var isTranslating: Bool { if case .translating = phase { true } else { false } }
+
+    func setTranslationLanguage(_ code: String) {
+        guard var p = project, p.translationLanguage != code else { return }
+        p.translationLanguage = code
+        p.clearTranslations()
+        project = p
+        save()
+        requestTranslation()
+    }
+
+    /// The language pair for the next translation pass.
+    var translationSource: Locale.Language { spokenLocale.language }
+    var translationTarget: Locale.Language? { translationLanguage.map { Locale.Language(identifier: $0) } }
+
+    /// Ask the panel to translate whatever subtitles lack a translated line.
+    func requestTranslation() {
+        guard let project, project.translationLanguage != nil else { return }
+        let pending = project.untranslatedCues.count
+        guard pending > 0 else { return }
+        guard #available(macOS 15, *) else {
+            note = "Translation needs macOS 15 or later."
+            return
+        }
+        phase = .translating(pending)
+        translationJob += 1
+    }
+
+    /// Run by the panel with a live `TranslationSession`: `translate` takes
+    /// the lines in order and returns them translated in the same order.
+    func translateMissingCues(using translate: ([String]) async throws -> [String]) async {
+        guard let p = project, p.translationLanguage != nil else { phase = .idle; return }
+        let pending = p.untranslatedCues
+        guard !pending.isEmpty else { phase = .idle; return }
+        do {
+            let translated = try await translate(pending.map(\.text))
+            guard var current = project, current.translationLanguage != nil else { phase = .idle; return }
+            var byID: [UUID: String] = [:]
+            for (cue, line) in zip(pending, translated) { byID[cue.id] = line }
+            current.setTranslations(byID)
+            project = current
+            save()
+            phase = .idle
+            note = "Translated \(byID.count) subtitle\(byID.count == 1 ? "" : "s") into \(SubtitleLanguages.name(ofLanguage: current.translationLanguage ?? ""))."
+        } catch {
+            phase = .failed("Couldn't translate: \(error.localizedDescription)")
+        }
+    }
+
+    /// Listen to every take that hasn't been heard yet, then lay subtitles
     /// on every clip. Editing the words afterwards is the user's job.
     func generateCaptions() {
         guard let project, !project.clips.isEmpty else {
@@ -390,11 +489,12 @@ final class VideoEditorModel: ObservableObject {
 
     private func transcribeAndCaption() async {
         guard var p = project else { return }
+        let locale = spokenLocale
         let pending = p.untranscribedSources
         for (index, url) in pending.enumerated() {
             phase = .transcribing(url.lastPathComponent, index + 1, pending.count)
             do {
-                let words = try await VideoTranscriber.words(in: url)
+                let words = try await VideoTranscriber.words(in: url, locale: locale)
                 guard var current = project else { return }
                 current.transcripts[url.path] = words
                 project = current
@@ -410,7 +510,8 @@ final class VideoEditorModel: ObservableObject {
         save()
         phase = .idle
         let count = p.timelineCues.count
-        note = count == 0 ? "Didn't hear any words in these clips." : "\(count) caption\(count == 1 ? "" : "s") ready — fix any wording below."
+        note = count == 0 ? "Didn't hear any words in these clips." : "\(count) subtitle\(count == 1 ? "" : "s") ready — fix any wording below."
+        if count > 0 { requestTranslation() }
     }
 
     // MARK: Preview
@@ -515,6 +616,7 @@ final class VideoEditorModel: ObservableObject {
         case .idle: phaseName = "IDLE"
         case .importing: phaseName = "IMPORTING"
         case .transcribing: phaseName = "TRANSCRIBING"
+        case .translating: phaseName = "TRANSLATING"
         case .exporting: phaseName = "EXPORTING"
         case .exported: phaseName = "EXPORTED"
         case .failed: phaseName = "FAILED"

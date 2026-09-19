@@ -19,6 +19,16 @@ enum VideoTranscriber {
         }
     }
 
+    /// Every locale the recogniser can listen in, by name — the list behind
+    /// "What language is being spoken?".
+    static var supportedLocales: [Locale] {
+        SFSpeechRecognizer.supportedLocales().sorted { a, b in
+            let an = SubtitleLanguages.name(of: a), bn = SubtitleLanguages.name(of: b)
+            if an != bn { return an.localizedCaseInsensitiveCompare(bn) == .orderedAscending }
+            return a.identifier < b.identifier
+        }
+    }
+
     static func requestAuthorization() async -> Bool {
         switch SFSpeechRecognizer.authorizationStatus() {
         case .authorized: return true

@@ -1420,7 +1420,7 @@ struct NumpadView: View {
                 spotifyTile("plus.magnifyingglass", "In") { videoTapped("ZOOM_IN") }
                 spotifyTile("rectangle.arrowtriangle.2.inward", "Fill") { videoTapped("FILL") }
                 spotifyTile("rectangle.arrowtriangle.2.outward", "Fit") { videoTapped("FIT") }
-                spotifyTile(v.phase == "TRANSCRIBING" ? "hourglass" : "captions.bubble.fill", "Captions",
+                spotifyTile(v.phase == "TRANSCRIBING" || v.phase == "TRANSLATING" ? "hourglass" : "captions.bubble.fill", "Subtitles",
                             accent: Snes.video.lighter(0.3)) { videoTapped("CAPTIONS") }
             }
             .frame(height: 54)

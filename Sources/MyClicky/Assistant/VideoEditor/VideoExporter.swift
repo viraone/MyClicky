@@ -150,7 +150,8 @@ enum VideoExporter {
         let overlay = CALayer()
         overlay.frame = CGRect(origin: .zero, size: render)
         for cue in cues where !cue.text.trimmingCharacters(in: .whitespaces).isEmpty && cue.end > cue.start {
-            let (pill, textSize) = captionFrame(for: cue.text, style: style, render: render)
+            let shown = cue.displayText
+            let (pill, textSize) = captionFrame(for: shown, style: style, render: render)
             let container = CALayer()
             container.frame = pill
             container.backgroundColor = style.pillColor.cgColor
@@ -158,7 +159,7 @@ enum VideoExporter {
             container.opacity = 0
 
             let text = CATextLayer()
-            text.string = NSAttributedString(string: cue.text, attributes: [
+            text.string = NSAttributedString(string: shown, attributes: [
                 .font: style.font,
                 .foregroundColor: style.textColor,
             ])
