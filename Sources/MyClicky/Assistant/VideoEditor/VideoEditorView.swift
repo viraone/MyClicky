@@ -14,6 +14,9 @@ struct VideoEditorView: View {
             if model.hasProject { editor } else { start }
         }
         .font(.system(size: 13, design: .monospaced))
+        // The panel can be squeezed very short; whatever doesn't fit must
+        // stay inside this tab rather than draw over the header above.
+        .clipped()
     }
 
     // MARK: - Start screen
@@ -126,17 +129,22 @@ struct VideoEditorView: View {
 
     private var editor: some View {
         GeometryReader { geo in
-            VStack(alignment: .leading, spacing: 12) {
-                header
-                stepTracker
-                coachLine
-                // The video sits on top, centred, like a phone held up;
-                // everything you do to it is laid out underneath.
-                preview(height: max(220, min(geo.size.height * 0.42, 520)))
-                    .frame(maxWidth: .infinity)
-                timelineCard
-                controlsCard
-                captionsCard
+            // Scrolls when the panel is shorter than the editor; at full
+            // height it's a no-op and everything is where it always was.
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 12) {
+                    header
+                    stepTracker
+                    coachLine
+                    // The video sits on top, centred, like a phone held up;
+                    // everything you do to it is laid out underneath.
+                    preview(height: max(220, min(geo.size.height * 0.42, 520)))
+                        .frame(maxWidth: .infinity)
+                    timelineCard
+                    controlsCard
+                    captionsCard
+                }
+                .frame(width: geo.size.width, alignment: .top)
             }
             .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
         }
