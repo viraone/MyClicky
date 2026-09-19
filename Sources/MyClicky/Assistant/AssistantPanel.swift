@@ -100,6 +100,9 @@ enum AssistantTab: String, CaseIterable {
     /// Pick a code file → Claude writes a documentary script → Manim +
     /// Kokoro render a narrated film locally. Only the script step is paid.
     case documentary = "Peeky Code Doc"
+    /// Import takes, trim them in order, caption them, export 1080×1920.
+    /// Local only — the recognizer runs on-device.
+    case video = "Peeky Video"
     /// Installed extensions (languages, themes, formatters, linters,
     /// actions) and the marketplace to get more.
     case extensions = "Extensions"
@@ -112,13 +115,14 @@ enum AssistantTab: String, CaseIterable {
         case .code: "chevron.left.forwardslash.chevron.right"
         case .terminal: "terminal"
         case .documentary: "film.stack"
+        case .video: "film"
         case .extensions: "puzzlepiece.extension"
         }
 
     }
 
-    /// Tabs with a mic: everything but the terminal, documentary and extensions.
-    var takesVoice: Bool { self != .terminal && self != .extensions }
+    /// Tabs with a mic: everything but the terminal, video editor and extensions.
+    var takesVoice: Bool { self != .terminal && self != .extensions && self != .video }
 
     /// One-word name for the half-width column's tab bar.
     var shortName: String {
@@ -129,6 +133,7 @@ enum AssistantTab: String, CaseIterable {
         case .code: "Code"
         case .terminal: "Term"
         case .documentary: "Doc"
+        case .video: "Video"
         case .extensions: "Ext"
         }
     }
@@ -538,6 +543,7 @@ final class AssistantState: ObservableObject {
     /// so switching tabs doesn't lose your session.
     let terminal = TerminalSession()
     let documentary = CodeDocumentaryModel()
+    let videoEditor = VideoEditorModel()
     var onRestartTerminal: (() -> Void)?
 
     /// The file as it currently is on disk (after any Peeky saves).
@@ -1960,12 +1966,15 @@ struct AssistantPanelView: View {
                     terminalTab
                 case .documentary:
                     CodeDocumentaryView(model: state.documentary, accent: state.accent)
+                case .video:
+                    VideoEditorView(model: state.videoEditor, accent: state.accent)
                 case .extensions:
                     ExtensionsView(state: state)
                 }
             }
             .onDrop(of: [.fileURL, .image], isTargeted: nil) { providers in
                 if state.tab == .extensions { return handleExtensionDrop(providers) }
+                if state.tab == .video { return handleVideoDrop(providers) }
                 guard state.tab == .ask || state.tab == .code else { return false }
                 return handleAskDrop(providers)
             }
@@ -4042,6 +4051,7 @@ struct AssistantPanelView: View {
         case .talk: ""
         case .terminal: "Type a command…"
         case .documentary: state.documentary.isShowingFilm ? "Ask about this moment…" : "Paste a file path, or drop a file above…"
+        case .video: state.videoEditor.hasProject ? "" : "Name a new project and press ↩…"
         case .extensions: "Search the marketplace…"
         case .code: state.codeProject == nil ? "Drop a project folder here, then ask…"
             : "Ask about \(state.codeFocusedFile.map { ($0 as NSString).lastPathComponent } ?? state.codeProject?.name ?? "your code")…"
@@ -4066,7 +4076,7 @@ struct AssistantPanelView: View {
         case .captureDictate: "Start dictation"
         case .code: "Ask about your code by voice"
         case .documentary: state.documentary.isShowingFilm ? "Ask about this moment by voice" : "Play a documentary first, then ask about it"
-        case .terminal, .extensions: "Switch to a tab with a mic"
+        case .terminal, .extensions, .video: "Switch to a tab with a mic"
         }
         return Button {
             state.onToggleRecording?()
@@ -5168,6 +5178,7 @@ struct AssistantPanelView: View {
         case .documentary:
             if state.documentary.isShowingFilm { state.documentary.ask(text) }
             else { _ = state.documentary.setSource(path: text) }
+        case .video: state.videoEditor.submit(text)
         case .extensions: state.marketplace.query = text
         default: state.onSubmit?(text)
         }
@@ -5182,8 +5193,32 @@ struct AssistantPanelView: View {
         case .code: "code"
         case .terminal: "terminal"
         case .documentary: "doc"
+        case .video: "video"
         case .extensions: "ext"
         }
+    }
+
+    /// Video files dropped on the Video tab join the open project's timeline.
+    private func handleVideoDrop(_ providers: [NSItemProvider]) -> Bool {
+        let fileProviders = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
+        guard !fileProviders.isEmpty else { return false }
+        let group = DispatchGroup()
+        let lock = NSLock()
+        var urls: [URL] = []
+        for provider in fileProviders {
+            group.enter()
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                let url: URL? = (item as? URL) ?? (item as? Data).flatMap { URL(dataRepresentation: $0, relativeTo: nil) }
+                if let url {
+                    lock.lock(); urls.append(url); lock.unlock()
+                }
+                group.leave()
+            }
+        }
+        group.notify(queue: .main) {
+            MainActor.assumeIsolated { state.videoEditor.importClips(urls) }
+        }
+        return true
     }
 
     /// A folder dropped on the Extensions tab is installed as an extension.

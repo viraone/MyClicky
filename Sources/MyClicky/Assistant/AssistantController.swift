@@ -2238,7 +2238,7 @@ final class AssistantController {
         case .captureDictate: .dictate
         case .talk: .talk
         case .documentary: .documentary
-        case .code, .terminal, .extensions: .code
+        case .code, .terminal, .extensions, .video: .code
         }
         if kind == .documentary {
             let doc = panel.state.documentary
