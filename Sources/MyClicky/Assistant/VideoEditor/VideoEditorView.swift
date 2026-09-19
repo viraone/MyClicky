@@ -132,13 +132,13 @@ struct VideoEditorView: View {
             // Scrolls when the panel is shorter than the editor; at full
             // height it's a no-op and everything is where it always was.
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 10) {
                     header
-                    stepTracker
                     coachLine
-                    // The video sits on top, centred, like a phone held up;
-                    // everything you do to it is laid out underneath.
-                    preview(height: max(220, min(geo.size.height * 0.42, 520)))
+                    // The video sits on top, centred, like a phone held up,
+                    // and takes the lion's share of the height the way an
+                    // editor's canvas does; everything else is underneath.
+                    preview(height: max(220, min(geo.size.height * 0.56, 820)))
                         .frame(maxWidth: .infinity)
                     timelineCard
                     controlsCard
@@ -152,25 +152,29 @@ struct VideoEditorView: View {
 
     // MARK: Header
 
+    /// One slim row: project on the left, the four steps in the middle,
+    /// Import / Export on the right.
     private var header: some View {
         HStack(spacing: 10) {
             Button { model.closeProject() } label: {
-                Label("All projects", systemImage: "chevron.left")
-                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                Label("Projects", systemImage: "chevron.left")
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
             }
             .buttonStyle(.plain)
             .foregroundStyle(.white.opacity(0.6))
             .help("Back to the project list")
 
             Text(model.project?.name ?? "")
-                .font(.system(size: 15, weight: .bold, design: .monospaced))
+                .font(.system(size: 13, weight: .bold, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.95))
                 .lineLimit(1)
             Button { model.revealProject() } label: { Image(systemName: "folder") }
                 .buttonStyle(.plain)
                 .foregroundStyle(.white.opacity(0.5))
                 .help("Show this project's folder in Finder")
-            Spacer()
+            Spacer(minLength: 8)
+            stepTracker
+            Spacer(minLength: 8)
             pillButton("Import clips", icon: "square.and.arrow.down") { model.chooseClips() }
                 .help("Add more takes or screen recordings")
             pillButton("Export video", icon: "square.and.arrow.up", prominent: true) { model.export() }
@@ -235,17 +239,17 @@ struct VideoEditorView: View {
     }
 
     private var stepTracker: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 4) {
             ForEach(Step.allCases, id: \.rawValue) { step in
                 stepChip(step)
                 if step != .export {
                     Rectangle()
                         .fill(isDone(step) ? accent.opacity(0.6) : Color.white.opacity(0.12))
-                        .frame(height: 1.5)
-                        .frame(maxWidth: .infinity)
+                        .frame(width: 10, height: 1.5)
                 }
             }
         }
+        .fixedSize()
     }
 
     private func stepChip(_ step: Step) -> some View {
@@ -253,32 +257,30 @@ struct VideoEditorView: View {
         let current = step == currentStep && !done
         let available = step == .importClips || hasClips
         return Button { perform(step) } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 ZStack {
                     Circle()
                         .fill(done ? accent : (current ? accent.opacity(0.22) : Color.white.opacity(0.08)))
-                        .frame(width: 26, height: 26)
+                        .frame(width: 18, height: 18)
                     if done {
-                        Image(systemName: "checkmark").font(.system(size: 12, weight: .bold)).foregroundStyle(.black)
+                        Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)).foregroundStyle(.black)
                     } else {
                         Text("\(step.rawValue + 1)")
-                            .font(.system(size: 12, weight: .bold, design: .monospaced))
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
                             .foregroundStyle(current ? accent : .white.opacity(0.6))
                     }
                 }
-                Label(step.title, systemImage: step.icon)
-                    .font(.system(size: 12, weight: current ? .bold : .semibold, design: .monospaced))
+                Text(step.title)
+                    .font(.system(size: 11, weight: current ? .bold : .semibold, design: .monospaced))
                     .foregroundStyle(current ? .white : .white.opacity(done ? 0.85 : 0.5))
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 7)
+            .padding(.leading, 5).padding(.trailing, 10)
+            .padding(.vertical, 4)
             .background(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(current ? accent.opacity(0.15) : Color.white.opacity(0.04))
+                Capsule().fill(current ? accent.opacity(0.15) : Color.white.opacity(0.04))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .strokeBorder(current ? accent.opacity(0.8) : Color.white.opacity(0.1), lineWidth: 1)
+                Capsule().strokeBorder(current ? accent.opacity(0.8) : Color.white.opacity(0.1), lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
@@ -329,11 +331,12 @@ struct VideoEditorView: View {
             }
             if !isTerminal(model.phase) { Spacer() }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .font(.system(size: 12, design: .monospaced))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
         .frame(maxWidth: .infinity)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(Color.white.opacity(0.05))
         )
     }
@@ -348,8 +351,8 @@ struct VideoEditorView: View {
     private func coachText(_ text: String) -> some View {
         Text(text)
             .foregroundStyle(.white.opacity(0.85))
-            .lineLimit(2)
-            .fixedSize(horizontal: false, vertical: true)
+            .lineLimit(1)
+            .truncationMode(.tail)
     }
 
     private var dismissButton: some View {
