@@ -4039,6 +4039,11 @@ struct AssistantPanelView: View {
                 ? "Ask about \(state.documentary.moment.label) — press Ask, the mic, or type below"
                 : "Ask about \(state.documentary.moment.label)"
         }
+        if state.tab == .video, state.phase == .ready {
+            return state.videoEditor.hasProject
+                ? "import clips, trim, captions, export"
+                : "click Import clips…, or drop video files here"
+        }
         return switch state.phase {
         case .paused: "say a command, or press STOP"
         case .done where state.chaining: "done — say the next command, or press STOP"

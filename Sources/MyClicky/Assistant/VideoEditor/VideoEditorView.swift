@@ -41,19 +41,26 @@ struct VideoEditorView: View {
                 .foregroundStyle(.white.opacity(0.6))
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 8) {
-                TextField("New project name — e.g. Notion review", text: $newProjectName)
+                button("Import clips…", icon: "square.and.arrow.down", prominent: true) { model.chooseClips() }
+                Text("or drop video files anywhere on this tab")
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.5))
+            }
+            .padding(.top, 2)
+            HStack(spacing: 8) {
+                TextField("Or name a project first — e.g. Notion review", text: $newProjectName)
                     .textFieldStyle(.plain)
                     .foregroundStyle(.white)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 9)
                     .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.12)))
-                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(accent.opacity(0.6), lineWidth: 1))
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.white.opacity(0.25), lineWidth: 1))
                     .frame(maxWidth: 460)
                     .onSubmit(createProject)
-                button("Create project", icon: "plus", prominent: true, action: createProject)
+                button("Create project", icon: "plus", action: createProject)
                     .opacity(newProjectName.trimmingCharacters(in: .whitespaces).isEmpty ? 0.55 : 1)
             }
-            Text("Type a name and press Return — or drop your video clips here and Peeky will start a project for you.")
+            Text("Importing straight away names the project after your first clip; you can rename the folder later.")
                 .font(.system(size: 12, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.45))
             if !model.recentProjects.isEmpty {
