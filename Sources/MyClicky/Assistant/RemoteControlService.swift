@@ -18,6 +18,14 @@ import Network
 ///   TAB TERMINAL   – switch the panel to Terminal
 ///   TAB EXTENSIONS – switch the panel to Extensions (TAB EXT is an alias)
 ///   TAB DOC        – switch the panel to Peeky Code Doc
+///   TAB VIDEO      – switch the panel to Peeky Video
+///   VIDEO <action> – Peeky Video, the editor tab: PLAYPAUSE, START,
+///                    SKIP <±seconds>, SEEK <seconds>, JOG <±frames> (the
+///                    phone's dial: one frame per detent), TRIM_START <±frames>
+///                    / TRIM_END <±frames> (nudge the selected clip's cut),
+///                    SPLIT, CUT_BEFORE, CUT_AFTER, ZOOM_IN, ZOOM_OUT, FILL,
+///                    FIT, EARLIER, LATER, REMOVE, CAPTIONS, EXPORT. The Mac
+///                    answers with VIDEO_STATE (see VideoEditorModel).
 ///   DOC <action>   – Peeky Code Doc, the film playing in the tab: ASK (pause
 ///                    and show "Ask about <time>"; the phone then sends
 ///                    ASK <question> or DOC ASK_TEXT <question>), STOP_ASK,
@@ -147,6 +155,8 @@ final class RemoteControlService {
     /// SKIP <±s>, SEEK <s>, RESTART, RESUME, SUGGEST <i>, SHOW_ME, DEEPER,
     /// READOUT ON|OFF, STOP, PLAY_RECENT <i>.
     var onDocumentary: ((String) -> Void)?
+    /// `VIDEO <action>` — drive the Peeky Video editor tab.
+    var onVideo: ((String) -> Void)?
     /// `SCREEN <n>`: put Peeky (panel and pointer) on display n, 1-based in
     /// the order macOS lists them — 1 is the built-in display when present.
     var onScreen: ((Int) -> Void)?
@@ -271,6 +281,8 @@ final class RemoteControlService {
             onWhatsApp?(String(line.dropFirst(9)))
         } else if line.hasPrefix("DOC ") {
             onDocumentary?(String(line.dropFirst(4)).trimmingCharacters(in: .whitespaces))
+        } else if line.hasPrefix("VIDEO ") {
+            onVideo?(String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces))
         } else if line.hasPrefix("SAVE_PHOTO ") {
             if let data = Data(base64Encoded: String(line.dropFirst(11)).trimmingCharacters(in: .whitespaces)) {
                 onSavePhoto?(data)

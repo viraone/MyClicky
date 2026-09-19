@@ -221,6 +221,30 @@ struct VideoProject: Codable, Equatable {
         return true
     }
 
+    /// Slide a clip's in point by `delta` source seconds (negative = earlier,
+    /// revealing footage; positive = later, hiding it). Clamped so the clip
+    /// keeps its minimum length and stays inside the source.
+    @discardableResult
+    mutating func nudgeStart(_ clipID: UUID, by delta: Double) -> Bool {
+        guard let i = clips.firstIndex(where: { $0.id == clipID }) else { return false }
+        let target = min(max(0, clips[i].inPoint + delta), clips[i].outPoint - Self.minimumClipDuration)
+        guard abs(target - clips[i].inPoint) > 0.0001 else { return false }
+        clips[i].inPoint = target
+        clips[i].cues.removeAll { $0.end <= target }
+        return true
+    }
+
+    /// Slide a clip's out point by `delta` source seconds.
+    @discardableResult
+    mutating func nudgeEnd(_ clipID: UUID, by delta: Double) -> Bool {
+        guard let i = clips.firstIndex(where: { $0.id == clipID }) else { return false }
+        let target = max(min(clips[i].sourceDuration, clips[i].outPoint + delta), clips[i].inPoint + Self.minimumClipDuration)
+        guard abs(target - clips[i].outPoint) > 0.0001 else { return false }
+        clips[i].outPoint = target
+        clips[i].cues.removeAll { $0.start >= target }
+        return true
+    }
+
     mutating func setZoom(_ zoom: Double, for clipID: UUID) {
         guard let index = clips.firstIndex(where: { $0.id == clipID }) else { return }
         clips[index].zoom = min(max(zoom, EditClip.minZoom), EditClip.maxZoom)
