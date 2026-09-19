@@ -100,6 +100,9 @@ enum AssistantTab: String, CaseIterable {
     /// Pick a code file → Claude writes a documentary script → Manim +
     /// Kokoro render a narrated film locally. Only the script step is paid.
     case documentary = "Peeky Code Doc"
+    /// Import takes, trim them in order, caption them, export 1080×1920.
+    /// Local only — the recognizer runs on-device.
+    case video = "Peeky Video"
     /// Installed extensions (languages, themes, formatters, linters,
     /// actions) and the marketplace to get more.
     case extensions = "Extensions"
@@ -112,13 +115,14 @@ enum AssistantTab: String, CaseIterable {
         case .code: "chevron.left.forwardslash.chevron.right"
         case .terminal: "terminal"
         case .documentary: "film.stack"
+        case .video: "film"
         case .extensions: "puzzlepiece.extension"
         }
 
     }
 
-    /// Tabs with a mic: everything but the terminal, documentary and extensions.
-    var takesVoice: Bool { self != .terminal && self != .extensions }
+    /// Tabs with a mic: everything but the terminal, video editor and extensions.
+    var takesVoice: Bool { self != .terminal && self != .extensions && self != .video }
 
     /// One-word name for the half-width column's tab bar.
     var shortName: String {
@@ -129,6 +133,7 @@ enum AssistantTab: String, CaseIterable {
         case .code: "Code"
         case .terminal: "Term"
         case .documentary: "Doc"
+        case .video: "Video"
         case .extensions: "Ext"
         }
     }
@@ -538,6 +543,7 @@ final class AssistantState: ObservableObject {
     /// so switching tabs doesn't lose your session.
     let terminal = TerminalSession()
     let documentary = CodeDocumentaryModel()
+    let videoEditor = VideoEditorModel()
     var onRestartTerminal: (() -> Void)?
 
     /// The file as it currently is on disk (after any Peeky saves).
@@ -760,7 +766,43 @@ final class AssistantState: ObservableObject {
     /// Shrunk in place to a thin bar — mic, phase, nothing else. Distinct
     /// from `collapsed`, which tucks a dot into the screen corner.
     @Published var strip = false
-    @Published var tab: AssistantTab = .ask
+    /// A hidden tab can't become the current one: when the app tries to
+    /// switch there (TALK lands on Actions, a capture on Capture…) the panel
+    /// stays put, so hidden really means gone from view.
+    @Published var tab: AssistantTab = .ask {
+        didSet {
+            guard hiddenTabs.contains(tab) else { return }
+            tab = hiddenTabs.contains(oldValue) ? (visibleTabs.first ?? oldValue) : oldValue
+        }
+    }
+    /// Tabs the user has switched off in the gear menu. They drop out of the
+    /// tab bar; everything else about them stays put so turning one back on
+    /// is instant. Persisted so the choice sticks between launches.
+    @Published var hiddenTabs: Set<AssistantTab> = AssistantState.loadHiddenTabs() {
+        didSet {
+            UserDefaults.standard.set(hiddenTabs.map(\.rawValue).sorted(), forKey: AssistantState.hiddenTabsKey)
+            if hiddenTabs.contains(tab), let fallback = visibleTabs.first { tab = fallback }
+        }
+    }
+    static let hiddenTabsKey = "assistantHiddenTabs"
+    /// The tabs the bar shows, in their usual order. Never empty: the last
+    /// visible tab can't be hidden, so there's always somewhere to land.
+    var visibleTabs: [AssistantTab] { AssistantTab.allCases.filter { !hiddenTabs.contains($0) } }
+    func isTabVisible(_ tab: AssistantTab) -> Bool { !hiddenTabs.contains(tab) }
+    /// Whether the gear menu lets this tab be switched off — false only for
+    /// the sole remaining visible tab.
+    func canHideTab(_ tab: AssistantTab) -> Bool { hiddenTabs.contains(tab) || visibleTabs.count > 1 }
+    func setTab(_ tab: AssistantTab, visible: Bool) {
+        if visible { hiddenTabs.remove(tab) }
+        else if canHideTab(tab) { hiddenTabs.insert(tab) }
+    }
+    static func loadHiddenTabs(defaults: UserDefaults = .standard) -> Set<AssistantTab> {
+        let raw = defaults.stringArray(forKey: hiddenTabsKey) ?? []
+        var hidden = Set(raw.compactMap(AssistantTab.init(rawValue:)))
+        // A stale or hand-edited default must never leave the bar empty.
+        if hidden.count >= AssistantTab.allCases.count { hidden.remove(.ask) }
+        return hidden
+    }
     /// Last dictation result (on the clipboard, paired with the capture if any).
     @Published var dictationText = ""
     /// Last region capture (saved to disk; on the clipboard, paired with the dictation if any).
@@ -985,10 +1027,14 @@ final class AssistantPanelController {
         // off an edge is pulled back onto the display showing most of it: a
         // break check-in with half its words past the screen edge can't be
         // read. Off every display entirely, or on a fresh open, it starts at
-        // bottom-center of the given screen.
+        // bottom-center of the given screen. Only the card has to be seen:
+        // its glow margin may hang past the edge, as it does at Full.
         if panel.isVisible, let home = Self.screenShowingMost(of: panel.frame) {
-            let frame = Self.frame(panel.frame, keptWithin: home.visibleFrame)
-            if frame != panel.frame { panel.setFrame(frame, display: true, animate: false) }
+            let card = panel.frame.insetBy(dx: Self.glowMargin, dy: Self.glowMargin)
+            let kept = Self.frame(card, keptWithin: home.visibleFrame)
+            if kept != card {
+                panel.setFrame(kept.insetBy(dx: -Self.glowMargin, dy: -Self.glowMargin), display: true, animate: false)
+            }
         } else {
             panel.setFrameOrigin(NSPoint(
                 x: visible.midX - Self.expandedSize.width / 2,
@@ -1092,10 +1138,28 @@ final class AssistantPanelController {
         case .normal: return expandedSize
         case .tall: return tallSize
         case .full:
-            // The whole screen, edge to edge, never smaller than Tall.
+            // The whole screen, edge to edge, never smaller than Tall. The
+            // window is oversized by the glow margin so that hangs past the
+            // screen edges and the card itself sits `edgeInset` from them.
             let visible = (screen ?? NSScreen.main)?.visibleFrame.size ?? tallSize
-            return NSSize(width: max(tallSize.width, visible.width - 16), height: max(tallSize.height, visible.height - 16))
+            let extra = (glowMargin - edgeInset) * 2
+            return NSSize(width: max(tallSize.width, visible.width + extra), height: max(tallSize.height, visible.height + extra))
         }
+    }
+    /// Gap kept between a window and the screen edge — or, for a window
+    /// bigger than the screen, between the card and the screen edge.
+    static let edgeInset: CGFloat = 8
+    /// Where a window of `size` goes, starting from `origin`, so it stays
+    /// `edgeInset` inside `visible`. A window wider or taller than the
+    /// screen — Full, with its glow margin past the edges — is centered on
+    /// that axis instead, so the card sits evenly inside the screen.
+    static func origin(_ origin: NSPoint, of size: NSSize, keptWithin visible: NSRect) -> NSPoint {
+        func place(_ value: CGFloat, length: CGFloat, from lo: CGFloat, to hi: CGFloat) -> CGFloat {
+            let low = lo + edgeInset, high = hi - length - edgeInset
+            return high >= low ? Swift.min(Swift.max(value, low), high) : (lo + hi - length) / 2
+        }
+        return NSPoint(x: place(origin.x, length: size.width, from: visible.minX, to: visible.maxX),
+                       y: place(origin.y, length: size.height, from: visible.minY, to: visible.maxY))
     }
     private static let collapsedSize = NSSize(width: 56, height: 56)
     private static let stripSize = NSSize(width: 420 + glowMargin * 2, height: 52 + glowMargin * 2)
@@ -1121,8 +1185,7 @@ final class AssistantPanelController {
             let screen = panel.screen ?? NSScreen.main
             let visible = screen?.visibleFrame ?? .zero
             var origin = NSPoint(x: panel.frame.maxX - size.width, y: panel.frame.maxY - size.height)
-            origin.x = min(max(origin.x, visible.minX + 8), visible.maxX - size.width - 8)
-            origin.y = min(max(origin.y, visible.minY + 8), visible.maxY - size.height - 8)
+            origin = Self.origin(origin, of: size, keptWithin: visible)
             panel.setFrame(NSRect(origin: origin, size: size), display: true, animate: true)
         } else {
             savedFrame = panel.frame
@@ -1156,8 +1219,7 @@ final class AssistantPanelController {
             x: visible.maxX - size.width - 12,
             y: visible.minY + 12
         )
-        origin.x = min(max(origin.x, visible.minX + 8), visible.maxX - size.width - 8)
-        origin.y = min(max(origin.y, visible.minY + 8), visible.maxY - size.height - 8)
+        origin = Self.origin(origin, of: size, keptWithin: visible)
         panel.setFrame(NSRect(origin: origin, size: size), display: true, animate: true)
     }
 
@@ -1201,9 +1263,7 @@ final class AssistantPanelController {
         let width = (size == .half || wasHalf || size == .full || wasFull) ? target.width : panel.frame.width
         var origin = panel.frame.origin
         origin.x = panel.frame.maxX - width
-        origin.x = min(max(origin.x, visible.minX + 8), visible.maxX - width - 8)
-        origin.y = min(origin.y, visible.maxY - height - 8)
-        origin.y = max(origin.y, visible.minY + 8)
+        origin = Self.origin(origin, of: NSSize(width: width, height: height), keptWithin: visible)
         panel.setFrame(NSRect(x: origin.x, y: origin.y, width: width, height: height),
                         display: true, animate: true)
     }
@@ -1453,8 +1513,7 @@ final class AssistantPanelController {
         } else {
             origin = NSPoint(x: visible.midX - size.width / 2, y: visible.minY + 120)
         }
-        origin.x = min(max(origin.x, visible.minX + 8), visible.maxX - size.width - 8)
-        origin.y = min(max(origin.y, visible.minY + 8), visible.maxY - size.height - 8)
+        origin = Self.origin(origin, of: size, keptWithin: visible)
         panel.setFrame(NSRect(origin: origin, size: size), display: true, animate: panel.isVisible)
         panel.orderFrontRegardless()
         noteScreenChange()
@@ -1464,6 +1523,10 @@ final class AssistantPanelController {
 
 final class KeyablePanel: NSPanel {
     override var canBecomeKey: Bool { true }
+    /// AppKit would push a window that pokes past the screen edge back
+    /// inside. At Full only the transparent glow margin pokes out, and it
+    /// must stay there or the card creeps in from the edges.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
     private var mouseInteractionRegion: ((NSPoint, NSRect) -> Bool)?
     private var shouldLowerForBackgroundClick: (() -> Bool)?
     private var localMouseMonitor: Any?
@@ -1648,6 +1711,8 @@ struct AssistantPanelView: View {
     /// What the hovered header button does, shown in the header itself —
     /// system tooltips never appear over a non-activating panel.
     @State private var headerHint: String?
+    /// The gear menu's tab on/off switches, open over the header.
+    @State private var showingTabSettings = false
     @State private var copiedAnswerID: UUID?
     @State private var copiedAskQuestion = false
     @FocusState private var fieldFocused: Bool
@@ -1825,6 +1890,12 @@ struct AssistantPanelView: View {
                 tabBar
                 if state.micLive { recBadge }
                 Spacer()
+                headerButton("gearshape", help: "Choose which tabs to show") {
+                    showingTabSettings.toggle()
+                }
+                .popover(isPresented: $showingTabSettings, arrowEdge: .bottom) {
+                    tabSettingsPopover
+                }
                 headerButton("arrow.down.right.and.arrow.up.left", help: "Minimize to corner") {
                     state.onMinimize?()
                 }
@@ -1895,12 +1966,18 @@ struct AssistantPanelView: View {
                     terminalTab
                 case .documentary:
                     CodeDocumentaryView(model: state.documentary, accent: state.accent)
+                case .video:
+                    VideoEditorView(model: state.videoEditor, accent: state.accent)
+                        // An editor needs a canvas: the one-line strip only
+                        // shows its header, so stretch to Tall on arrival.
+                        .onAppear { if state.size == .normal { state.onSetSize?(.tall) } }
                 case .extensions:
                     ExtensionsView(state: state)
                 }
             }
             .onDrop(of: [.fileURL, .image], isTargeted: nil) { providers in
                 if state.tab == .extensions { return handleExtensionDrop(providers) }
+                if state.tab == .video { return handleVideoDrop(providers) }
                 guard state.tab == .ask || state.tab == .code else { return false }
                 return handleAskDrop(providers)
             }
@@ -1999,7 +2076,7 @@ struct AssistantPanelView: View {
                 // tab and lists the others.
                 tabDropdown
             } else {
-                ForEach(AssistantTab.allCases, id: \.self) { tab in
+                ForEach(state.visibleTabs, id: \.self) { tab in
                     Button {
                         state.tab = tab
                     } label: {
@@ -2028,7 +2105,7 @@ struct AssistantPanelView: View {
 
     private var tabDropdown: some View {
         Menu {
-            ForEach(AssistantTab.allCases, id: \.self) { tab in
+            ForEach(state.visibleTabs, id: \.self) { tab in
                 Button {
                     state.tab = tab
                 } label: {
@@ -2062,6 +2139,39 @@ struct AssistantPanelView: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .help(state.tab.rawValue)
+    }
+
+    /// Gear menu: one switch per tab. Off drops it from the bar; the last
+    /// visible tab's switch is greyed out so the bar never empties.
+    private var tabSettingsPopover: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Tabs")
+                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                .kerning(1)
+                .foregroundStyle(.white.opacity(0.85))
+            Text("Switch off the ones you don't use.")
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.55))
+            Divider().overlay(Color.white.opacity(0.12))
+            ForEach(AssistantTab.allCases, id: \.self) { tab in
+                Toggle(isOn: Binding(
+                    get: { state.isTabVisible(tab) },
+                    set: { state.setTab(tab, visible: $0) }
+                )) {
+                    Label(tab.rawValue, systemImage: tab.icon)
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundStyle(.white.opacity(state.isTabVisible(tab) ? 0.95 : 0.55))
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .tint(state.accent)
+                .disabled(!state.canHideTab(tab))
+                .help(state.canHideTab(tab) ? tab.rawValue : "Keep at least one tab")
+            }
+        }
+        .padding(14)
+        .frame(width: 260)
+        .background(Color(red: 0.10, green: 0.10, blue: 0.12))
     }
 
     /// The one line that tells the user where they are in the voice flow —
@@ -3932,6 +4042,11 @@ struct AssistantPanelView: View {
                 ? "Ask about \(state.documentary.moment.label) — press Ask, the mic, or type below"
                 : "Ask about \(state.documentary.moment.label)"
         }
+        if state.tab == .video, state.phase == .ready {
+            return state.videoEditor.hasProject
+                ? "import clips, trim, captions, export"
+                : "click Import clips…, or drop video files here"
+        }
         return switch state.phase {
         case .paused: "say a command, or press STOP"
         case .done where state.chaining: "done — say the next command, or press STOP"
@@ -3944,6 +4059,7 @@ struct AssistantPanelView: View {
         case .talk: ""
         case .terminal: "Type a command…"
         case .documentary: state.documentary.isShowingFilm ? "Ask about this moment…" : "Paste a file path, or drop a file above…"
+        case .video: state.videoEditor.hasProject ? "" : "Name a new project and press ↩…"
         case .extensions: "Search the marketplace…"
         case .code: state.codeProject == nil ? "Drop a project folder here, then ask…"
             : "Ask about \(state.codeFocusedFile.map { ($0 as NSString).lastPathComponent } ?? state.codeProject?.name ?? "your code")…"
@@ -3968,7 +4084,7 @@ struct AssistantPanelView: View {
         case .captureDictate: "Start dictation"
         case .code: "Ask about your code by voice"
         case .documentary: state.documentary.isShowingFilm ? "Ask about this moment by voice" : "Play a documentary first, then ask about it"
-        case .terminal, .extensions: "Switch to a tab with a mic"
+        case .terminal, .extensions, .video: "Switch to a tab with a mic"
         }
         return Button {
             state.onToggleRecording?()
@@ -5070,6 +5186,7 @@ struct AssistantPanelView: View {
         case .documentary:
             if state.documentary.isShowingFilm { state.documentary.ask(text) }
             else { _ = state.documentary.setSource(path: text) }
+        case .video: state.videoEditor.submit(text)
         case .extensions: state.marketplace.query = text
         default: state.onSubmit?(text)
         }
@@ -5084,8 +5201,32 @@ struct AssistantPanelView: View {
         case .code: "code"
         case .terminal: "terminal"
         case .documentary: "doc"
+        case .video: "video"
         case .extensions: "ext"
         }
+    }
+
+    /// Video files dropped on the Video tab join the open project's timeline.
+    private func handleVideoDrop(_ providers: [NSItemProvider]) -> Bool {
+        let fileProviders = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
+        guard !fileProviders.isEmpty else { return false }
+        let group = DispatchGroup()
+        let lock = NSLock()
+        var urls: [URL] = []
+        for provider in fileProviders {
+            group.enter()
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                let url: URL? = (item as? URL) ?? (item as? Data).flatMap { URL(dataRepresentation: $0, relativeTo: nil) }
+                if let url {
+                    lock.lock(); urls.append(url); lock.unlock()
+                }
+                group.leave()
+            }
+        }
+        group.notify(queue: .main) {
+            MainActor.assumeIsolated { state.videoEditor.importClips(urls) }
+        }
+        return true
     }
 
     /// A folder dropped on the Extensions tab is installed as an extension.

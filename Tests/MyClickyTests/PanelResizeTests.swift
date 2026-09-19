@@ -97,4 +97,22 @@ final class PanelKeptOnScreenTests: XCTestCase {
         XCTAssertEqual(kept.maxY, 992)
         XCTAssertEqual(kept.size, frame.size)
     }
+
+    func testWindowOriginIsClampedInsideTheScreen() {
+        let size = NSSize(width: 600, height: 400)
+        XCTAssertEqual(AssistantPanelController.origin(NSPoint(x: 300, y: 200), of: size, keptWithin: visible),
+                       NSPoint(x: 300, y: 200))
+        XCTAssertEqual(AssistantPanelController.origin(NSPoint(x: -250, y: 1200), of: size, keptWithin: visible),
+                       NSPoint(x: 8, y: 592))
+    }
+
+    /// Full is bigger than the screen by the glow margin: it's centered so
+    /// the card sits 8pt inside every edge while the glow hangs past them.
+    func testOversizedWindowIsCenteredSoTheCardSitsInsideTheScreen() {
+        let glow = AssistantPanelController.glowMargin
+        let size = NSSize(width: visible.width + (glow - 8) * 2, height: visible.height + (glow - 8) * 2)
+        let origin = AssistantPanelController.origin(NSPoint(x: 100, y: 100), of: size, keptWithin: visible)
+        let card = NSRect(origin: origin, size: size).insetBy(dx: glow, dy: glow)
+        XCTAssertEqual(card, visible.insetBy(dx: 8, dy: 8))
+    }
 }

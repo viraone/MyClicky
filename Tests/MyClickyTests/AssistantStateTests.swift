@@ -220,6 +220,77 @@ final class AssistantStateTests: XCTestCase {
 }
 
 @MainActor
+final class HiddenTabsTests: XCTestCase {
+    override func setUp() {
+        UserDefaults.standard.removeObject(forKey: AssistantState.hiddenTabsKey)
+    }
+
+    override func tearDown() {
+        UserDefaults.standard.removeObject(forKey: AssistantState.hiddenTabsKey)
+    }
+
+    func testAllTabsShowByDefaultAndHidingPersists() {
+        let state = AssistantState()
+        XCTAssertEqual(state.visibleTabs, AssistantTab.allCases)
+
+        state.setTab(.terminal, visible: false)
+        state.setTab(.extensions, visible: false)
+        XCTAssertFalse(state.isTabVisible(.terminal))
+        XCTAssertEqual(state.visibleTabs, [.ask, .captureDictate, .talk, .code, .documentary, .video])
+        XCTAssertEqual(UserDefaults.standard.stringArray(forKey: AssistantState.hiddenTabsKey),
+                       ["Extensions", "Terminal"])
+        XCTAssertEqual(AssistantState().hiddenTabs, [.terminal, .extensions], "a fresh state remembers the choice")
+
+        state.setTab(.terminal, visible: true)
+        XCTAssertTrue(state.isTabVisible(.terminal))
+    }
+
+    func testHidingTheCurrentTabMovesToTheFirstVisibleOne() {
+        let state = AssistantState()
+        state.tab = .code
+        state.setTab(.code, visible: false)
+        XCTAssertEqual(state.tab, .ask)
+
+        state.setTab(.ask, visible: false)
+        state.tab = .captureDictate
+        state.setTab(.captureDictate, visible: false)
+        XCTAssertEqual(state.tab, .talk)
+    }
+
+    func testSwitchingToAHiddenTabStaysPut() {
+        let state = AssistantState()
+        state.setTab(.talk, visible: false)
+        state.setTab(.captureDictate, visible: false)
+        state.tab = .code
+        state.tab = .talk               // what pressing TALK does
+        XCTAssertEqual(state.tab, .code)
+        state.tab = .captureDictate     // what a region capture does
+        XCTAssertEqual(state.tab, .code)
+        state.tab = .ask
+        XCTAssertEqual(state.tab, .ask)
+    }
+
+    func testTheLastVisibleTabCannotBeHidden() {
+        let state = AssistantState()
+        for tab in AssistantTab.allCases { state.setTab(tab, visible: false) }
+        XCTAssertEqual(state.visibleTabs, [.extensions])
+        XCTAssertFalse(state.canHideTab(.extensions))
+        XCTAssertTrue(state.canHideTab(.ask), "a hidden tab can always be toggled back on")
+        XCTAssertEqual(state.tab, .extensions)
+    }
+
+    func testAStaleDefaultHidingEverythingStillShowsAsk() throws {
+        let suiteName = "HiddenTabsTests.\(UUID().uuidString)"
+        let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { suite.removePersistentDomain(forName: suiteName) }
+        suite.set(AssistantTab.allCases.map(\.rawValue) + ["Not A Tab"], forKey: AssistantState.hiddenTabsKey)
+        let hidden = AssistantState.loadHiddenTabs(defaults: suite)
+        XCTAssertFalse(hidden.contains(.ask))
+        XCTAssertEqual(hidden.count, AssistantTab.allCases.count - 1)
+    }
+}
+
+@MainActor
 final class CodeLSPToggleTests: XCTestCase {
     override func setUp() {
         UserDefaults.standard.removeObject(forKey: "codeLSPEnabled")
