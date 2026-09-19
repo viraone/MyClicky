@@ -315,6 +315,32 @@ final class VideoEditorModel: ObservableObject {
         }
     }
 
+    // MARK: Zoom
+
+    /// Zoom the clip under the playhead. The preview is rebuilt so it shows
+    /// exactly what will export.
+    func setZoom(_ zoom: Double) {
+        guard let id = selectedClipID else { return }
+        let t = currentTime
+        edit(seekTo: t) { $0.setZoom(zoom, for: id) }
+    }
+
+    func zoom(by factor: Double) {
+        guard let clip = selectedClip else { return }
+        setZoom(clip.zoom * factor)
+    }
+
+    /// Just enough zoom that the picture covers the whole 9:16 frame.
+    func zoomToFill() {
+        guard let clip = selectedClip else { return }
+        Task {
+            let asset = AVURLAsset(url: clip.source)
+            guard let track = try? await asset.loadTracks(withMediaType: .video).first,
+                  let (natural, preferred) = try? await track.load(.naturalSize, .preferredTransform) else { return }
+            setZoom(VideoExporter.fillZoom(naturalSize: natural, preferredTransform: preferred))
+        }
+    }
+
     // MARK: Captions
 
     func setCueText(_ id: UUID, _ text: String) {

@@ -54,16 +54,28 @@ enum VideoExporter {
     /// frame — scaled to fit, centred, bars where the shapes differ. A 9:16
     /// phone take fills the frame exactly; a widescreen screen recording
     /// sits letterboxed in the middle.
-    static func fitTransform(naturalSize: CGSize, preferredTransform: CGAffineTransform, into render: CGSize = renderSize) -> CGAffineTransform {
+    /// `zoom` scales around the centre on top of that: 1 is the fit,
+    /// larger crops in — how a landscape clip is made to fill 9:16.
+    static func fitTransform(naturalSize: CGSize, preferredTransform: CGAffineTransform, zoom: CGFloat = 1, into render: CGSize = renderSize) -> CGAffineTransform {
         let oriented = CGRect(origin: .zero, size: naturalSize).applying(preferredTransform)
         let width = abs(oriented.width), height = abs(oriented.height)
         guard width > 0, height > 0 else { return .identity }
-        let scale = min(render.width / width, render.height / height)
+        let scale = min(render.width / width, render.height / height) * max(0.1, zoom)
         return preferredTransform
             .concatenating(CGAffineTransform(translationX: -oriented.minX, y: -oriented.minY))
             .concatenating(CGAffineTransform(scaleX: scale, y: scale))
             .concatenating(CGAffineTransform(translationX: (render.width - width * scale) / 2,
                                              y: (render.height - height * scale) / 2))
+    }
+
+    /// The zoom at which a clip just covers the frame — no black bars.
+    static func fillZoom(naturalSize: CGSize, preferredTransform: CGAffineTransform, into render: CGSize = renderSize) -> Double {
+        let oriented = CGRect(origin: .zero, size: naturalSize).applying(preferredTransform)
+        let width = abs(oriented.width), height = abs(oriented.height)
+        guard width > 0, height > 0 else { return 1 }
+        let fit = min(render.width / width, render.height / height)
+        let fill = max(render.width / width, render.height / height)
+        return Double(fill / fit)
     }
 
     /// The clips laid end to end, each framed for 1080×1920. No captions:
@@ -96,7 +108,7 @@ enum VideoExporter {
             instruction.timeRange = CMTimeRange(start: cursor, duration: range.duration)
             instruction.backgroundColor = CGColor(gray: 0, alpha: 1)
             let layer = AVMutableVideoCompositionLayerInstruction(assetTrack: videoTrack)
-            layer.setTransform(fitTransform(naturalSize: natural, preferredTransform: preferred), at: cursor)
+            layer.setTransform(fitTransform(naturalSize: natural, preferredTransform: preferred, zoom: CGFloat(clip.zoom)), at: cursor)
             instruction.layerInstructions = [layer]
             instructions.append(instruction)
             cursor = cursor + range.duration

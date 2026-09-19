@@ -3,6 +3,24 @@ import XCTest
 @testable import MyClicky
 
 final class VideoProjectTests: XCTestCase {
+    func testClipWithoutZoomKeyDecodesToOne() throws {
+        let json = """
+        {"id":"\(UUID().uuidString)","source":"file:///tmp/a.mov","sourceDuration":10,"inPoint":0,"outPoint":10,"cues":[]}
+        """.data(using: .utf8)!
+        let clip = try JSONDecoder().decode(EditClip.self, from: json)
+        XCTAssertEqual(clip.zoom, 1)
+    }
+
+    func testSetZoomClamps() throws {
+        var project = VideoProject(name: "z")
+        let clip = EditClip(source: URL(fileURLWithPath: "/tmp/a.mov"), sourceDuration: 10)
+        project.clips = [clip]
+        project.setZoom(99, for: clip.id)
+        XCTAssertEqual(project.clips[0].zoom, EditClip.maxZoom)
+        project.setZoom(0.2, for: clip.id)
+        XCTAssertEqual(project.clips[0].zoom, EditClip.minZoom)
+    }
+
     private func clip(_ name: String, duration: Double, cues: [CaptionCue] = []) -> EditClip {
         EditClip(source: URL(fileURLWithPath: "/tmp/\(name).mov"), sourceDuration: duration, cues: cues)
     }
@@ -182,6 +200,25 @@ final class CaptionBuilderTests: XCTestCase {
 }
 
 final class VideoExporterGeometryTests: XCTestCase {
+    func testFillZoomForLandscapeCoversPortraitFrame() {
+        let zoom = VideoExporter.fillZoom(naturalSize: CGSize(width: 1920, height: 1080), preferredTransform: .identity)
+        XCTAssertEqual(zoom, (1920.0 / 1080.0) / (1080.0 / 1920.0), accuracy: 0.001)
+    }
+
+    func testFillZoomForPortraitIsOne() {
+        XCTAssertEqual(VideoExporter.fillZoom(naturalSize: CGSize(width: 1080, height: 1920), preferredTransform: .identity), 1, accuracy: 0.0001)
+    }
+
+    func testZoomScalesAroundCentre() {
+        let render = VideoExporter.renderSize
+        let plain = VideoExporter.fitTransform(naturalSize: CGSize(width: 1080, height: 1920), preferredTransform: .identity, zoom: 1, into: render)
+        let zoomed = VideoExporter.fitTransform(naturalSize: CGSize(width: 1080, height: 1920), preferredTransform: .identity, zoom: 2, into: render)
+        let centre = CGPoint(x: 540, y: 960)
+        XCTAssertEqual(centre.applying(plain).x, centre.applying(zoomed).x, accuracy: 0.5)
+        XCTAssertEqual(centre.applying(plain).y, centre.applying(zoomed).y, accuracy: 0.5)
+        XCTAssertEqual(zoomed.a, plain.a * 2, accuracy: 0.0001)
+    }
+
     private func apply(_ t: CGAffineTransform, to size: CGSize) -> CGRect {
         CGRect(origin: .zero, size: size).applying(t).standardized
     }

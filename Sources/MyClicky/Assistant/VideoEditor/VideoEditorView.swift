@@ -135,12 +135,10 @@ struct VideoEditorView: View {
                 preview(height: max(220, min(geo.size.height * 0.42, 520)))
                     .frame(maxWidth: .infinity)
                 timelineCard
-                HStack(alignment: .top, spacing: 14) {
-                    controlsCard.fixedSize(horizontal: true, vertical: false)
-                    captionsCard
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                controlsCard
+                captionsCard
             }
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
         }
     }
 
@@ -410,15 +408,14 @@ struct VideoEditorView: View {
             if hasClips {
                 VStack {
                     Spacer()
-                    HStack {
+                    HStack(spacing: 4) {
                         Spacer()
-                        Text("9:16")
-                            .font(.system(size: 10, weight: .bold, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.5))
-                            .padding(.horizontal, 6).padding(.vertical, 3)
-                            .background(Capsule().fill(Color.black.opacity(0.5)))
-                            .padding(8)
+                        if let zoom = model.selectedClip?.zoom, zoom > 1.01 {
+                            badge(String(format: "%.1f×", zoom), tint: accent)
+                        }
+                        badge("9:16", tint: .white.opacity(0.5))
                     }
+                    .padding(8)
                 }
             }
         }
@@ -427,6 +424,25 @@ struct VideoEditorView: View {
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
         .onTapGesture { if hasClips { model.togglePlay() } }
+        .gesture(
+            MagnificationGesture()
+                .onChanged { value in
+                    guard hasClips, let base = pinchBaseZoom ?? model.selectedClip?.zoom else { return }
+                    if pinchBaseZoom == nil { pinchBaseZoom = base }
+                    model.setZoom(base * value)
+                }
+                .onEnded { _ in pinchBaseZoom = nil }
+        )
+    }
+
+    @State private var pinchBaseZoom: Double?
+
+    private func badge(_ text: String, tint: Color) -> some View {
+        Text(text)
+            .font(.system(size: 10, weight: .bold, design: .monospaced))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 6).padding(.vertical, 3)
+            .background(Capsule().fill(Color.black.opacity(0.55)))
     }
 
     // MARK: Timeline
@@ -503,24 +519,27 @@ struct VideoEditorView: View {
         return Button { model.selectClip(clip.id) } label: {
             ZStack(alignment: .topLeading) {
                 waveform(for: clip, width: width)
-                VStack(alignment: .leading, spacing: 3) {
-                    Spacer().frame(height: 6)
+                HStack(spacing: 5) {
                     Text(clip.name)
-                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
                         .lineLimit(1)
-                    HStack(spacing: 4) {
-                        Text(VideoEditorModel.clock(clip.duration))
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.6))
-                        if !clip.cues.isEmpty {
-                            Image(systemName: "captions.bubble.fill").font(.system(size: 9))
-                                .foregroundStyle(accent.opacity(0.9))
-                        }
+                    Text(VideoEditorModel.clock(clip.duration))
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.6))
+                    if !clip.cues.isEmpty {
+                        Image(systemName: "captions.bubble.fill").font(.system(size: 9))
+                            .foregroundStyle(accent.opacity(0.9))
                     }
-                    Spacer(minLength: 0)
+                    if clip.zoom > 1.01 {
+                        Text(String(format: "%.1f×", clip.zoom))
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .foregroundStyle(accent)
+                    }
                 }
-                .padding(.horizontal, 8)
-                .shadow(color: .black.opacity(0.8), radius: 2)
+                .padding(.horizontal, 6).padding(.vertical, 3)
+                .background(Capsule().fill(Color.black.opacity(0.6)))
+                .padding(5)
+                .frame(maxWidth: width, alignment: .leading)
             }
             .frame(width: width, height: 68, alignment: .topLeading)
             .background(
@@ -538,28 +557,48 @@ struct VideoEditorView: View {
         .help(clip.source.path)
     }
 
-    /// The sound inside the clip: one bar per couple of points, tall where
-    /// someone's talking, flat in the gaps — that's where to cut.
+    /// The sound inside the clip as a soft mirrored shape: tall where
+    /// someone's talking, thin in the gaps. What's already played is tinted
+    /// so the playhead has a trail.
     @ViewBuilder
     private func waveform(for clip: EditClip, width: CGFloat) -> some View {
-        let barWidth: CGFloat = 2
-        let gap: CGFloat = 1
-        let count = max(1, Int(width / (barWidth + gap)))
-        if let bars = model.waveformBars(for: clip, count: count) {
+        let step: CGFloat = 3
+        let count = max(2, Int(width / step))
+        if let raw = model.waveformBars(for: clip, count: count) {
+            let bars = smoothed(raw)
+            let played = playedFraction(of: clip)
             Canvas { context, size in
                 let mid = size.height / 2
-                let usable = size.height - 8
+                let amp = (size.height - 14) / 2
+                var shape = Path()
+                shape.move(to: CGPoint(x: 0, y: mid))
                 for (i, level) in bars.enumerated() {
-                    let h = max(1.5, CGFloat(level) * usable)
-                    let rect = CGRect(x: CGFloat(i) * (barWidth + gap), y: mid - h / 2, width: barWidth, height: h)
-                    context.fill(Path(roundedRect: rect, cornerRadius: 1),
-                                 with: .color(.white.opacity(0.28 + 0.4 * Double(level))))
+                    shape.addLine(to: CGPoint(x: CGFloat(i) * step, y: mid - max(1, CGFloat(level) * amp)))
                 }
+                shape.addLine(to: CGPoint(x: CGFloat(bars.count - 1) * step, y: mid))
+                for (i, level) in bars.enumerated().reversed() {
+                    shape.addLine(to: CGPoint(x: CGFloat(i) * step, y: mid + max(1, CGFloat(level) * amp)))
+                }
+                shape.closeSubpath()
+
+                let quiet = Gradient(colors: [.white.opacity(0.42), .white.opacity(0.16), .white.opacity(0.42)])
+                let loud = Gradient(colors: [accent.opacity(0.95), accent.opacity(0.55), accent.opacity(0.95)])
+                let top = CGPoint(x: 0, y: 0), bottom = CGPoint(x: 0, y: size.height)
+                context.fill(shape, with: .linearGradient(quiet, startPoint: top, endPoint: bottom))
+                if played > 0 {
+                    var trail = context
+                    trail.clip(to: Path(CGRect(x: 0, y: 0, width: size.width * played, height: size.height)))
+                    trail.fill(shape, with: .linearGradient(loud, startPoint: top, endPoint: bottom))
+                }
+                // A hairline through the middle so silence still reads as a track.
+                var line = Path()
+                line.move(to: CGPoint(x: 0, y: mid))
+                line.addLine(to: CGPoint(x: size.width, y: mid))
+                context.stroke(line, with: .color(.white.opacity(0.12)), lineWidth: 1)
             }
             .frame(width: width, height: 68)
             .allowsHitTesting(false)
         } else if model.waveforms[clip.source.path] == nil {
-            // Still listening — a quiet placeholder so the block doesn't jump.
             HStack {
                 Spacer()
                 ProgressView().controlSize(.mini).opacity(0.5)
@@ -567,6 +606,21 @@ struct VideoEditorView: View {
             }
             .frame(width: width, height: 68)
         }
+    }
+
+    /// Three-tap average so the shape rolls instead of spiking.
+    private func smoothed(_ bars: [Float]) -> [Float] {
+        guard bars.count > 2 else { return bars }
+        return bars.indices.map { i in
+            let a = bars[max(0, i - 1)], b = bars[i], c = bars[min(bars.count - 1, i + 1)]
+            return (a + 2 * b + c) / 4
+        }
+    }
+
+    /// How much of this clip is behind the playhead, 0…1.
+    private func playedFraction(of clip: EditClip) -> CGFloat {
+        guard let start = model.project?.start(of: clip.id), clip.duration > 0 else { return 0 }
+        return CGFloat(min(max((model.currentTime - start) / clip.duration, 0), 1))
     }
 
     // MARK: Controls
@@ -581,6 +635,8 @@ struct VideoEditorView: View {
                     groupDivider
                     cutGroup
                     groupDivider
+                    zoomGroup
+                    groupDivider
                     clipGroup
                     Spacer(minLength: 0)
                 }
@@ -591,11 +647,17 @@ struct VideoEditorView: View {
                         cutGroup
                         Spacer(minLength: 0)
                     }
-                    clipGroup
+                    HStack(alignment: .top, spacing: 18) {
+                        zoomGroup
+                        groupDivider
+                        clipGroup
+                        Spacer(minLength: 0)
+                    }
                 }
                 VStack(alignment: .leading, spacing: 12) {
                     watchGroup
                     cutGroup
+                    zoomGroup
                     clipGroup
                 }
             }
@@ -619,6 +681,16 @@ struct VideoEditorView: View {
             tile("scissors", "Split", help: "Cut the clip into two at the playhead — then remove the half you don't want") { model.splitAtPlayhead() }
             tile("arrow.right.to.line", "Cut before", help: "Throw away everything in this clip before the playhead") { model.trimStartToPlayhead() }
             tile("arrow.left.to.line", "Cut after", help: "Throw away everything in this clip after the playhead") { model.trimEndToPlayhead() }
+        }
+    }
+
+    private var zoomGroup: some View {
+        let zoom = model.selectedClip?.zoom ?? 1
+        return controlGroup("ZOOM  \(String(format: "%.1f×", zoom))") {
+            tile("minus.magnifyingglass", "Out", help: "Zoom out (or pinch on the video)") { model.zoom(by: 1 / 1.15) }
+            tile("plus.magnifyingglass", "In", help: "Zoom in — crops from the centre (or pinch on the video)") { model.zoom(by: 1.15) }
+            tile("rectangle.arrowtriangle.2.inward", "Fill", help: "Zoom just enough that the picture fills the whole 9:16 frame with no black bars") { model.zoomToFill() }
+            tile("rectangle.arrowtriangle.2.outward", "Fit", help: "Show the whole picture (black bars if it's landscape)") { model.setZoom(1) }
         }
     }
 

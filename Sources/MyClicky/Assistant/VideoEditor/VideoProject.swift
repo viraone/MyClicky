@@ -38,14 +38,35 @@ struct EditClip: Codable, Equatable, Identifiable {
     /// Captions for this stretch, in source seconds. Empty until the user
     /// generates them; kept through moves, splits and trims.
     var cues: [CaptionCue]
+    /// How far the picture is zoomed into the 9:16 frame. 1 fits the whole
+    /// clip (letterboxed if it's landscape); bigger crops in from the centre.
+    var zoom: Double
 
-    init(id: UUID = UUID(), source: URL, sourceDuration: Double, inPoint: Double = 0, outPoint: Double? = nil, cues: [CaptionCue] = []) {
+    static let minZoom = 1.0
+    static let maxZoom = 4.0
+
+    init(id: UUID = UUID(), source: URL, sourceDuration: Double, inPoint: Double = 0, outPoint: Double? = nil, cues: [CaptionCue] = [], zoom: Double = 1) {
         self.id = id
         self.source = source
         self.sourceDuration = sourceDuration
         self.inPoint = inPoint
         self.outPoint = outPoint ?? sourceDuration
         self.cues = cues
+        self.zoom = zoom
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, source, sourceDuration, inPoint, outPoint, cues, zoom }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        source = try c.decode(URL.self, forKey: .source)
+        sourceDuration = try c.decode(Double.self, forKey: .sourceDuration)
+        inPoint = try c.decode(Double.self, forKey: .inPoint)
+        outPoint = try c.decode(Double.self, forKey: .outPoint)
+        cues = try c.decode([CaptionCue].self, forKey: .cues)
+        // Projects saved before zoom existed show every clip fitted.
+        zoom = try c.decodeIfPresent(Double.self, forKey: .zoom) ?? 1
     }
 
     var duration: Double { max(0, outPoint - inPoint) }
@@ -198,6 +219,11 @@ struct VideoProject: Codable, Equatable {
         clips[index].outPoint = sourceTime
         clips[index].cues.removeAll { $0.start >= sourceTime }
         return true
+    }
+
+    mutating func setZoom(_ zoom: Double, for clipID: UUID) {
+        guard let index = clips.firstIndex(where: { $0.id == clipID }) else { return }
+        clips[index].zoom = min(max(zoom, EditClip.minZoom), EditClip.maxZoom)
     }
 
     mutating func setCueText(_ cueID: UUID, _ text: String) {
