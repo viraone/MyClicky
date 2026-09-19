@@ -466,7 +466,9 @@ struct VideoEditorView: View {
                         }
                     }
                     .font(.system(size: 12, design: .monospaced))
-                    Text("The bars are the sound: tall where you're talking, flat in the gaps — cut in a gap. Drag to move through the video.")
+                    Text(scrubbing
+                         ? "Let go to stop at \(VideoEditorModel.clock(model.currentTime))."
+                         : "Click anywhere on the timeline to jump there, or drag to scrub. The bars are the sound: tall where you're talking, flat in the gaps — cut in a gap.")
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.38))
                 } else {
@@ -504,9 +506,19 @@ struct VideoEditorView: View {
             }
             .frame(height: 68)
             .contentShape(Rectangle())
+            .onHover { inside in
+                if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+            }
+            // One gesture covers both a click (jump there) and a drag (scrub).
+            // The clip under the new time becomes the selected clip.
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
+                        scrubbing = true
+                        model.seek(to: total * min(max(value.location.x / geo.size.width, 0), 1))
+                    }
+                    .onEnded { value in
+                        scrubbing = false
                         model.seek(to: total * min(max(value.location.x / geo.size.width, 0), 1))
                     }
             )
@@ -514,10 +526,11 @@ struct VideoEditorView: View {
         .frame(height: 68)
     }
 
+    @State private var scrubbing = false
+
     private func clipBlock(_ clip: EditClip, width: CGFloat) -> some View {
         let selected = clip.id == model.selectedClipID
-        return Button { model.selectClip(clip.id) } label: {
-            ZStack(alignment: .topLeading) {
+        return ZStack(alignment: .topLeading) {
                 waveform(for: clip, width: width)
                 HStack(spacing: 5) {
                     Text(clip.name)
@@ -551,10 +564,8 @@ struct VideoEditorView: View {
                     .strokeBorder(selected ? accent : Color.white.opacity(0.14), lineWidth: selected ? 1.5 : 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.white.opacity(0.9))
-        .help(clip.source.path)
+            .foregroundStyle(.white.opacity(0.9))
+            .help("\(clip.source.path)\nClick anywhere on the timeline to jump there; drag to scrub.")
     }
 
     /// The sound inside the clip as a soft mirrored shape: tall where
