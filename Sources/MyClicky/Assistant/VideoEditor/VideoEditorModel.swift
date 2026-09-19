@@ -513,8 +513,12 @@ final class VideoEditorModel: ObservableObject {
         note = "Stopped listening. Press Auto-subtitle to carry on."
     }
 
+    private var transcriptionRun = 0
+
     private func transcribeAndCaption() async {
         guard var p = project else { return }
+        transcriptionRun += 1
+        let run = transcriptionRun
         let locale = spokenLocale
         let pending = p.untranscribedSources
         for (index, url) in pending.enumerated() {
@@ -523,12 +527,14 @@ final class VideoEditorModel: ObservableObject {
             phase = .transcribing(listening)
             do {
                 let words = try await VideoTranscriber.words(in: url, locale: locale) { [weak self] progress in
-                    guard let self, case .transcribing = self.phase else { return }
+                    // A stopped pass can still have a report in flight;
+                    // only the live one may draw.
+                    guard let self, self.transcriptionRun == run, case .transcribing = self.phase else { return }
                     listening.secondsHeard = progress.secondsHeard
                     listening.latestText = progress.latestText
                     self.phase = .transcribing(listening)
                 }
-                guard var current = project else { return }
+                guard !Task.isCancelled, transcriptionRun == run, var current = project else { return }
                 current.transcripts[url.path] = words
                 project = current
                 p = current

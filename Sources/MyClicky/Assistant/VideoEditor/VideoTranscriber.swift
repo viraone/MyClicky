@@ -68,6 +68,14 @@ enum VideoTranscriber {
                 var finished = false
                 let task = recognizer.recognitionTask(with: request) { result, error in
                     guard !finished else { return }
+                    // A cancelled task can come back as an error *or* as a
+                    // "final" result holding whatever it had; neither is a
+                    // transcript.
+                    if box.cancelled {
+                        finished = true
+                        cont.resume(throwing: CancellationError())
+                        return
+                    }
                     if let result {
                         let segments = result.bestTranscription.segments
                         if result.isFinal {
@@ -83,9 +91,7 @@ enum VideoTranscriber {
                     } else if let error {
                         finished = true
                         let ns = error as NSError
-                        if box.cancelled {
-                            cont.resume(throwing: CancellationError())
-                        } else if ns.domain == "kAFAssistantErrorDomain" && (ns.code == 1110 || ns.code == 203) {
+                        if ns.domain == "kAFAssistantErrorDomain" && (ns.code == 1110 || ns.code == 203) {
                             // Silence comes back as an error; that's an empty transcript, not a failure.
                             cont.resume(returning: [])
                         } else {

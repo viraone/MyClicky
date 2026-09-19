@@ -172,6 +172,17 @@ final class VideoProjectTests: XCTestCase {
         XCTAssertTrue(project.untranscribedSources.isEmpty)
     }
 
+    func testATranscriptWithNoWordsStillNeedsListeningTo() {
+        var project = VideoProject(name: "t")
+        project.append(clip("a", duration: 10))
+        // What a stopped pass used to leave behind: one empty "word".
+        project.transcripts["/tmp/a.mov"] = [SpokenWord(text: "", start: 0, end: 0)]
+        XCTAssertFalse(project.isTranscribed(URL(fileURLWithPath: "/tmp/a.mov")))
+        XCTAssertEqual(project.untranscribedSources.map(\.lastPathComponent), ["a.mov"])
+        project.transcripts["/tmp/a.mov"] = [SpokenWord(text: "hi", start: 0, end: 0.3)]
+        XCTAssertTrue(project.untranscribedSources.isEmpty)
+    }
+
     func testSRTAndTranscript() {
         var project = VideoProject(name: "t")
         project.append(clip("a", duration: 70, cues: [

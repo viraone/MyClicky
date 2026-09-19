@@ -370,14 +370,21 @@ struct VideoProject: Codable, Equatable {
         }
     }
 
-    /// Source files that still need listening to.
+    /// Source files that still need listening to. A transcript with no
+    /// actual words in it doesn't count as heard: a silent take is cheap to
+    /// listen to again, and it's what a stopped pass could leave behind.
     var untranscribedSources: [URL] {
         var seen = Set<String>()
         return clips.compactMap { clip in
-            guard transcripts[clip.source.path] == nil, !seen.contains(clip.source.path) else { return nil }
+            guard !isTranscribed(clip.source), !seen.contains(clip.source.path) else { return nil }
             seen.insert(clip.source.path)
             return clip.source
         }
+    }
+
+    func isTranscribed(_ source: URL) -> Bool {
+        guard let words = transcripts[source.path] else { return false }
+        return words.contains { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
 
     // MARK: Transcript
