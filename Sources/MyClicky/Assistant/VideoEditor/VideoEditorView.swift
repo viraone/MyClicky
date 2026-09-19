@@ -8,6 +8,7 @@ struct VideoEditorView: View {
     @ObservedObject var model: VideoEditorModel
     let accent: Color
     @State private var newProjectName = ""
+    @State private var showingStyles = false
 
     var body: some View {
         Group {
@@ -416,19 +417,12 @@ struct VideoEditorView: View {
                 .buttonStyle(.plain)
             }
             if let cue = model.currentCue {
-                VStack {
-                    Spacer()
-                    Text(cue.displayText)
-                        .font(.system(size: max(11, height * 0.028), weight: .heavy, design: .rounded))
-                        .foregroundStyle(.white)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(RoundedRectangle(cornerRadius: 7).fill(Color.black.opacity(0.65)))
-                        .padding(.horizontal, width * 0.08)
-                    // Same spot as the burned-in caption: its centre 30% up.
-                    Spacer().frame(height: height * model.style.centreFromBottom - 14)
-                }
+                // The export's own caption layer, so the preview is exact.
+                CaptionLayerView(text: cue.displayText,
+                                 highlight: model.style.accentColor == nil ? nil : model.project?.wordIndex(in: cue, at: model.currentTime),
+                                 style: model.style, placement: .onVideo)
+                    .frame(width: width, height: height)
+                    .allowsHitTesting(false)
             }
             if hasClips {
                 VStack {
@@ -852,17 +846,102 @@ struct VideoEditorView: View {
                 }
                 if let cues = model.project?.timelineCues, !cues.isEmpty {
                     Divider().overlay(Color.white.opacity(0.08))
-                    ScrollView {
-                        VStack(spacing: 4) {
-                            ForEach(cues) { cue in cueRow(cue) }
+                    styleRow
+                    if showingStyles {
+                        styleShelf
+                    } else {
+                        ScrollView {
+                            VStack(spacing: 4) {
+                                ForEach(cues) { cue in cueRow(cue) }
+                            }
                         }
+                        .frame(maxHeight: .infinity)
                     }
-                    .frame(maxHeight: .infinity)
                 }
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
         .background(translationRunner)
+    }
+
+    // MARK: Subtitle styles
+
+    /// The current look, with a way in to VEED's style shelf.
+    private var styleRow: some View {
+        let preset = model.stylePreset
+        return HStack(spacing: 10) {
+            styleTile(preset, selected: false, compact: true)
+                .frame(width: 92, height: 48)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Subtitle style")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+                Text("\(preset.name) · \(preset.category.rawValue)")
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.45))
+            }
+            Spacer()
+            Button(showingStyles ? "Done" : "Change") { withAnimation(.easeInOut(duration: 0.15)) { showingStyles.toggle() } }
+                .buttonStyle(.plain)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(showingStyles ? Color.black : accent)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .background(Capsule().fill(showingStyles ? accent : accent.opacity(0.14)))
+                .help(showingStyles ? "Back to the subtitle lines" : "Pick a different look for every subtitle")
+        }
+    }
+
+    /// Every preset, on VEED's shelves. Click one and the video, the export
+    /// and the list all switch at once.
+    private var styleShelf: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                ForEach(SubtitleStylePreset.Category.allCases) { category in
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(category.rawValue)
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.9))
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 3), spacing: 8) {
+                            ForEach(category.presets) { preset in
+                                Button { model.setSubtitleStyle(preset) } label: {
+                                    styleTile(preset, selected: preset == model.stylePreset, compact: false)
+                                        .aspectRatio(1.75, contentMode: .fit)
+                                }
+                                .buttonStyle(.plain)
+                                .help(preset.name)
+                            }
+                        }
+                    }
+                }
+                Text("Styles that colour a word follow your voice, word by word.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.4))
+            }
+            .padding(.bottom, 4)
+        }
+        .frame(maxHeight: .infinity)
+    }
+
+    private func styleTile(_ preset: SubtitleStylePreset, selected: Bool, compact: Bool) -> some View {
+        ZStack(alignment: .topLeading) {
+            RoundedRectangle(cornerRadius: compact ? 8 : 10, style: .continuous)
+                .fill(Color(white: 0.62))
+            CaptionLayerView(text: SubtitleStylePreset.sampleText, highlight: preset.sampleHighlight,
+                             style: preset.style, placement: .fitted)
+                .allowsHitTesting(false)
+            if selected {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.white, accent)
+                    .padding(6)
+            }
+        }
+        .overlay(
+            RoundedRectangle(cornerRadius: compact ? 8 : 10, style: .continuous)
+                .strokeBorder(selected ? accent : Color.white.opacity(0.08), lineWidth: selected ? 2 : 1)
+        )
+        .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     private var subtitleSettings: some View {

@@ -3,6 +3,11 @@ import XCTest
 @testable import MyClicky
 
 final class VideoProjectTests: XCTestCase {
+    private func assertClose(_ a: [Double], _ b: [Double], _ message: String = "", file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(a.count, b.count, message, file: file, line: line)
+        for (x, y) in zip(a, b) { XCTAssertEqual(x, y, accuracy: 1e-9, message, file: file, line: line) }
+    }
+
     func testSplitThenRejoinRestoresTheClipAndItsCaptions() {
         var project = VideoProject(name: "r")
         var clip = EditClip(source: URL(fileURLWithPath: "/tmp/a.mov"), sourceDuration: 10)
@@ -220,6 +225,39 @@ final class VideoProjectTests: XCTestCase {
 
     // MARK: Subtitles & translation
 
+    func testProjectWithoutAStyleDecodesToTheDefaultAndKeepsItsPick() throws {
+        let json = """
+        {"name":"n","clips":[],"created":0}
+        """.data(using: .utf8)!
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+        let p = try decoder.decode(VideoProject.self, from: json)
+        XCTAssertEqual(p.stylePreset, .clean)
+        var picked = p
+        picked.subtitleStyle = SubtitleStylePreset.comic.rawValue
+        let round = try JSONDecoder().decode(VideoProject.self, from: JSONEncoder().encode(picked))
+        XCTAssertEqual(round.stylePreset, .comic)
+        picked.subtitleStyle = "something-from-the-future"
+        XCTAssertEqual(picked.stylePreset, .clean, "an unknown name falls back rather than breaking the project")
+    }
+
+    func testWordStartsComeFromTheTranscriptWhenTheLineStillMatches() {
+        let source = URL(fileURLWithPath: "/tmp/take.mov")
+        let words = [SpokenWord(text: "one", start: 10, end: 10.3), SpokenWord(text: "two", start: 10.5, end: 10.8), SpokenWord(text: "three", start: 11.2, end: 11.5)]
+        let cue = CaptionCue(start: 10, end: 12, text: "one two three")
+        var clip = EditClip(source: source, sourceDuration: 60, inPoint: 8, outPoint: 20)
+        clip.cues = [cue]
+        let p = VideoProject(name: "n", clips: [clip], transcripts: [source.path: words])
+        let timeline = p.timelineCues[0]
+        assertClose(p.wordStarts(for: timeline), [2, 2.5, 3.2])
+        XCTAssertEqual(p.wordIndex(in: timeline, at: 2.6), 1)
+        XCTAssertEqual(p.wordIndex(in: timeline, at: 1.9), 0)
+
+        var edited = p
+        edited.setCueText(cue.id, "one two three four")
+        assertClose(edited.wordStarts(for: edited.timelineCues[0]), [2, 2.5, 3, 3.5], "edited lines spread evenly")
+    }
+
     func testProjectWithoutLanguageKeysDecodesToEnglishWithNoTranslation() throws {
         let json = Data("""
         {"version":1,"name":"old","clips":[],"created":"2026-01-01T00:00:00Z","transcripts":{}}
@@ -427,6 +465,38 @@ final class VideoExporterGeometryTests: XCTestCase {
         XCTAssertEqual(second?.beginTime ?? 0, 2, accuracy: 1e-9)
         XCTAssertEqual(second?.duration ?? 0, 1, accuracy: 1e-9)
         XCTAssertEqual(second?.isRemovedOnCompletion, false)
+    }
+
+    func testWordRangesSplitOnSpacesAndStopAtTheTranslationLine() {
+        let ranges = VideoExporter.wordRanges(in: "Just  like this\nComo esto")
+        XCTAssertEqual(ranges.count, 3)
+        XCTAssertEqual(("Just  like this\nComo esto" as NSString).substring(with: ranges[2]), "this")
+    }
+
+    @MainActor
+    func testEveryStyleDrawsALegibleCaption() {
+        for preset in SubtitleStylePreset.allCases {
+            let layer = VideoExporter.captionLayer(text: SubtitleStylePreset.sampleText, highlight: preset.sampleHighlight, style: preset.style)
+            XCTAssertGreaterThan(layer.frame.width, 100, preset.name)
+            XCTAssertLessThanOrEqual(layer.frame.width, 1080 * preset.style.maxWidthShare + 1, preset.name)
+            let texts = (layer.sublayers ?? []).compactMap { $0 as? CATextLayer }
+            XCTAssertEqual(texts.count, preset.style.strokeColor == nil ? 1 : 2, "\(preset.name): outline is its own layer")
+            XCTAssertEqual(layer.backgroundColor?.alpha ?? 0 > 0, preset.style.pillColor != nil, preset.name)
+        }
+        XCTAssertEqual(SubtitleStylePreset.allCases.count, SubtitleStylePreset.Category.allCases.reduce(0) { $0 + $1.presets.count })
+    }
+
+    @MainActor
+    func testStylesThatFollowTheSpeakerGetALayerPerWord() {
+        let cue = TimelineCue(id: UUID(), start: 1, end: 3, text: "one two three")
+        let plain = VideoExporter.captionOverlay(for: [cue], style: SubtitleStylePreset.clean.style) { _ in [1, 1.5, 2.5] }
+        XCTAssertEqual(plain.sublayers?.count, 1)
+        let karaoke = VideoExporter.captionOverlay(for: [cue], style: SubtitleStylePreset.pop.style) { _ in [1, 1.5, 2.5] }
+        let layers = karaoke.sublayers ?? []
+        XCTAssertEqual(layers.count, 3)
+        let second = layers[1].animation(forKey: "visible") as? CABasicAnimation
+        XCTAssertEqual(second?.beginTime ?? 0, 1.5, accuracy: 1e-9)
+        XCTAssertEqual(second?.duration ?? 0, 1, accuracy: 1e-9)
     }
 }
 
