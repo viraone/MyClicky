@@ -3,6 +3,37 @@ import XCTest
 @testable import MyClicky
 
 final class VideoProjectTests: XCTestCase {
+    func testSplitThenRejoinRestoresTheClipAndItsCaptions() {
+        var project = VideoProject(name: "r")
+        var clip = EditClip(source: URL(fileURLWithPath: "/tmp/a.mov"), sourceDuration: 10)
+        clip.cues = [CaptionCue(start: 1, end: 2, text: "one"), CaptionCue(start: 6, end: 7, text: "two")]
+        project.clips = [clip]
+
+        XCTAssertTrue(project.split(at: 4))
+        XCTAssertEqual(project.clips.count, 2)
+        XCTAssertTrue(project.canRejoin(after: 0))
+        XCTAssertFalse(project.canRejoin(after: 1))
+
+        XCTAssertTrue(project.rejoin(after: 0))
+        XCTAssertEqual(project.clips.count, 1)
+        XCTAssertEqual(project.clips[0].id, clip.id)
+        XCTAssertEqual(project.clips[0].inPoint, 0)
+        XCTAssertEqual(project.clips[0].outPoint, 10)
+        XCTAssertEqual(project.clips[0].cues.map(\.text), ["one", "two"])
+    }
+
+    func testRejoinRefusesDifferentFootageOrAGap() {
+        var project = VideoProject(name: "r")
+        let a = EditClip(source: URL(fileURLWithPath: "/tmp/a.mov"), sourceDuration: 10, inPoint: 0, outPoint: 4)
+        let gap = EditClip(source: URL(fileURLWithPath: "/tmp/a.mov"), sourceDuration: 10, inPoint: 5, outPoint: 10)
+        let other = EditClip(source: URL(fileURLWithPath: "/tmp/b.mov"), sourceDuration: 10, inPoint: 4, outPoint: 10)
+        project.clips = [a, gap, other]
+        XCTAssertFalse(project.canRejoin(after: 0))
+        XCTAssertFalse(project.canRejoin(after: 1))
+        XCTAssertFalse(project.rejoin(after: 0))
+        XCTAssertEqual(project.clips.count, 3)
+    }
+
     func testNudgeMovesTheCutByFramesAndClamps() {
         var project = VideoProject(name: "n")
         let clip = EditClip(source: URL(fileURLWithPath: "/tmp/a.mov"), sourceDuration: 10, inPoint: 2, outPoint: 8)
