@@ -8,10 +8,23 @@ import UniformTypeIdentifiers
 /// as long as it lives, so switching tabs doesn't lose the edit.
 @MainActor
 final class VideoEditorModel: ObservableObject {
+    /// Where an Auto-subtitle pass has got to, for the panel to show.
+    struct Listening: Equatable {
+        var clipName: String
+        var index: Int
+        var count: Int
+        /// Seconds of this take heard so far, and its length.
+        var secondsHeard: Double = 0
+        var duration: Double
+        /// The last few words, so the user can see it working.
+        var latestText: String = ""
+        var fraction: Double { duration > 0 ? min(1, secondsHeard / duration) : 0 }
+    }
+
     enum Phase: Equatable {
         case idle
         case importing(Int, Int)
-        case transcribing(String, Int, Int)
+        case transcribing(Listening)
         case translating(Int)
         case exporting(Double)
         case exported(URL)
@@ -484,7 +497,20 @@ final class VideoEditorModel: ObservableObject {
             note = "Import a clip first."
             return
         }
-        Task { await transcribeAndCaption() }
+        guard !phase.isBusy else { return }
+        transcription = Task { await transcribeAndCaption() }
+    }
+
+    private var transcription: Task<Void, Never>?
+
+    /// Stop an Auto-subtitle pass. Takes already heard stay heard, so
+    /// pressing the button again picks up where this left off.
+    func stopSubtitling() {
+        guard case .transcribing = phase else { return }
+        transcription?.cancel()
+        transcription = nil
+        phase = .idle
+        note = "Stopped listening. Press Auto-subtitle to carry on."
     }
 
     private func transcribeAndCaption() async {
@@ -492,13 +518,22 @@ final class VideoEditorModel: ObservableObject {
         let locale = spokenLocale
         let pending = p.untranscribedSources
         for (index, url) in pending.enumerated() {
-            phase = .transcribing(url.lastPathComponent, index + 1, pending.count)
+            let duration = p.clips.first { $0.source == url }?.sourceDuration ?? 0
+            var listening = Listening(clipName: url.lastPathComponent, index: index + 1, count: pending.count, duration: duration)
+            phase = .transcribing(listening)
             do {
-                let words = try await VideoTranscriber.words(in: url, locale: locale)
+                let words = try await VideoTranscriber.words(in: url, locale: locale) { [weak self] progress in
+                    guard let self, case .transcribing = self.phase else { return }
+                    listening.secondsHeard = progress.secondsHeard
+                    listening.latestText = progress.latestText
+                    self.phase = .transcribing(listening)
+                }
                 guard var current = project else { return }
                 current.transcripts[url.path] = words
                 project = current
                 p = current
+            } catch is CancellationError {
+                return
             } catch {
                 phase = .failed(error.localizedDescription)
                 save()
@@ -668,7 +703,7 @@ final class VideoEditorModel: ObservableObject {
                     rejoin(after: toStart <= toEnd ? before : after)
                 }
             }
-        case "CAPTIONS": if !phase.isBusy { generateCaptions() }
+        case "CAPTIONS": if case .transcribing = phase { stopSubtitling() } else if !phase.isBusy { generateCaptions() }
         case "EXPORT": if !phase.isBusy { export() }
         default: break
         }

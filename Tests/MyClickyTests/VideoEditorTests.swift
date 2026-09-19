@@ -441,6 +441,21 @@ final class VideoEditorModelTests: XCTestCase {
         XCTAssertNil(model.project)
     }
 
+    func testListeningProgressIsAFractionOfTheTakeAndStopIsHarmlessWhenIdle() {
+        var l = VideoEditorModel.Listening(clipName: "a.mov", index: 1, count: 1, duration: 200)
+        XCTAssertEqual(l.fraction, 0)
+        l.secondsHeard = 50
+        XCTAssertEqual(l.fraction, 0.25, accuracy: 1e-9)
+        l.secondsHeard = 999
+        XCTAssertEqual(l.fraction, 1, "never past the end")
+        XCTAssertEqual(VideoEditorModel.Listening(clipName: "b", index: 1, count: 1, duration: 0).fraction, 0)
+
+        let model = VideoEditorModel()
+        model.stopSubtitling()
+        XCTAssertEqual(model.phase, .idle)
+        XCTAssertNil(model.note, "stopping when nothing was running says nothing")
+    }
+
     func testFolderNamesAreSafeAndUnique() {
         XCTAssertEqual(VideoEditorModel.folderName(for: "  Notion: review / take 2  ", existing: { _ in false }), "Notion- review - take 2")
         XCTAssertEqual(VideoEditorModel.folderName(for: "", existing: { _ in false }), "Untitled")

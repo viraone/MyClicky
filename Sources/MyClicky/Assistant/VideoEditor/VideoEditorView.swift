@@ -311,9 +311,11 @@ struct VideoEditorView: View {
             case .importing(let i, let n):
                 ProgressView().controlSize(.small).tint(accent)
                 coachText("Reading clip \(i) of \(n)…")
-            case .transcribing(let name, let i, let n):
-                ProgressView().controlSize(.small).tint(accent)
-                coachText("Listening to \(name) — take \(i) of \(n). This takes about as long as the clip.")
+            case .transcribing(let l):
+                ProgressView(value: l.fraction).frame(width: 160).tint(accent)
+                coachText(l.count > 1
+                          ? "Listening to take \(l.index) of \(l.count) — \(VideoEditorModel.clock(l.secondsHeard)) of \(VideoEditorModel.clock(l.duration)) heard. Words appear below as it goes."
+                          : "Listening — \(VideoEditorModel.clock(l.secondsHeard)) of \(VideoEditorModel.clock(l.duration)) heard. Words appear below as it goes.")
             case .translating(let n):
                 ProgressView().controlSize(.small).tint(accent)
                 coachText("Translating \(n) subtitle\(n == 1 ? "" : "s") into \(SubtitleLanguages.name(ofLanguage: model.translationLanguage ?? ""))…")
@@ -884,8 +886,64 @@ struct VideoEditorView: View {
             }
             .frame(minHeight: 28)
 
-            autoSubtitleButton
+            if case .transcribing(let listening) = model.phase {
+                listeningPanel(listening)
+            } else {
+                autoSubtitleButton
+            }
         }
+    }
+
+    /// What replaces the green button while Peeky listens: how far it is,
+    /// the words as they arrive, and a way to stop.
+    private func listeningPanel(_ l: VideoEditorModel.Listening) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                ProgressView().controlSize(.small).tint(accent)
+                Text(l.count > 1 ? "Listening to \(l.clipName) — take \(l.index) of \(l.count)" : "Listening to \(l.clipName)")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .lineLimit(1)
+                Spacer()
+                Text("\(VideoEditorModel.clock(l.secondsHeard)) / \(VideoEditorModel.clock(l.duration))")
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(accent)
+                Text("\(Int(l.fraction * 100))%")
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.7))
+                    .frame(width: 40, alignment: .trailing)
+            }
+            ProgressView(value: l.fraction)
+                .tint(accent)
+                .frame(maxWidth: .infinity)
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "quote.opening")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.white.opacity(0.35))
+                    .padding(.top, 2)
+                Text(l.latestText.isEmpty ? "Warming up — the first words take a few seconds…" : "…\(l.latestText)")
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(l.latestText.isEmpty ? .white.opacity(0.45) : .white.opacity(0.85))
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .animation(.easeOut(duration: 0.15), value: l.latestText)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(0.05)))
+            HStack(spacing: 10) {
+                Text("Peeky is turning the speech into text on this Mac — nothing is uploaded. It runs about as fast as the clip plays; you can keep trimming meanwhile.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                pillButton("Stop", icon: "stop.fill") { model.stopSubtitling() }
+                    .help("Stop listening. What's been heard so far is kept, so you can carry on later.")
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(accent.opacity(0.08)))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(accent.opacity(0.35), lineWidth: 1))
     }
 
     private var spokenLanguagePicker: some View {
