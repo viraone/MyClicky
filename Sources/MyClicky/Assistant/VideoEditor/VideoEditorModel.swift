@@ -184,10 +184,6 @@ final class VideoEditorModel: ObservableObject {
     }
 
     func importClips(_ urls: [URL]) {
-        guard project != nil else {
-            note = "Start a project first, then drop clips in."
-            return
-        }
         let videos = urls.filter { url in
             guard let type = UTType(filenameExtension: url.pathExtension) else { return false }
             return type.conforms(to: .audiovisualContent)
@@ -195,6 +191,12 @@ final class VideoEditorModel: ObservableObject {
         guard !videos.isEmpty else {
             note = "Those aren't video files."
             return
+        }
+        if project == nil {
+            // Dropping clips onto the start screen starts a project named
+            // after the first take, so nothing has to be typed first.
+            newProject(named: videos[0].deletingPathExtension().lastPathComponent)
+            guard project != nil else { return }
         }
         Task { await importVideos(videos) }
     }
