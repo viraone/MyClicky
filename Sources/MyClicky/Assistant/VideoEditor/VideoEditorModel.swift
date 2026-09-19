@@ -39,6 +39,9 @@ final class VideoEditorModel: ObservableObject {
     @Published private(set) var isPlaying = false
     /// The last thing worth telling the user, under the toolbar.
     @Published private(set) var note: String?
+    /// The most recent finished export this session, so the step tracker
+    /// can show Export as done.
+    @Published private(set) var lastExport: URL?
     var style = CaptionStyle()
 
     let player = AVPlayer()
@@ -142,6 +145,7 @@ final class VideoEditorModel: ObservableObject {
         selectedClipID = project.clips.first?.id
         phase = .idle
         currentTime = 0
+        lastExport = nil
         refreshRecentProjects()
         rebuildPreview(seekTo: 0)
     }
@@ -358,6 +362,11 @@ final class VideoEditorModel: ObservableObject {
         currentTime = clamped
         player.seek(to: CMTime(seconds: clamped, preferredTimescale: VideoExporter.timescale),
                     toleranceBefore: .zero, toleranceAfter: .zero)
+        // The cut buttons act on the clip under the playhead, so keep the
+        // selection following it — no separate "select" step to learn.
+        if let (index, _) = project?.locate(clamped), let id = project?.clips[safe: index]?.id {
+            selectedClipID = id
+        }
     }
 
     func selectClip(_ id: UUID) {
@@ -386,6 +395,7 @@ final class VideoEditorModel: ObservableObject {
                 try? project.srt.write(to: base.appendingPathExtension("srt"), atomically: true, encoding: .utf8)
                 try? project.transcript.write(to: base.appendingPathExtension("txt"), atomically: true, encoding: .utf8)
                 phase = .exported(movie)
+                lastExport = movie
                 note = "Saved \(movie.lastPathComponent) with its .srt and transcript."
                 NSWorkspace.shared.activateFileViewerSelecting([movie])
             } catch {
