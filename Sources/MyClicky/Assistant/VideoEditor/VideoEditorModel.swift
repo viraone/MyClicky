@@ -136,6 +136,7 @@ final class VideoEditorModel: ObservableObject {
         currentTime = 0
         phase = .idle
         note = nil
+        waveforms = [:]
         refreshRecentProjects()
     }
 
@@ -146,8 +147,10 @@ final class VideoEditorModel: ObservableObject {
         phase = .idle
         currentTime = 0
         lastExport = nil
+        waveforms = [:]
         refreshRecentProjects()
         rebuildPreview(seekTo: 0)
+        loadWaveforms()
     }
 
     /// What typing in the panel's input does here: name a new project.
@@ -229,6 +232,51 @@ final class VideoEditorModel: ObservableObject {
             ? "Added \(added) clip\(added == 1 ? "" : "s")."
             : "Added \(added); couldn't read \(skipped.joined(separator: ", "))."
         rebuildPreview(seekTo: nil)
+        loadWaveforms()
+    }
+
+    // MARK: Waveforms
+
+    /// Loudness peaks per source path, drawn inside the timeline clips.
+    /// Read once per file and cached beside the project as
+    /// `waveforms.json` so reopening is instant.
+    @Published private(set) var waveforms: [String: [Float]] = [:]
+    private var waveformTasks: Set<String> = []
+    private static let waveformsFile = "waveforms.json"
+
+    private func loadWaveforms() {
+        guard let project, let projectFolder else { return }
+        if waveforms.isEmpty,
+           let data = try? Data(contentsOf: projectFolder.appendingPathComponent(Self.waveformsFile)),
+           let cached = try? JSONDecoder().decode([String: [Float]].self, from: data) {
+            waveforms = cached
+        }
+        for url in project.clips.map(\.source) {
+            let key = url.path
+            guard waveforms[key] == nil, !waveformTasks.contains(key) else { continue }
+            waveformTasks.insert(key)
+            Task { [weak self] in
+                let peaks = try? await AudioWaveform.peaks(for: url)
+                guard let self else { return }
+                // A silent or audio-less clip still gets an entry so we
+                // don't try again on every open.
+                self.waveforms[key] = peaks ?? []
+                self.waveformTasks.remove(key)
+                self.saveWaveforms()
+            }
+        }
+    }
+
+    private func saveWaveforms() {
+        guard let projectFolder, let data = try? JSONEncoder().encode(waveforms) else { return }
+        try? data.write(to: projectFolder.appendingPathComponent(Self.waveformsFile), options: .atomic)
+    }
+
+    /// Bars for one clip at a given pixel width — what the timeline draws.
+    func waveformBars(for clip: EditClip, count: Int) -> [Float]? {
+        guard let peaks = waveforms[clip.source.path], !peaks.isEmpty else { return nil }
+        return AudioWaveform.bars(from: peaks, sourceDuration: clip.sourceDuration,
+                                  inPoint: clip.inPoint, outPoint: clip.outPoint, count: count)
     }
 
     func removeSelectedClip() {

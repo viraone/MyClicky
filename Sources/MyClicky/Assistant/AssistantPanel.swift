@@ -1968,6 +1968,9 @@ struct AssistantPanelView: View {
                     CodeDocumentaryView(model: state.documentary, accent: state.accent)
                 case .video:
                     VideoEditorView(model: state.videoEditor, accent: state.accent)
+                        // An editor needs a canvas: the one-line strip only
+                        // shows its header, so stretch to Tall on arrival.
+                        .onAppear { if state.size == .normal { state.onSetSize?(.tall) } }
                 case .extensions:
                     ExtensionsView(state: state)
                 }

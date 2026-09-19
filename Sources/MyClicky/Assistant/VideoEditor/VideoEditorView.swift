@@ -136,8 +136,9 @@ struct VideoEditorView: View {
                     controlsCard
                     captionsCard
                 }
+                .frame(maxWidth: .infinity)
             }
-            .frame(maxHeight: .infinity)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -434,7 +435,7 @@ struct VideoEditorView: View {
 
     // The preview's height comes from the column beside it (capped at 9:16
     // of this width) so the layout doesn't jump as cards grow.
-    private let previewWidth: CGFloat = 320
+    private var previewWidth: CGFloat { 300 }
 
     // MARK: Timeline
 
@@ -457,7 +458,7 @@ struct VideoEditorView: View {
                         }
                     }
                     .font(.system(size: 12, design: .monospaced))
-                    Text("Drag along the timeline to move through your video. Click a clip to jump to it.")
+                    Text("The bars are the sound: tall where you're talking, flat in the gaps — cut in a gap. Drag to move through the video.")
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.38))
                 } else {
@@ -508,23 +509,27 @@ struct VideoEditorView: View {
     private func clipBlock(_ clip: EditClip, width: CGFloat) -> some View {
         let selected = clip.id == model.selectedClipID
         return Button { model.selectClip(clip.id) } label: {
-            VStack(alignment: .leading, spacing: 3) {
-                Spacer().frame(height: 6)
-                Text(clip.name)
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .lineLimit(1)
-                HStack(spacing: 4) {
-                    Text(VideoEditorModel.clock(clip.duration))
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.6))
-                    if !clip.cues.isEmpty {
-                        Image(systemName: "captions.bubble.fill").font(.system(size: 9))
-                            .foregroundStyle(accent.opacity(0.9))
+            ZStack(alignment: .topLeading) {
+                waveform(for: clip, width: width)
+                VStack(alignment: .leading, spacing: 3) {
+                    Spacer().frame(height: 6)
+                    Text(clip.name)
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .lineLimit(1)
+                    HStack(spacing: 4) {
+                        Text(VideoEditorModel.clock(clip.duration))
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.6))
+                        if !clip.cues.isEmpty {
+                            Image(systemName: "captions.bubble.fill").font(.system(size: 9))
+                                .foregroundStyle(accent.opacity(0.9))
+                        }
                     }
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
+                .padding(.horizontal, 8)
+                .shadow(color: .black.opacity(0.8), radius: 2)
             }
-            .padding(.horizontal, 8)
             .frame(width: width, height: 68, alignment: .topLeading)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -534,41 +539,102 @@ struct VideoEditorView: View {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .strokeBorder(selected ? accent : Color.white.opacity(0.14), lineWidth: selected ? 1.5 : 1)
             )
-            .clipped()
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
         .foregroundStyle(.white.opacity(0.9))
         .help(clip.source.path)
     }
 
+    /// The sound inside the clip: one bar per couple of points, tall where
+    /// someone's talking, flat in the gaps — that's where to cut.
+    @ViewBuilder
+    private func waveform(for clip: EditClip, width: CGFloat) -> some View {
+        let barWidth: CGFloat = 2
+        let gap: CGFloat = 1
+        let count = max(1, Int(width / (barWidth + gap)))
+        if let bars = model.waveformBars(for: clip, count: count) {
+            Canvas { context, size in
+                let mid = size.height / 2
+                let usable = size.height - 8
+                for (i, level) in bars.enumerated() {
+                    let h = max(1.5, CGFloat(level) * usable)
+                    let rect = CGRect(x: CGFloat(i) * (barWidth + gap), y: mid - h / 2, width: barWidth, height: h)
+                    context.fill(Path(roundedRect: rect, cornerRadius: 1),
+                                 with: .color(.white.opacity(0.28 + 0.4 * Double(level))))
+                }
+            }
+            .frame(width: width, height: 68)
+            .allowsHitTesting(false)
+        } else if model.waveforms[clip.source.path] == nil {
+            // Still listening — a quiet placeholder so the block doesn't jump.
+            HStack {
+                Spacer()
+                ProgressView().controlSize(.mini).opacity(0.5)
+                Spacer()
+            }
+            .frame(width: width, height: 68)
+        }
+    }
+
     // MARK: Controls
 
     private var controlsCard: some View {
         card(title: "CONTROLS", trailing: nil) {
-            HStack(alignment: .top, spacing: 18) {
-                controlGroup("WATCH") {
-                    tile(model.isPlaying ? "pause.fill" : "play.fill", model.isPlaying ? "Pause" : "Play",
-                         help: "Play or pause") { model.togglePlay() }
-                    tile("backward.end.fill", "Start", help: "Jump to the beginning") { model.seek(to: 0) }
-                    tile("gobackward.5", "−5 s", help: "Go back five seconds") { model.seek(to: model.currentTime - 5) }
-                    tile("goforward.5", "+5 s", help: "Go forward five seconds") { model.seek(to: model.currentTime + 5) }
+            // Three groups side by side when there's room; otherwise the
+            // groups wrap onto two rows rather than pushing the panel wider.
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 18) {
+                    watchGroup
+                    groupDivider
+                    cutGroup
+                    groupDivider
+                    clipGroup
+                    Spacer(minLength: 0)
                 }
-                groupDivider
-                controlGroup("CUT AT THE PLAYHEAD") {
-                    tile("scissors", "Split", help: "Cut the clip into two at the playhead — then remove the half you don't want") { model.splitAtPlayhead() }
-                    tile("arrow.right.to.line", "Cut before", help: "Throw away everything in this clip before the playhead") { model.trimStartToPlayhead() }
-                    tile("arrow.left.to.line", "Cut after", help: "Throw away everything in this clip after the playhead") { model.trimEndToPlayhead() }
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .top, spacing: 18) {
+                        watchGroup
+                        groupDivider
+                        cutGroup
+                        Spacer(minLength: 0)
+                    }
+                    clipGroup
                 }
-                groupDivider
-                controlGroup("THIS CLIP") {
-                    tile("arrow.left", "Earlier", help: "Move the highlighted clip one place earlier") { model.moveSelectedClip(by: -1) }
-                    tile("arrow.right", "Later", help: "Move the highlighted clip one place later") { model.moveSelectedClip(by: 1) }
-                    tile("trash", "Remove", help: "Take the highlighted clip out of the video (the file stays on disk)", destructive: true) { model.removeSelectedClip() }
+                VStack(alignment: .leading, spacing: 12) {
+                    watchGroup
+                    cutGroup
+                    clipGroup
                 }
-                Spacer(minLength: 0)
             }
             .disabled(!hasClips || model.phase.isBusy)
             .opacity(hasClips ? 1 : 0.4)
+        }
+    }
+
+    private var watchGroup: some View {
+        controlGroup("WATCH") {
+            tile(model.isPlaying ? "pause.fill" : "play.fill", model.isPlaying ? "Pause" : "Play",
+                 help: "Play or pause") { model.togglePlay() }
+            tile("backward.end.fill", "Start", help: "Jump to the beginning") { model.seek(to: 0) }
+            tile("gobackward.5", "−5 s", help: "Go back five seconds") { model.seek(to: model.currentTime - 5) }
+            tile("goforward.5", "+5 s", help: "Go forward five seconds") { model.seek(to: model.currentTime + 5) }
+        }
+    }
+
+    private var cutGroup: some View {
+        controlGroup("CUT AT THE PLAYHEAD") {
+            tile("scissors", "Split", help: "Cut the clip into two at the playhead — then remove the half you don't want") { model.splitAtPlayhead() }
+            tile("arrow.right.to.line", "Cut before", help: "Throw away everything in this clip before the playhead") { model.trimStartToPlayhead() }
+            tile("arrow.left.to.line", "Cut after", help: "Throw away everything in this clip after the playhead") { model.trimEndToPlayhead() }
+        }
+    }
+
+    private var clipGroup: some View {
+        controlGroup("THIS CLIP") {
+            tile("arrow.left", "Earlier", help: "Move the highlighted clip one place earlier") { model.moveSelectedClip(by: -1) }
+            tile("arrow.right", "Later", help: "Move the highlighted clip one place later") { model.moveSelectedClip(by: 1) }
+            tile("trash", "Remove", help: "Take the highlighted clip out of the video (the file stays on disk)", destructive: true) { model.removeSelectedClip() }
         }
     }
 

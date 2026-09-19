@@ -272,3 +272,55 @@ final class VideoEditorModelTests: XCTestCase {
         XCTAssertLessThan(all.firstIndex(of: .video)!, all.firstIndex(of: .extensions)!)
     }
 }
+
+final class AudioWaveformTests: XCTestCase {
+    func testNormalizedBringsTheLoudestMomentToTheTop() {
+        let out = AudioWaveform.normalized([0.1, 0.4, 0.2])
+        XCTAssertEqual(out[1], 1, accuracy: 1e-6)
+        XCTAssertEqual(out[0], sqrt(0.25), accuracy: 1e-6, "soft knee: quiet parts stay visible")
+        XCTAssertEqual(AudioWaveform.normalized([0, 0]), [0, 0], "silence stays flat")
+        XCTAssertEqual(AudioWaveform.normalized([]), [])
+    }
+
+    func testBarsShowOnlyTheTrimmedStretch() {
+        // 10 s source, one peak per second; the clip keeps 4–8 s.
+        let peaks: [Float] = [0, 0, 0, 0, 1, 0.2, 0.2, 0.8, 0, 0]
+        let bars = AudioWaveform.bars(from: peaks, sourceDuration: 10, inPoint: 4, outPoint: 8, count: 4)
+        XCTAssertEqual(bars, [1, 0.2, 0.2, 0.8])
+    }
+
+    func testBarsResampleUpAndDown() {
+        let peaks: [Float] = [0.1, 0.9, 0.3, 0.7]
+        XCTAssertEqual(AudioWaveform.bars(from: peaks, sourceDuration: 4, inPoint: 0, outPoint: 4, count: 2), [0.9, 0.7],
+                       "downsampling keeps the peak of each stretch")
+        XCTAssertEqual(AudioWaveform.bars(from: peaks, sourceDuration: 4, inPoint: 0, outPoint: 4, count: 8).count, 8)
+        XCTAssertEqual(AudioWaveform.bars(from: [], sourceDuration: 4, inPoint: 0, outPoint: 4, count: 8), [])
+        XCTAssertEqual(AudioWaveform.bars(from: peaks, sourceDuration: 4, inPoint: 3, outPoint: 3, count: 8), [])
+    }
+
+    func testReadsPeaksFromARealFile() async throws {
+        // Half a second of silence, then half a second of tone.
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("waveform-\(UUID().uuidString).m4a")
+        defer { try? FileManager.default.removeItem(at: url) }
+        // Write in its own scope so the file is closed before it's read.
+        try {
+            let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!
+            let file = try AVAudioFile(forWriting: url, settings: [
+                AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 44100, AVNumberOfChannelsKey: 1,
+            ], commonFormat: .pcmFormatFloat32, interleaved: false)
+            let frames: AVAudioFrameCount = 44100
+            let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames)!
+            buffer.frameLength = frames
+            let data = buffer.floatChannelData![0]
+            for i in 0..<Int(frames) {
+                data[i] = i < 22050 ? 0 : 0.8 * sin(Float(i) * 2 * .pi * 440 / 44100)
+            }
+            try file.write(from: buffer)
+        }()
+
+        let peaks = try await AudioWaveform.peaks(for: url, buckets: 20)
+        XCTAssertEqual(peaks.count, 20)
+        XCTAssertLessThan(peaks[0..<8].max() ?? 1, 0.15, "the silent half is flat")
+        XCTAssertGreaterThan(peaks[12..<20].min() ?? 0, 0.7, "the tone half is tall")
+    }
+}
