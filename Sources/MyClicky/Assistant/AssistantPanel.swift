@@ -760,7 +760,15 @@ final class AssistantState: ObservableObject {
     /// Shrunk in place to a thin bar — mic, phase, nothing else. Distinct
     /// from `collapsed`, which tucks a dot into the screen corner.
     @Published var strip = false
-    @Published var tab: AssistantTab = .ask
+    /// A hidden tab can't become the current one: when the app tries to
+    /// switch there (TALK lands on Actions, a capture on Capture…) the panel
+    /// stays put, so hidden really means gone from view.
+    @Published var tab: AssistantTab = .ask {
+        didSet {
+            guard hiddenTabs.contains(tab) else { return }
+            tab = hiddenTabs.contains(oldValue) ? (visibleTabs.first ?? oldValue) : oldValue
+        }
+    }
     /// Tabs the user has switched off in the gear menu. They drop out of the
     /// tab bar; everything else about them stays put so turning one back on
     /// is instant. Persisted so the choice sticks between launches.
@@ -2025,13 +2033,6 @@ struct AssistantPanelView: View {
         .animation(.easeInOut(duration: 0.35), value: state.phase)
     }
 
-    /// Tabs the bar lists: the ones switched on, plus the current tab if a
-    /// hotkey landed on a hidden one — the user should always see where
-    /// they are.
-    private var barTabs: [AssistantTab] {
-        AssistantTab.allCases.filter { state.isTabVisible($0) || $0 == state.tab }
-    }
-
     // Tab row along the top edge, drawn the way a code editor draws its
     // terminal tabs: plain text, the active one lifted on a soft rectangle.
     private var tabBar: some View {
@@ -2042,7 +2043,7 @@ struct AssistantPanelView: View {
                 // tab and lists the others.
                 tabDropdown
             } else {
-                ForEach(barTabs, id: \.self) { tab in
+                ForEach(state.visibleTabs, id: \.self) { tab in
                     Button {
                         state.tab = tab
                     } label: {
@@ -2071,7 +2072,7 @@ struct AssistantPanelView: View {
 
     private var tabDropdown: some View {
         Menu {
-            ForEach(barTabs, id: \.self) { tab in
+            ForEach(state.visibleTabs, id: \.self) { tab in
                 Button {
                     state.tab = tab
                 } label: {

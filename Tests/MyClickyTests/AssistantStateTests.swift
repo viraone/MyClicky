@@ -257,6 +257,19 @@ final class HiddenTabsTests: XCTestCase {
         XCTAssertEqual(state.tab, .talk)
     }
 
+    func testSwitchingToAHiddenTabStaysPut() {
+        let state = AssistantState()
+        state.setTab(.talk, visible: false)
+        state.setTab(.captureDictate, visible: false)
+        state.tab = .code
+        state.tab = .talk               // what pressing TALK does
+        XCTAssertEqual(state.tab, .code)
+        state.tab = .captureDictate     // what a region capture does
+        XCTAssertEqual(state.tab, .code)
+        state.tab = .ask
+        XCTAssertEqual(state.tab, .ask)
+    }
+
     func testTheLastVisibleTabCannotBeHidden() {
         let state = AssistantState()
         for tab in AssistantTab.allCases { state.setTab(tab, visible: false) }
