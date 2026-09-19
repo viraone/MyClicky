@@ -761,6 +761,34 @@ final class AssistantState: ObservableObject {
     /// from `collapsed`, which tucks a dot into the screen corner.
     @Published var strip = false
     @Published var tab: AssistantTab = .ask
+    /// Tabs the user has switched off in the gear menu. They drop out of the
+    /// tab bar; everything else about them stays put so turning one back on
+    /// is instant. Persisted so the choice sticks between launches.
+    @Published var hiddenTabs: Set<AssistantTab> = AssistantState.loadHiddenTabs() {
+        didSet {
+            UserDefaults.standard.set(hiddenTabs.map(\.rawValue).sorted(), forKey: AssistantState.hiddenTabsKey)
+            if hiddenTabs.contains(tab), let fallback = visibleTabs.first { tab = fallback }
+        }
+    }
+    static let hiddenTabsKey = "assistantHiddenTabs"
+    /// The tabs the bar shows, in their usual order. Never empty: the last
+    /// visible tab can't be hidden, so there's always somewhere to land.
+    var visibleTabs: [AssistantTab] { AssistantTab.allCases.filter { !hiddenTabs.contains($0) } }
+    func isTabVisible(_ tab: AssistantTab) -> Bool { !hiddenTabs.contains(tab) }
+    /// Whether the gear menu lets this tab be switched off — false only for
+    /// the sole remaining visible tab.
+    func canHideTab(_ tab: AssistantTab) -> Bool { hiddenTabs.contains(tab) || visibleTabs.count > 1 }
+    func setTab(_ tab: AssistantTab, visible: Bool) {
+        if visible { hiddenTabs.remove(tab) }
+        else if canHideTab(tab) { hiddenTabs.insert(tab) }
+    }
+    static func loadHiddenTabs(defaults: UserDefaults = .standard) -> Set<AssistantTab> {
+        let raw = defaults.stringArray(forKey: hiddenTabsKey) ?? []
+        var hidden = Set(raw.compactMap(AssistantTab.init(rawValue:)))
+        // A stale or hand-edited default must never leave the bar empty.
+        if hidden.count >= AssistantTab.allCases.count { hidden.remove(.ask) }
+        return hidden
+    }
     /// Last dictation result (on the clipboard, paired with the capture if any).
     @Published var dictationText = ""
     /// Last region capture (saved to disk; on the clipboard, paired with the dictation if any).
@@ -1648,6 +1676,8 @@ struct AssistantPanelView: View {
     /// What the hovered header button does, shown in the header itself —
     /// system tooltips never appear over a non-activating panel.
     @State private var headerHint: String?
+    /// The gear menu's tab on/off switches, open over the header.
+    @State private var showingTabSettings = false
     @State private var copiedAnswerID: UUID?
     @State private var copiedAskQuestion = false
     @FocusState private var fieldFocused: Bool
@@ -1825,6 +1855,12 @@ struct AssistantPanelView: View {
                 tabBar
                 if state.micLive { recBadge }
                 Spacer()
+                headerButton("gearshape", help: "Choose which tabs to show") {
+                    showingTabSettings.toggle()
+                }
+                .popover(isPresented: $showingTabSettings, arrowEdge: .bottom) {
+                    tabSettingsPopover
+                }
                 headerButton("arrow.down.right.and.arrow.up.left", help: "Minimize to corner") {
                     state.onMinimize?()
                 }
@@ -1989,6 +2025,13 @@ struct AssistantPanelView: View {
         .animation(.easeInOut(duration: 0.35), value: state.phase)
     }
 
+    /// Tabs the bar lists: the ones switched on, plus the current tab if a
+    /// hotkey landed on a hidden one — the user should always see where
+    /// they are.
+    private var barTabs: [AssistantTab] {
+        AssistantTab.allCases.filter { state.isTabVisible($0) || $0 == state.tab }
+    }
+
     // Tab row along the top edge, drawn the way a code editor draws its
     // terminal tabs: plain text, the active one lifted on a soft rectangle.
     private var tabBar: some View {
@@ -1999,7 +2042,7 @@ struct AssistantPanelView: View {
                 // tab and lists the others.
                 tabDropdown
             } else {
-                ForEach(AssistantTab.allCases, id: \.self) { tab in
+                ForEach(barTabs, id: \.self) { tab in
                     Button {
                         state.tab = tab
                     } label: {
@@ -2028,7 +2071,7 @@ struct AssistantPanelView: View {
 
     private var tabDropdown: some View {
         Menu {
-            ForEach(AssistantTab.allCases, id: \.self) { tab in
+            ForEach(barTabs, id: \.self) { tab in
                 Button {
                     state.tab = tab
                 } label: {
@@ -2062,6 +2105,39 @@ struct AssistantPanelView: View {
         .menuIndicator(.hidden)
         .fixedSize()
         .help(state.tab.rawValue)
+    }
+
+    /// Gear menu: one switch per tab. Off drops it from the bar; the last
+    /// visible tab's switch is greyed out so the bar never empties.
+    private var tabSettingsPopover: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Tabs")
+                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                .kerning(1)
+                .foregroundStyle(.white.opacity(0.85))
+            Text("Switch off the ones you don't use.")
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.55))
+            Divider().overlay(Color.white.opacity(0.12))
+            ForEach(AssistantTab.allCases, id: \.self) { tab in
+                Toggle(isOn: Binding(
+                    get: { state.isTabVisible(tab) },
+                    set: { state.setTab(tab, visible: $0) }
+                )) {
+                    Label(tab.rawValue, systemImage: tab.icon)
+                        .font(.system(size: 13, design: .monospaced))
+                        .foregroundStyle(.white.opacity(state.isTabVisible(tab) ? 0.95 : 0.55))
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .tint(state.accent)
+                .disabled(!state.canHideTab(tab))
+                .help(state.canHideTab(tab) ? tab.rawValue : "Keep at least one tab")
+            }
+        }
+        .padding(14)
+        .frame(width: 260)
+        .background(Color(red: 0.10, green: 0.10, blue: 0.12))
     }
 
     /// The one line that tells the user where they are in the voice flow —
