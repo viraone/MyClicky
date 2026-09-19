@@ -14,6 +14,18 @@ final class RemoteControlServiceTests: XCTestCase {
         XCTAssertEqual(tabs, ["CODE", "TERMINAL"])
     }
 
+    func testVideoCommandsAreForwardedTrimmed() {
+        let service = RemoteControlService()
+        var commands: [String] = []
+        service.onVideo = { commands.append($0) }
+
+        service.handle("VIDEO JOG -3")
+        service.handle("VIDEO PLAYPAUSE ")
+        service.handle("TAB VIDEO")
+
+        XCTAssertEqual(commands, ["JOG -3", "PLAYPAUSE"])
+    }
+
     func testEnterIsForwardedExactlyOnce() {
         let service = RemoteControlService()
         var presses = 0

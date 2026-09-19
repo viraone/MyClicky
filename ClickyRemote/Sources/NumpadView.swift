@@ -53,12 +53,22 @@ struct NumpadView: View {
     }
     /// Which "cartridge" is loaded: the desktop remote, Peeky Code, or an app remote.
     @State private var mode: RemoteMode = .remote
-    /// Playlist the Spotify "Add to playlist" button targets; editable by tapping the label.
-    @AppStorage("spotifyPlaylist") private var spotifyPlaylist = "Playlist 2027"
     /// Documentary answers are silent on the phone unless the user opts in.
     @AppStorage("documentaryReadoutEnabled") private var documentaryReadoutEnabled = false
-    @State private var editingPlaylist = false
-    @State private var playlistDraft = ""
+    /// What the Peeky Video dial moves: the playhead, or one edge of the selected clip.
+    enum JogMode: String, CaseIterable {
+        case scrub = "Playhead", trimStart = "Trim start", trimEnd = "Trim end"
+        var icon: String {
+            switch self {
+            case .scrub: "playhead"
+            case .trimStart: "arrow.right.to.line"
+            case .trimEnd: "arrow.left.to.line"
+            }
+        }
+    }
+    @State private var jogMode: JogMode = .scrub
+    /// Ten frames per detent instead of one, for covering ground.
+    @State private var jogCoarse = false
     /// The pending single-tap Open, held back until the double-tap window
     /// closes; a second tap cancels it and sends Quit instead.
     @State private var youtubeOpenTap: DispatchWorkItem?
@@ -71,7 +81,7 @@ struct NumpadView: View {
         case remote = "Mobile Peeky"
         case code = "PEEKY CODE"
         case doc = "PEEKY DOC"
-        case spotify = "SPOTIFY"
+        case video = "PEEKY VIDEO"
         case whatsapp = "WHATSAPP"
         case youtube = "YOUTUBE"
 
@@ -80,7 +90,7 @@ struct NumpadView: View {
             case .remote: ""
             case .code: "chevron.left.forwardslash.chevron.right"
             case .doc: "film.stack"
-            case .spotify: "music.note"
+            case .video: "film"
             case .whatsapp: "bubble.left.and.bubble.right.fill"
             case .youtube: "play.rectangle.fill"
             }
@@ -93,6 +103,7 @@ struct NumpadView: View {
             case .remote: "PEEKY"
             case .code: "PEEKY CODE"
             case .doc: "DOC"
+            case .video: "VIDEO"
             default: rawValue
             }
         }
@@ -102,7 +113,7 @@ struct NumpadView: View {
             case .remote: Snes.purple
             case .code: Snes.red
             case .doc: Snes.doc
-            case .spotify: Snes.spotify
+            case .video: Snes.video
             case .whatsapp: Snes.whatsapp
             case .youtube: Snes.youtube
             }
@@ -113,7 +124,7 @@ struct NumpadView: View {
             case .remote: "Tap PEEKY to move it to the corner, or ON to bring it back"
             case .code: "Peeky Code mode — Terminal and Enter control Peeky on your Mac"
             case .doc: "Peeky Doc — play a documentary, then Ask Peeky about the moment on screen"
-            case .spotify: "Spotify mode — buttons control the Spotify app on your Mac"
+            case .video: "Peeky Video — play, cut and export the project open on your Mac; spin the dial to move frame by frame"
             case .whatsapp: "WhatsApp mode — buttons control the WhatsApp app on your Mac"
             case .youtube: "YouTube mode — buttons control the YouTube tab open in your browser"
             }
@@ -233,7 +244,7 @@ struct NumpadView: View {
             RemoteMode.code.rawValue,
             RemoteMode.doc.rawValue,
             "REFRESH",
-            RemoteMode.spotify.rawValue,
+            RemoteMode.video.rawValue,
             RemoteMode.whatsapp.rawValue,
             RemoteMode.youtube.rawValue,
         ]
@@ -247,7 +258,7 @@ struct NumpadView: View {
             case .remote: keypad
             case .code: keypad
             case .doc: docPad
-            case .spotify: spotifyPad
+            case .video: videoPad
             case .whatsapp: whatsappPad
             case .youtube: youtubePad
             }
@@ -261,7 +272,7 @@ struct NumpadView: View {
             // The trailing padding is what holds it off the right
             // edge — raise it to move Talk further left, lower it to
             // push it back toward the corner.
-            if mode != .remote && mode != .code && mode != .doc { cornerTalkButton.padding(.trailing, 44) }
+            if mode != .remote && mode != .code && mode != .doc && mode != .video { cornerTalkButton.padding(.trailing, 44) }
         }
         // A confirmation is the one thing that must not be missed —
         // it used to live on the Talk pad, so it now covers whichever
@@ -1108,156 +1119,6 @@ struct NumpadView: View {
         statusText = "WhatsApp — opening \(chat.label) on your Mac"
     }
 
-    // MARK: - Spotify pad (controls the Spotify app on the Mac)
-
-    private var spotifyPad: some View {
-        VStack(spacing: 8) {
-            // Header: wordmark + editable target-playlist chip.
-            HStack(spacing: 8) {
-                Circle().fill(Snes.spotify).frame(width: 8, height: 8)
-                Text("Spotify")
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
-                Text("on your Mac")
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.45))
-                Spacer()
-                Button {
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    client.collapse()
-                    statusText = "Peeky toggled on your Mac — tap again to collapse / bring back"
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: "sparkles").font(.system(size: 11, weight: .bold))
-                        Text("PEEKY")
-                            .font(.system(size: 11, weight: .black, design: .monospaced))
-                        Text("show / hide")
-                            .font(.system(size: 10, weight: .semibold, design: .rounded))
-                            .opacity(0.7)
-                    }
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 10).padding(.vertical, 5)
-                    .background(
-                        Capsule().fill(LinearGradient(colors: [Snes.blue.lighter(0.25), Snes.blue],
-                                                      startPoint: .top, endPoint: .bottom))
-                    )
-                    .overlay(Capsule().strokeBorder(.white.opacity(0.2), lineWidth: 1))
-                    .shadow(color: Snes.blue.opacity(0.5), radius: 6, y: 2)
-                }
-                .buttonStyle(SpotifyPressStyle())
-                Button {
-                    playlistDraft = spotifyPlaylist
-                    editingPlaylist = true
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: "music.note.list").font(.system(size: 10, weight: .semibold))
-                        Text(spotifyPlaylist).lineLimit(1)
-                        Image(systemName: "pencil").font(.system(size: 9, weight: .semibold)).opacity(0.6)
-                    }
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Snes.spotify.lighter(0.25))
-                    .padding(.horizontal, 10).padding(.vertical, 5)
-                    .background(Capsule().fill(Snes.spotify.opacity(0.14)))
-                    .overlay(Capsule().strokeBorder(Snes.spotify.opacity(0.35), lineWidth: 1))
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.horizontal, 4)
-
-            // Transport: shuffle · previous · PLAY · next · repeat
-            HStack(spacing: 0) {
-                spotifyIcon("shuffle", size: 18, dim: true) { spotifyTapped("SHUFFLE") }
-                Spacer(minLength: 0)
-                spotifyIcon("backward.end.fill", size: 26) { spotifyTapped("PREVIOUS") }
-                Spacer(minLength: 0)
-                Button { spotifyTapped("PLAYPAUSE") } label: {
-                    Image(systemName: "playpause.fill")
-                        .font(.system(size: 26, weight: .black))
-                        .foregroundStyle(.black)
-                        .frame(width: 66, height: 66)
-                        .background(Circle().fill(Snes.spotify))
-                        .shadow(color: Snes.spotify.opacity(0.55), radius: 12, y: 4)
-                }
-                .buttonStyle(SpotifyPressStyle())
-                Spacer(minLength: 0)
-                spotifyIcon("forward.end.fill", size: 26) { spotifyTapped("NEXT") }
-                Spacer(minLength: 0)
-                spotifyIcon("repeat", size: 18, dim: true) { spotifyTapped("REPEAT") }
-            }
-            .padding(.horizontal, 22)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(spotifyCard)
-
-            // Volume pill + Like + What's on
-            HStack(spacing: 8) {
-                HStack(spacing: 0) {
-                    spotifyIcon("speaker.wave.1.fill", size: 16) { spotifyTapped("VOLUME_DOWN") }
-                    Rectangle().fill(.white.opacity(0.08)).frame(width: 1, height: 22)
-                    spotifyIcon("speaker.slash.fill", size: 16, dim: true) { spotifyTapped("MUTE") }
-                    Rectangle().fill(.white.opacity(0.08)).frame(width: 1, height: 22)
-                    spotifyIcon("speaker.wave.3.fill", size: 16) { spotifyTapped("VOLUME_UP") }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(spotifyCard)
-
-                spotifyTile("heart.fill", "Like", accent: Color(red: 0.95, green: 0.35, blue: 0.45)) { spotifyTapped("LIKE") }
-                spotifyTile("waveform", "What's on") { spotifyTapped("NOW_PLAYING") }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            // Playlist actions
-            HStack(spacing: 8) {
-                Button { spotifyTapped("ADD_CURRENT \(spotifyPlaylist)") } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: "plus.circle.fill").font(.system(size: 20, weight: .semibold))
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text("Add to playlist")
-                                .font(.system(size: 13, weight: .bold, design: .rounded))
-                            Text("What's playing → \(spotifyPlaylist)")
-                                .font(.system(size: 10, weight: .medium, design: .rounded))
-                                .opacity(0.7).lineLimit(1)
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    .foregroundStyle(.black)
-                    .padding(.horizontal, 14)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(
-                        RoundedRectangle(cornerRadius: 14)
-                            .fill(LinearGradient(colors: [Snes.spotify.lighter(0.12), Snes.spotify],
-                                                 startPoint: .topLeading, endPoint: .bottomTrailing))
-                    )
-                }
-                .buttonStyle(SpotifyPressStyle())
-                .frame(maxWidth: .infinity)
-                .layoutPriority(1)
-
-                spotifyTile("plus.rectangle.on.folder.fill", "New playlist") { spotifyTapped("NEW_PLAYLIST") }
-                    .frame(width: 120)
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 20)
-                .fill(LinearGradient(colors: [Color(red: 0.13, green: 0.13, blue: 0.14),
-                                              Color(red: 0.07, green: 0.07, blue: 0.08)],
-                                     startPoint: .top, endPoint: .bottom))
-                .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.white.opacity(0.08), lineWidth: 1))
-                .shadow(color: .black.opacity(0.35), radius: 6, y: 4)
-        )
-        .alert("Target playlist", isPresented: $editingPlaylist) {
-            TextField("Playlist name", text: $playlistDraft)
-            Button("Save") {
-                let trimmed = playlistDraft.trimmingCharacters(in: .whitespaces)
-                if !trimmed.isEmpty { spotifyPlaylist = trimmed }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Type the playlist name exactly as it appears in Spotify.")
-        }
-    }
-
     private var spotifyCard: some View {
         RoundedRectangle(cornerRadius: 14)
             .fill(.white.opacity(0.06))
@@ -1295,26 +1156,6 @@ struct NumpadView: View {
         }
         .buttonStyle(SpotifyPressStyle())
         .frame(maxWidth: .infinity)
-    }
-
-    private func spotifyTapped(_ command: String) {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        client.spotify(command)
-        switch command {
-        case "PLAYPAUSE": statusText = "Spotify — play / pause"
-        case "NEXT": statusText = "Spotify — next track"
-        case "PREVIOUS": statusText = "Spotify — previous track"
-        case "VOLUME_UP": statusText = "Spotify — louder"
-        case "VOLUME_DOWN": statusText = "Spotify — quieter"
-        case "MUTE": statusText = "Spotify — mute / unmute"
-        case "SHUFFLE": statusText = "Spotify — shuffle toggled"
-        case "REPEAT": statusText = "Spotify — repeat toggled"
-        case "NOW_PLAYING": statusText = "Spotify — showing what's playing on your Mac"
-        case "NEW_PLAYLIST": statusText = "Spotify — creating a new playlist on your Mac"
-        case "LIKE": statusText = "Spotify — toggling Liked Songs"
-        case _ where command.hasPrefix("ADD_CURRENT "): statusText = "Spotify — adding this song to “\(spotifyPlaylist)”"
-        default: break
-        }
     }
 
     /// A labelled group of controls, like a section printed on the console.
@@ -1435,6 +1276,219 @@ struct NumpadView: View {
             statusText = "Gmail — replying. Type (or dictate) on your Mac, then tap Send."
         default:
             break
+        }
+    }
+
+    // MARK: - Peeky Video pad (second screen + jog dial for the editor tab)
+
+    private var videoPad: some View {
+        let v = client.video
+        return VStack(spacing: 8) {
+            // Header: project on the Mac + the usual show/hide Peeky button.
+            HStack(spacing: 8) {
+                Circle().fill(Snes.video).frame(width: 8, height: 8)
+                Text("Peeky Video")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                Text(v.open ? v.project : "no project open")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.45))
+                    .lineLimit(1)
+                Spacer()
+                Button {
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    client.collapse()
+                    statusText = "Peeky toggled on your Mac — tap again to collapse / bring back"
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "sparkles").font(.system(size: 11, weight: .bold))
+                        Text("PEEKY")
+                            .font(.system(size: 11, weight: .black, design: .monospaced))
+                    }
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(
+                        Capsule().fill(LinearGradient(colors: [Snes.blue.lighter(0.25), Snes.blue],
+                                                      startPoint: .top, endPoint: .bottom))
+                    )
+                    .overlay(Capsule().strokeBorder(.white.opacity(0.2), lineWidth: 1))
+                    .shadow(color: Snes.blue.opacity(0.5), radius: 6, y: 2)
+                }
+                .buttonStyle(SpotifyPressStyle())
+            }
+            .padding(.horizontal, 4)
+
+            // Timecode readout: frames matter when nudging a cut.
+            HStack(spacing: 6) {
+                Text(v.open ? v.timecode : "0:00.00")
+                    .font(.system(size: 20, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Snes.video.lighter(0.3))
+                Text("/ \(v.open ? v.durationCode : "0:00.00")")
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.45))
+                Spacer()
+                if v.open && v.clipCount > 0 {
+                    HStack(spacing: 5) {
+                        Image(systemName: "film").font(.system(size: 10))
+                        Text("\(v.clipIndex)/\(v.clipCount)")
+                        Text(v.clipName).lineLimit(1)
+                        if v.zoom > 1.01 {
+                            Text(String(format: "%.1f×", v.zoom)).foregroundStyle(Snes.video.lighter(0.3))
+                        }
+                        if v.hasCaptions {
+                            Image(systemName: "captions.bubble.fill").font(.system(size: 9))
+                                .foregroundStyle(Snes.video.lighter(0.3))
+                        }
+                    }
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.6))
+                } else if v.open {
+                    Text("import clips on your Mac")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.4))
+                }
+            }
+            .padding(.horizontal, 6)
+
+            // Transport: Start · −5 · PLAY · +5 · Export
+            HStack(spacing: 0) {
+                spotifyIcon("backward.end.fill", size: 18) { videoTapped("START") }
+                spotifyIcon("gobackward.5", size: 22) { videoTapped("SKIP -5") }
+                Button { videoTapped("PLAYPAUSE") } label: {
+                    Image(systemName: v.playing ? "pause.fill" : "play.fill")
+                        .font(.system(size: 26, weight: .black))
+                        .foregroundStyle(.white)
+                        .frame(width: 60, height: 60)
+                        .background(Circle().fill(Snes.video))
+                        .shadow(color: Snes.video.opacity(0.55), radius: 12, y: 4)
+                }
+                .buttonStyle(SpotifyPressStyle())
+                spotifyIcon("goforward.5", size: 22) { videoTapped("SKIP 5") }
+                spotifyIcon(v.phase == "EXPORTING" ? "hourglass" : "square.and.arrow.up", size: 18,
+                            dim: v.busy) { videoTapped("EXPORT") }
+            }
+            .frame(height: 66)
+            .frame(maxWidth: .infinity)
+            .background(spotifyCard)
+
+            // The dial, flanked by the cut buttons and the clip buttons.
+            HStack(spacing: 8) {
+                VStack(spacing: 6) {
+                    videoSideLabel("CUT AT PLAYHEAD")
+                    spotifyTile("scissors", "Split", accent: Snes.video.lighter(0.3)) { videoTapped("SPLIT") }
+                    spotifyTile("arrow.right.to.line", "Cut before") { videoTapped("CUT_BEFORE") }
+                    spotifyTile("arrow.left.to.line", "Cut after") { videoTapped("CUT_AFTER") }
+                }
+                .frame(maxWidth: .infinity)
+
+                JogWheel(accent: Snes.video, mode: jogMode.icon) { detents in jogTurned(detents) }
+                    .frame(width: 168, height: 168)
+
+                VStack(spacing: 6) {
+                    videoSideLabel("THIS CLIP")
+                    spotifyTile("arrow.left", "Earlier") { videoTapped("EARLIER") }
+                    spotifyTile("arrow.right", "Later") { videoTapped("LATER") }
+                    spotifyTile("trash.fill", "Remove", accent: Color(red: 0.95, green: 0.35, blue: 0.35)) { videoTapped("REMOVE") }
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .frame(maxWidth: .infinity)
+
+            // What the dial moves, and how far per click.
+            HStack(spacing: 6) {
+                ForEach(JogMode.allCases, id: \.self) { m in
+                    videoChip(m.rawValue, icon: m.icon, selected: jogMode == m) {
+                        UISelectionFeedbackGenerator().selectionChanged()
+                        jogMode = m
+                        statusText = m == .scrub
+                            ? "Dial moves the playhead — clockwise forward, one frame per click"
+                            : "Dial nudges the selected clip's \(m == .trimStart ? "first" : "last") frame — clockwise trims later"
+                    }
+                }
+                Spacer(minLength: 0)
+                videoChip(jogCoarse ? "×10" : "×1", icon: "dial.medium", selected: jogCoarse) {
+                    UISelectionFeedbackGenerator().selectionChanged()
+                    jogCoarse.toggle()
+                    statusText = jogCoarse ? "Dial: ten frames per click" : "Dial: one frame per click"
+                }
+            }
+
+            // Zoom into the frame, and captions.
+            HStack(spacing: 8) {
+                spotifyTile("minus.magnifyingglass", "Out") { videoTapped("ZOOM_OUT") }
+                spotifyTile("plus.magnifyingglass", "In") { videoTapped("ZOOM_IN") }
+                spotifyTile("rectangle.arrowtriangle.2.inward", "Fill") { videoTapped("FILL") }
+                spotifyTile("rectangle.arrowtriangle.2.outward", "Fit") { videoTapped("FIT") }
+                spotifyTile(v.phase == "TRANSCRIBING" ? "hourglass" : "captions.bubble.fill", "Captions",
+                            accent: Snes.video.lighter(0.3)) { videoTapped("CAPTIONS") }
+            }
+            .frame(height: 54)
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 20)
+                .fill(LinearGradient(colors: [Color(red: 0.13, green: 0.13, blue: 0.14),
+                                              Color(red: 0.07, green: 0.07, blue: 0.08)],
+                                     startPoint: .top, endPoint: .bottom))
+                .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.white.opacity(0.08), lineWidth: 1))
+                .shadow(color: .black.opacity(0.35), radius: 6, y: 4)
+        )
+    }
+
+    private func videoSideLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 8, weight: .heavy, design: .monospaced))
+            .kerning(1)
+            .foregroundStyle(.white.opacity(0.4))
+            .lineLimit(1).minimumScaleFactor(0.7)
+    }
+
+    private func videoChip(_ title: String, icon: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: icon).font(.system(size: 10, weight: .semibold))
+                Text(title).font(.system(size: 10, weight: .bold, design: .rounded))
+            }
+            .foregroundStyle(selected ? .black : .white.opacity(0.75))
+            .padding(.horizontal, 9).padding(.vertical, 6)
+            .background(Capsule().fill(selected ? Snes.video.lighter(0.2) : .white.opacity(0.08)))
+            .overlay(Capsule().strokeBorder(.white.opacity(selected ? 0 : 0.1), lineWidth: 1))
+        }
+        .buttonStyle(SpotifyPressStyle())
+    }
+
+    /// One dial click = one frame (or ten in coarse mode); clockwise is forward.
+    private func jogTurned(_ detents: Int) {
+        UISelectionFeedbackGenerator().selectionChanged()
+        let frames = detents * (jogCoarse ? 10 : 1)
+        switch jogMode {
+        case .scrub: client.video("JOG \(frames)")
+        case .trimStart: client.video("TRIM_START \(frames)")
+        case .trimEnd: client.video("TRIM_END \(frames)")
+        }
+    }
+
+    private func videoTapped(_ command: String) {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        client.video(command)
+        switch command {
+        case "PLAYPAUSE": statusText = "Peeky Video — play / pause"
+        case "START": statusText = "Peeky Video — back to the start"
+        case "SKIP -5": statusText = "Peeky Video — back five seconds"
+        case "SKIP 5": statusText = "Peeky Video — forward five seconds"
+        case "SPLIT": statusText = "Peeky Video — split the clip at the playhead"
+        case "CUT_BEFORE": statusText = "Peeky Video — cut everything before the playhead"
+        case "CUT_AFTER": statusText = "Peeky Video — cut everything after the playhead"
+        case "ZOOM_IN": statusText = "Peeky Video — zoom in on this clip"
+        case "ZOOM_OUT": statusText = "Peeky Video — zoom out"
+        case "FILL": statusText = "Peeky Video — fill the 9:16 frame (no black bars)"
+        case "FIT": statusText = "Peeky Video — show the whole picture"
+        case "EARLIER": statusText = "Peeky Video — moved this clip earlier"
+        case "LATER": statusText = "Peeky Video — moved this clip later"
+        case "REMOVE": statusText = "Peeky Video — removed this clip from the timeline"
+        case "CAPTIONS": statusText = "Peeky Video — listening to your takes and writing captions…"
+        case "EXPORT": statusText = "Peeky Video — exporting 1080×1920 on your Mac…"
+        default: break
         }
     }
 
@@ -2612,7 +2666,8 @@ enum Snes {
     static let yellow = Color(red: 0.96, green: 0.78, blue: 0.10)
     static let green = Color(red: 0.16, green: 0.62, blue: 0.36)
     static let blue = Color(red: 0.16, green: 0.30, blue: 0.72)
-    static let spotify = Color(red: 0.11, green: 0.66, blue: 0.33)
+    /// Peeky Video's editing-suite teal.
+    static let video = Color(red: 0.12, green: 0.62, blue: 0.70)
     static let whatsapp = Color(red: 0.07, green: 0.55, blue: 0.40)
     static let youtube = Color(red: 0.94, green: 0.13, blue: 0.13)
     /// Peeky Code Doc's streaming-service red.
@@ -2665,6 +2720,110 @@ extension Color {
         ui.getRed(&r, green: &g, blue: &b, alpha: &a)
         return Color(red: r + (1 - r) * amount, green: g + (1 - g) * amount,
                      blue: b + (1 - b) * amount, opacity: a)
+    }
+}
+
+/// A jog dial in the spirit of the QW38: drag a finger around the rim and the
+/// ring turns with it, clicking once per detent. Clockwise detents are
+/// positive (forward / later), counter-clockwise negative.
+struct JogWheel: View {
+    var accent: Color
+    /// SF Symbol shown in the hub — what the dial is currently moving.
+    var mode: String
+    var onDetents: (Int) -> Void
+
+    @State private var rotation = 0.0
+    @State private var lastTouchAngle: Double?
+    @State private var residual = 0.0
+    private let detentDegrees = 9.0
+
+    var body: some View {
+        GeometryReader { geo in
+            let size = min(geo.size.width, geo.size.height)
+            let centre = CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
+            ZStack {
+                Circle()
+                    .fill(RadialGradient(colors: [Color(red: 0.24, green: 0.24, blue: 0.26),
+                                                  Color(red: 0.10, green: 0.10, blue: 0.11)],
+                                         center: .center, startRadius: 0, endRadius: size / 2))
+                    .overlay(Circle().strokeBorder(.white.opacity(0.10), lineWidth: 1))
+                    .shadow(color: .black.opacity(0.5), radius: 8, y: 4)
+                // Tick ring — rotates with the finger so the dial feels like it turns.
+                Canvas { context, canvasSize in
+                    let c = CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2)
+                    let r = size / 2
+                    for i in 0..<60 {
+                        let a = (Double(i) * 6 + rotation) * .pi / 180
+                        let major = i % 5 == 0
+                        let inner = r - (major ? 20 : 13)
+                        let outer = r - 7
+                        var tick = Path()
+                        tick.move(to: CGPoint(x: c.x + cos(a) * inner, y: c.y + sin(a) * inner))
+                        tick.addLine(to: CGPoint(x: c.x + cos(a) * outer, y: c.y + sin(a) * outer))
+                        context.stroke(tick, with: .color(.white.opacity(major ? 0.75 : 0.32)),
+                                       style: StrokeStyle(lineWidth: major ? 2.2 : 1.2, lineCap: .round))
+                    }
+                }
+                // Hub
+                Circle()
+                    .fill(LinearGradient(colors: [Color(red: 0.20, green: 0.20, blue: 0.22),
+                                                  Color(red: 0.12, green: 0.12, blue: 0.13)],
+                                         startPoint: .top, endPoint: .bottom))
+                    .overlay(Circle().strokeBorder(.white.opacity(0.08), lineWidth: 1))
+                    .frame(width: size * 0.46, height: size * 0.46)
+                Image(systemName: mode)
+                    .font(.system(size: size * 0.14, weight: .bold))
+                    .foregroundStyle(accent)
+                // Fixed index mark at 12 o'clock.
+                VStack {
+                    Triangle()
+                        .fill(accent)
+                        .frame(width: 10, height: 7)
+                        .rotationEffect(.degrees(180))
+                        .shadow(color: accent.opacity(0.8), radius: 3)
+                    Spacer()
+                }
+                .frame(height: size)
+                .padding(.top, 2)
+            }
+            .frame(width: size, height: size)
+            .position(centre)
+            .contentShape(Circle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let a = atan2(value.location.y - centre.y, value.location.x - centre.x) * 180 / .pi
+                        if let last = lastTouchAngle {
+                            var delta = a - last
+                            if delta > 180 { delta -= 360 } else if delta < -180 { delta += 360 }
+                            rotation += delta
+                            residual += delta
+                            let steps = Int(residual / detentDegrees)
+                            if steps != 0 {
+                                residual -= Double(steps) * detentDegrees
+                                onDetents(steps)
+                            }
+                        }
+                        lastTouchAngle = a
+                    }
+                    .onEnded { _ in
+                        lastTouchAngle = nil
+                        residual = 0
+                    }
+            )
+        }
+    }
+}
+
+/// Points up; rotate for other directions.
+struct Triangle: Shape {
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: rect.midX, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        p.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        p.closeSubpath()
+        return p
     }
 }
 

@@ -30,19 +30,30 @@ final class VideoEditorModel: ObservableObject {
     static let projectsRoot = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Movies/Peeky Video Projects", isDirectory: true)
 
-    @Published private(set) var project: VideoProject?
+    @Published private(set) var project: VideoProject? { didSet { publishRemoteState() } }
     @Published private(set) var projectFolder: URL?
     @Published private(set) var recentProjects: [URL] = []
-    @Published var selectedClipID: UUID?
-    @Published private(set) var phase: Phase = .idle
-    @Published private(set) var currentTime: Double = 0
-    @Published private(set) var isPlaying = false
+    @Published var selectedClipID: UUID? { didSet { publishRemoteState() } }
+    @Published private(set) var phase: Phase = .idle { didSet { publishRemoteState() } }
+    @Published private(set) var currentTime: Double = 0 {
+        didSet {
+            // Thirty updates a second while playing; the phone only needs a
+            // few to keep its timecode moving.
+            let tick = Int(currentTime * 5)
+            if tick != lastPublishedTick { lastPublishedTick = tick; publishRemoteState() }
+        }
+    }
+    @Published private(set) var isPlaying = false { didSet { if isPlaying != oldValue { publishRemoteState() } } }
     /// The last thing worth telling the user, under the toolbar.
     @Published private(set) var note: String?
     /// The most recent finished export this session, so the step tracker
     /// can show Export as done.
     @Published private(set) var lastExport: URL?
     var style = CaptionStyle()
+
+    /// A protocol line for the Peeky Remote phone app (VIDEO_STATE).
+    var onRemoteLine: ((String) -> Void)?
+    private var lastPublishedTick = -1
 
     let player = AVPlayer()
     private var timeObserver: Any?
@@ -475,6 +486,88 @@ final class VideoEditorModel: ObservableObject {
             } catch {
                 phase = .failed(error.localizedDescription)
             }
+        }
+    }
+
+    // MARK: Remote (Peeky Remote on the phone)
+
+    /// One frame at the export rate — the step the phone's dial moves by.
+    static let frameStep = 1.0 / 30.0
+
+    /// `VIDEO_STATE <project>\t<NONE|PLAYING|PAUSED>\t<pos>\t<dur>\t<clip name>\t<clip #>\t<clip count>\t<zoom>\t<captions 0|1>\t<phase>`
+    func remoteStateLine() -> String {
+        let f: (String) -> String = { $0.replacingOccurrences(of: "\t", with: " ").replacingOccurrences(of: "\n", with: " ") }
+        guard let project else { return "VIDEO_STATE \tNONE\t0\t0\t\t0\t0\t1\t0\tIDLE" }
+        let clip = selectedClip
+        let index = project.clips.firstIndex { $0.id == clip?.id }.map { $0 + 1 } ?? 0
+        let phaseName: String
+        switch phase {
+        case .idle: phaseName = "IDLE"
+        case .importing: phaseName = "IMPORTING"
+        case .transcribing: phaseName = "TRANSCRIBING"
+        case .exporting: phaseName = "EXPORTING"
+        case .exported: phaseName = "EXPORTED"
+        case .failed: phaseName = "FAILED"
+        }
+        return "VIDEO_STATE " + [f(project.name), isPlaying ? "PLAYING" : "PAUSED",
+                                 String(format: "%.2f", currentTime), String(format: "%.2f", duration),
+                                 f(clip?.name ?? ""), String(index), String(project.clips.count),
+                                 String(format: "%.2f", clip?.zoom ?? 1),
+                                 (clip?.cues.isEmpty == false) ? "1" : "0", phaseName].joined(separator: "\t")
+    }
+
+    private func publishRemoteState() { onRemoteLine?(remoteStateLine()) }
+
+    /// A command from the phone's Peeky Video pad — the same buttons as the
+    /// tab, plus the dial (JOG / TRIM_START / TRIM_END in frames).
+    func handleRemote(_ command: String) {
+        let parts = command.split(separator: " ", maxSplits: 1).map(String.init)
+        let verb = parts.first ?? ""
+        let number = parts.count > 1 ? Double(parts[1].trimmingCharacters(in: .whitespaces)) : nil
+        switch verb {
+        case "PLAYPAUSE": if hasProject { togglePlay() }
+        case "START": seek(to: 0)
+        case "SKIP": seek(to: currentTime + (number ?? 5))
+        case "SEEK": if let number { seek(to: number) }
+        case "JOG":
+            if isPlaying { player.pause() }
+            seek(to: currentTime + (number ?? 1) * Self.frameStep)
+        case "TRIM_START": nudgeSelectedClipStart(byFrames: number ?? 1)
+        case "TRIM_END": nudgeSelectedClipEnd(byFrames: number ?? 1)
+        case "SPLIT": splitAtPlayhead()
+        case "CUT_BEFORE": trimStartToPlayhead()
+        case "CUT_AFTER": trimEndToPlayhead()
+        case "ZOOM_IN": zoom(by: 1.15)
+        case "ZOOM_OUT": zoom(by: 1 / 1.15)
+        case "FILL": zoomToFill()
+        case "FIT": setZoom(1)
+        case "EARLIER": moveSelectedClip(by: -1)
+        case "LATER": moveSelectedClip(by: 1)
+        case "REMOVE": removeSelectedClip()
+        case "CAPTIONS": if !phase.isBusy { generateCaptions() }
+        case "EXPORT": if !phase.isBusy { export() }
+        default: break
+        }
+    }
+
+    /// Dial in Trim-start mode: slide the selected clip's first frame and
+    /// park the playhead on it so the cut is what's on screen.
+    func nudgeSelectedClipStart(byFrames frames: Double) {
+        guard let id = selectedClipID else { return }
+        if isPlaying { player.pause() }
+        var moved = false
+        edit { p in moved = p.nudgeStart(id, by: frames * Self.frameStep) }
+        if moved, let start = project?.start(of: id) { seek(to: start) }
+    }
+
+    /// Dial in Trim-end mode: slide the selected clip's last frame.
+    func nudgeSelectedClipEnd(byFrames frames: Double) {
+        guard let id = selectedClipID else { return }
+        if isPlaying { player.pause() }
+        var moved = false
+        edit { p in moved = p.nudgeEnd(id, by: frames * Self.frameStep) }
+        if moved, let start = project?.start(of: id), let clip = selectedClip {
+            seek(to: max(start, start + clip.duration - Self.frameStep))
         }
     }
 

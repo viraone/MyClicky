@@ -3,6 +3,23 @@ import XCTest
 @testable import MyClicky
 
 final class VideoProjectTests: XCTestCase {
+    func testNudgeMovesTheCutByFramesAndClamps() {
+        var project = VideoProject(name: "n")
+        let clip = EditClip(source: URL(fileURLWithPath: "/tmp/a.mov"), sourceDuration: 10, inPoint: 2, outPoint: 8)
+        project.clips = [clip]
+
+        XCTAssertTrue(project.nudgeStart(clip.id, by: 0.5))
+        XCTAssertEqual(project.clips[0].inPoint, 2.5, accuracy: 0.0001)
+        XCTAssertTrue(project.nudgeStart(clip.id, by: -5))
+        XCTAssertEqual(project.clips[0].inPoint, 0, accuracy: 0.0001)
+        XCTAssertFalse(project.nudgeStart(clip.id, by: -1))
+
+        XCTAssertTrue(project.nudgeEnd(clip.id, by: 5))
+        XCTAssertEqual(project.clips[0].outPoint, 10, accuracy: 0.0001)
+        XCTAssertTrue(project.nudgeEnd(clip.id, by: -20))
+        XCTAssertEqual(project.clips[0].outPoint, VideoProject.minimumClipDuration, accuracy: 0.0001)
+    }
+
     func testClipWithoutZoomKeyDecodesToOne() throws {
         let json = """
         {"id":"\(UUID().uuidString)","source":"file:///tmp/a.mov","sourceDuration":10,"inPoint":0,"outPoint":10,"cues":[]}
@@ -287,6 +304,26 @@ final class VideoExporterGeometryTests: XCTestCase {
 
 @MainActor
 final class VideoEditorModelTests: XCTestCase {
+    func testRemoteStateLineWithoutAProjectHasTenFields() {
+        let model = VideoEditorModel()
+        let line = model.remoteStateLine()
+        XCTAssertTrue(line.hasPrefix("VIDEO_STATE "))
+        let fields = line.dropFirst(12).split(separator: "\t", omittingEmptySubsequences: false)
+        XCTAssertEqual(fields.count, 10)
+        XCTAssertEqual(fields[1], "NONE")
+        XCTAssertEqual(fields[9], "IDLE")
+    }
+
+    func testRemoteCommandsWithoutAProjectAreHarmless() {
+        let model = VideoEditorModel()
+        for command in ["PLAYPAUSE", "START", "SKIP 5", "SEEK 3", "JOG -2", "TRIM_START 1", "TRIM_END -1", "SPLIT",
+                        "CUT_BEFORE", "CUT_AFTER", "ZOOM_IN", "ZOOM_OUT", "FILL", "FIT", "EARLIER", "LATER", "REMOVE", "BOGUS"] {
+            model.handleRemote(command)
+        }
+        XCTAssertNil(model.project)
+        XCTAssertEqual(model.currentTime, 0)
+    }
+
     func testFolderNamesAreSafeAndUnique() {
         XCTAssertEqual(VideoEditorModel.folderName(for: "  Notion: review / take 2  ", existing: { _ in false }), "Notion- review - take 2")
         XCTAssertEqual(VideoEditorModel.folderName(for: "", existing: { _ in false }), "Untitled")

@@ -1268,6 +1268,7 @@ final class AssistantController {
             self.handleQuestion(prompt)
         }
         documentary.onRemoteLine = { [weak self] line in self?.remote.broadcast(line) }
+        panel.state.videoEditor.onRemoteLine = { [weak self] line in self?.remote.broadcast(line) }
         panel.onHide = { [weak self] in self?.stop() }
         synthesizer.delegate = speechDelegate
         speechDelegate.onSpeakingChanged = { [weak self] speaking in
@@ -1387,6 +1388,7 @@ final class AssistantController {
             case "ASK" where self.codeTabPinned: break
             case "ASK" where self.documentaryShowing: break
             case "DOC": self.panel.state.tab = .documentary
+            case "VIDEO": self.panel.state.tab = .video
             default: self.panel.state.tab = .ask
             }
         }
@@ -1665,12 +1667,23 @@ final class AssistantController {
             }
             doc.handleRemote(command)
         }
+        remote.onVideo = { [weak self] command in
+            guard let self else { return }
+            // The phone is a second screen for the editor: whatever it sends,
+            // the tab should be up so the user sees the result land.
+            if self.panel.state.tab != .video {
+                self.panel.state.tab = .video
+                self.showPanel(full: true)
+            }
+            self.panel.state.videoEditor.handleRemote(command)
+        }
         remote.greeting = { [weak self] in
             ["WHATSAPP_UNREAD \(self?.whatsappUnread.count ?? 0)",
              "GMAIL_UNREAD \(self?.gmailUnread.count ?? 0)",
              self?.screensLine() ?? "SCREENS 1 1",
              self?.peekyLayoutLine() ?? "PEEKY_LAYOUT HIDDEN"]
             + (self?.panel.state.documentary.remoteGreeting() ?? [])
+            + [self?.panel.state.videoEditor.remoteStateLine() ?? "VIDEO_STATE \tNONE\t0\t0\t\t0\t0\t1\t0\tIDLE"]
         }
         remote.onScreen = { [weak self] index in self?.switchScreen(to: index) }
         panel.onScreenChange = { [weak self] _ in

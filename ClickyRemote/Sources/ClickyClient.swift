@@ -60,6 +60,34 @@ final class ClickyClient: ObservableObject {
         }
     }
     @Published var doc = DocState()
+
+    /// The project on the Mac's Peeky Video tab, mirrored from VIDEO_STATE.
+    struct VideoState: Equatable {
+        var project = ""
+        /// NONE (no project open), PLAYING or PAUSED.
+        var state = "NONE"
+        var position = 0.0
+        var duration = 0.0
+        var clipName = ""
+        var clipIndex = 0
+        var clipCount = 0
+        var zoom = 1.0
+        var hasCaptions = false
+        /// IDLE, IMPORTING, TRANSCRIBING, EXPORTING, EXPORTED or FAILED.
+        var phase = "IDLE"
+
+        var open: Bool { state != "NONE" }
+        var playing: Bool { state == "PLAYING" }
+        var busy: Bool { phase == "IMPORTING" || phase == "TRANSCRIBING" || phase == "EXPORTING" }
+        /// m:ss.ff — frames matter when you're nudging a cut.
+        var timecode: String { Self.code(position) }
+        var durationCode: String { Self.code(duration) }
+        static func code(_ t: Double) -> String {
+            let whole = Int(t), frames = Int(((t - Double(whole)) * 30).rounded())
+            return String(format: "%d:%02d.%02d", whole / 60, whole % 60, min(frames, 29))
+        }
+    }
+    @Published var video = VideoState()
     /// Peeky's last answer about the paused frame.
     @Published var docAnswer = ""
     /// Films the Mac can start with DOC PLAY_RECENT <index>, newest first.
@@ -232,6 +260,22 @@ final class ClickyClient: ObservableObject {
                             }
                         } else if line.hasPrefix("DOC_RECENT ") {
                             self.docRecent = line.dropFirst(11).split(separator: "|").map(String.init).filter { !$0.isEmpty }
+                        } else if line.hasPrefix("VIDEO_STATE ") {
+                            let f = line.dropFirst(12).split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+                            if f.count >= 10 {
+                                var v = VideoState()
+                                v.project = f[0]
+                                v.state = f[1]
+                                v.position = Double(f[2]) ?? 0
+                                v.duration = Double(f[3]) ?? 0
+                                v.clipName = f[4]
+                                v.clipIndex = Int(f[5]) ?? 0
+                                v.clipCount = Int(f[6]) ?? 0
+                                v.zoom = Double(f[7]) ?? 1
+                                v.hasCaptions = f[8] == "1"
+                                v.phase = f[9]
+                                self.video = v
+                            }
                         } else if line.hasPrefix("YOUTUBE_STATE ") {
                             self.youtubeCollapsed = line.dropFirst(14).trimmingCharacters(in: .whitespaces) == "COLLAPSED"
                         } else if line.hasPrefix("STATUS ") {
@@ -445,7 +489,8 @@ final class ClickyClient: ObservableObject {
     func paste() { send("KEY PASTE") }
     func capture() { send("CAPTURE") }
     func gmail(_ action: String) { send("GMAIL \(action)") }
-    func spotify(_ action: String) { send("SPOTIFY \(action)") }
+    /// Peeky Video: transport, dial nudges and the editing buttons.
+    func video(_ action: String) { send("VIDEO \(action)") }
     func youtube(_ action: String) { send("YOUTUBE \(action)") }
     func whatsapp(_ action: String) { send("WHATSAPP \(action)") }
     func savePhoto(_ base64JPEG: String) { send("SAVE_PHOTO \(base64JPEG)") }
