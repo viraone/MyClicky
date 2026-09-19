@@ -1932,7 +1932,9 @@ struct AssistantPanelView: View {
             .zIndex(1)
             // Thin rule under the tabs, as a terminal draws under its tab row.
             Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
-            phaseStrip
+            // The strip narrates the voice flow; the Video tab has no voice
+            // flow and its own step tracker, so it gets the room instead.
+            if state.tab != .video { phaseStrip }
             if let message = state.coachMessage {
                 coachCard(message)
                     .animation(.easeInOut(duration: 0.25), value: state.coachMessage)

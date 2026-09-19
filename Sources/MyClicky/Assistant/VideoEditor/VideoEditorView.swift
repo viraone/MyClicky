@@ -698,8 +698,10 @@ struct VideoEditorView: View {
     // MARK: Controls
 
     private var controlsCard: some View {
-        card(title: "CONTROLS", trailing: nil) {
-            // Three groups side by side when there's room; otherwise the
+        // No header row: the CONTROLS label rides in the spare space at the
+        // trailing end of the groups instead, so the card is one row tall.
+        card(title: nil, trailing: nil) {
+            // Four groups side by side when there's room; otherwise the
             // groups wrap onto two rows rather than pushing the panel wider.
             ViewThatFits(in: .horizontal) {
                 HStack(alignment: .top, spacing: 18) {
@@ -710,14 +712,16 @@ struct VideoEditorView: View {
                     zoomGroup
                     groupDivider
                     clipGroup
-                    Spacer(minLength: 0)
+                    Spacer(minLength: 12)
+                    sectionLabel("CONTROLS")
                 }
                 VStack(alignment: .leading, spacing: 12) {
                     HStack(alignment: .top, spacing: 18) {
                         watchGroup
                         groupDivider
                         cutGroup
-                        Spacer(minLength: 0)
+                        Spacer(minLength: 12)
+                        sectionLabel("CONTROLS")
                     }
                     HStack(alignment: .top, spacing: 18) {
                         zoomGroup
@@ -727,6 +731,7 @@ struct VideoEditorView: View {
                     }
                 }
                 VStack(alignment: .leading, spacing: 12) {
+                    sectionLabel("CONTROLS")
                     watchGroup
                     cutGroup
                     zoomGroup
@@ -879,16 +884,18 @@ struct VideoEditorView: View {
 
     // MARK: - Bits
 
-    private func card<Content: View>(title: String, trailing: String?, @ViewBuilder content: () -> Content) -> some View {
+    private func card<Content: View>(title: String?, trailing: String?, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                sectionLabel(title)
-                Spacer()
-                if let trailing {
-                    Text(trailing)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.4))
-                        .lineLimit(1)
+            if let title {
+                HStack {
+                    sectionLabel(title)
+                    Spacer()
+                    if let trailing {
+                        Text(trailing)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.4))
+                            .lineLimit(1)
+                    }
                 }
             }
             content()
