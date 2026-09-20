@@ -251,7 +251,8 @@ enum VideoExporter {
                 }
             }
             for stretch in stretches where stretch.end > stretch.start {
-                let container = captionLayer(text: shown, highlight: stretch.highlight, style: style, anchor: anchor, render: render)
+                let container = captionLayer(text: shown, highlight: stretch.highlight, style: style,
+                                             anchor: cue.anchor ?? anchor, render: render)
                 container.opacity = 0
                 let show = CABasicAnimation(keyPath: "opacity")
                 show.fromValue = 1

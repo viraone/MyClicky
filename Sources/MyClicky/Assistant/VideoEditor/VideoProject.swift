@@ -11,13 +11,17 @@ struct CaptionCue: Codable, Equatable, Identifiable {
     /// The same line in the project's translation language, when the user
     /// turned "Add translation" on. Shown under the original.
     var translation: String?
+    /// Its own spot on the video once detached from the rest, or nil to
+    /// sit where every other line does.
+    var anchor: CaptionAnchor?
 
-    init(id: UUID = UUID(), start: Double, end: Double, text: String, translation: String? = nil) {
+    init(id: UUID = UUID(), start: Double, end: Double, text: String, translation: String? = nil, anchor: CaptionAnchor? = nil) {
         self.id = id
         self.start = start
         self.end = end
         self.text = text
         self.translation = translation
+        self.anchor = anchor
     }
 
     var duration: Double { max(0, end - start) }
@@ -94,6 +98,8 @@ struct TimelineCue: Equatable, Identifiable {
     var end: Double
     var text: String
     var translation: String? = nil
+    /// Set when the line is detached and has its own spot on the video.
+    var anchor: CaptionAnchor? = nil
 
     /// What goes on screen: the line, with its translation beneath if
     /// there is one.
@@ -217,7 +223,7 @@ struct VideoProject: Codable, Equatable {
                 let s = max(cue.start, clip.inPoint) - clip.inPoint + start
                 let e = min(cue.end, clip.outPoint) - clip.inPoint + start
                 if e - s > 0.01 {
-                    out.append(TimelineCue(id: cue.id, start: s, end: e, text: cue.text, translation: cue.translation))
+                    out.append(TimelineCue(id: cue.id, start: s, end: e, text: cue.text, translation: cue.translation, anchor: cue.anchor))
                 }
             }
         }
@@ -392,6 +398,31 @@ struct VideoProject: Codable, Equatable {
                 clips[c].cues[i].translation = text
                 return
             }
+        }
+    }
+
+    /// A detached line's own spot on the video, or nil to follow the rest.
+    mutating func setCueAnchor(_ cueID: UUID, _ anchor: CaptionAnchor?) {
+        for c in clips.indices {
+            if let i = clips[c].cues.firstIndex(where: { $0.id == cueID }) {
+                clips[c].cues[i].anchor = anchor
+                return
+            }
+        }
+    }
+
+    /// Move a line's start and end, given in timeline seconds. Kept inside
+    /// its clip and at least a tenth of a second long.
+    mutating func setCueTiming(_ cueID: UUID, start: Double, end: Double) {
+        for (c, clipStart) in zip(clips.indices, clipStarts) {
+            guard let i = clips[c].cues.firstIndex(where: { $0.id == cueID }) else { continue }
+            let clip = clips[c]
+            let toSource = { (t: Double) in min(max(t - clipStart + clip.inPoint, clip.inPoint), clip.outPoint) }
+            let s = toSource(start)
+            let e = max(toSource(end), min(s + 0.1, clip.outPoint))
+            clips[c].cues[i].start = s
+            clips[c].cues[i].end = max(e, s + 0.05)
+            return
         }
     }
 

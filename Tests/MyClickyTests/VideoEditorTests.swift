@@ -3,6 +3,30 @@ import XCTest
 @testable import MyClicky
 
 final class VideoProjectTests: XCTestCase {
+    func testTypedCueTimingsStayInsideTheirClip() {
+        var project = VideoProject(name: "Timed")
+        var clip = EditClip(source: URL(fileURLWithPath: "/tmp/a.mov"), sourceDuration: 20, inPoint: 5, outPoint: 15)
+        clip.cues = [CaptionCue(start: 7, end: 8, text: "hi")]
+        project.clips = [clip]
+        let id = clip.cues[0].id
+        project.setCueTiming(id, start: 1, end: 4)
+        XCTAssertEqual(project.clips[0].cues[0].start, 6, accuracy: 0.0001, "timeline seconds become source seconds")
+        XCTAssertEqual(project.clips[0].cues[0].end, 9, accuracy: 0.0001)
+        project.setCueTiming(id, start: -3, end: 40)
+        XCTAssertEqual(project.clips[0].cues[0].start, 5, accuracy: 0.0001, "held at the clip's in point")
+        XCTAssertEqual(project.clips[0].cues[0].end, 15, accuracy: 0.0001, "held at the clip's out point")
+        project.setCueTiming(id, start: 3, end: 3)
+        XCTAssertEqual(project.clips[0].cues[0].end - project.clips[0].cues[0].start, 0.1, accuracy: 0.0001, "never shorter than a tenth")
+    }
+
+    func testTypedTimesParse() {
+        XCTAssertEqual(VideoEditorModel.seconds(from: "0:06.18")!, 6.18, accuracy: 0.0001)
+        XCTAssertEqual(VideoEditorModel.seconds(from: "1:02.5")!, 62.5, accuracy: 0.0001)
+        XCTAssertEqual(VideoEditorModel.seconds(from: " 6.18 ")!, 6.18, accuracy: 0.0001)
+        XCTAssertNil(VideoEditorModel.seconds(from: "soon"))
+        XCTAssertNil(VideoEditorModel.seconds(from: "1:2:3:4"))
+    }
+
     private func assertClose(_ a: [Double], _ b: [Double], _ message: String = "", file: StaticString = #filePath, line: UInt = #line) {
         XCTAssertEqual(a.count, b.count, message, file: file, line: line)
         for (x, y) in zip(a, b) { XCTAssertEqual(x, y, accuracy: 1e-9, message, file: file, line: line) }
