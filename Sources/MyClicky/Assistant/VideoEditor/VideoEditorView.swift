@@ -15,6 +15,19 @@ struct VideoEditorView: View {
     /// picks one, so the panel follows the current step at first.
     @State private var chosenTool: Tool?
     @State private var panelHidden = false
+    /// The Trim panel's side of the video. Dragged there by its body; it
+    /// snaps flush to whichever edge it's let go nearest, never floating.
+    @AppStorage("peekyVideoTrimOnRight") private var trimOnRight = false
+    /// Where the panel is mid-drag, relative to its docked spot.
+    @State private var panelDrag: CGSize?
+    @State private var editorWidth: CGFloat = 0
+    @State private var trimPanelWidth: CGFloat = 0
+    /// The video picture's frame in the editor row; the Trim panel lines
+    /// its top up with it.
+    @State private var videoRect: CGRect = .zero
+    /// The Trim panel's left edge where it was last let go, or nil for its
+    /// slot. Clamped at layout so it stays beside the picture, on screen.
+    @State private var trimRestMinX: CGFloat?
 
     var body: some View {
         Group {
@@ -142,21 +155,44 @@ struct VideoEditorView: View {
         GeometryReader { geo in
             let showPanel = !panelHidden && geo.size.width >= 640
             let panelWidth = min(320, max(230, geo.size.width * 0.27))
+            // Trim alone may sit on the far side of the video; the rest stay by the rail.
+            let onRight = activeTool == .trim && trimOnRight
+            // Trim rests where it was let go, its top on the picture's top.
+            let hug = activeTool == .trim ? trimRestOffset(panelWidth: panelWidth) : .zero
+            let panelOffset = CGSize(width: hug.width + (panelDrag?.width ?? 0),
+                                     height: hug.height + (panelDrag?.height ?? 0))
             VStack(alignment: .leading, spacing: 10) {
                 header
                 coachLine
                 HStack(alignment: .top, spacing: 10) {
                     rail
-                    if showPanel {
+                    if showPanel && !onRight {
                         toolPanel(activeTool)
                             .frame(width: panelWidth)
                             .frame(maxHeight: .infinity, alignment: .top)
+                            .offset(panelOffset)
+                            .zIndex(1)
                             .transition(.move(edge: .leading).combined(with: .opacity))
                     }
                     canvas
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    if showPanel && onRight {
+                        toolPanel(activeTool)
+                            .frame(width: panelWidth)
+                            .frame(maxHeight: .infinity, alignment: .top)
+                            .offset(panelOffset)
+                            .zIndex(1)
+                            .transition(.move(edge: .trailing).combined(with: .opacity))
+                    }
                 }
+                .coordinateSpace(name: "editorRow")
                 .frame(maxHeight: .infinity)
+                // Lifts the dragged panel over the timeline below.
+                .zIndex(1)
+                .onChange(of: geo.size.width, initial: true) { _, width in
+                    editorWidth = width
+                    trimPanelWidth = panelWidth
+                }
                 timelineGrip(maxExtra: Self.maxTimelineExtra(for: geo.size.height))
                     .padding(.bottom, -6)
                 timelineDock
@@ -712,6 +748,11 @@ struct VideoEditorView: View {
             VStack(spacing: 12) {
                 Spacer(minLength: 0)
                 preview(height: height)
+                    .background(GeometryReader { frame in
+                        Color.clear.onChange(of: frame.frame(in: .named("editorRow")), initial: true) { _, rect in
+                            videoRect = rect
+                        }
+                    })
                 canvasBar
                 Spacer(minLength: 0)
             }
@@ -1408,16 +1449,61 @@ struct VideoEditorView: View {
     /// A tool's panel beside the rail: a card that takes the full height
     /// and scrolls inside itself. The caret in its corner folds the panel
     /// away (as clicking its rail icon does); the rail brings it back.
-    private func toolCard<Content: View>(title: String, trailing: String?, @ViewBuilder content: () -> Content) -> some View {
-        card(title: title, trailing: trailing, accessory: { collapseCaret }, content: content)
+    private func toolCard<Content: View>(title: String, trailing: String?, movable: Bool = false,
+                                         @ViewBuilder content: () -> Content) -> some View {
+        card(title: title, trailing: trailing,
+             accessory: { if movable { collapseCaret } },
+             header: { if movable { panelDragHandle } },
+             content: content)
             .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    /// Laid over the whole panel: drag it anywhere on the screen. It
+    /// follows the mouse, then slides up level with the picture's top on
+    /// whichever side of the video it was let go, keeping its left/right spot.
+    private var panelDragHandle: some View {
+        MouseHandle(
+            cursor: .openHand,
+            onDrag: { panelDrag = $0 },
+            onEnd: {
+                guard let drag = panelDrag else { return }
+                let rest = trimRestOffset(panelWidth: trimPanelWidth)
+                let landedMinX = trimSlotMinX(panelWidth: trimPanelWidth) + rest.width + drag.width
+                withAnimation(.spring(duration: 0.35, bounce: 0.15)) {
+                    trimOnRight = landedMinX + trimPanelWidth / 2 > editorWidth / 2
+                    trimRestMinX = landedMinX
+                    panelDrag = nil
+                }
+            }
+        )
+        .help("Drag this panel anywhere beside the video")
+    }
+
+    /// The panel's left edge in its layout slot: after the rail (66) and
+    /// gap (10), or against the right edge.
+    private func trimSlotMinX(panelWidth: CGFloat) -> CGFloat {
+        trimOnRight ? editorWidth - panelWidth : 66 + 10
+    }
+
+    /// How far the Trim panel moves from its slot to rest where it was let
+    /// go — kept beside the picture, never over it or off screen — with its
+    /// top on the picture's top. Zero until the video is laid out.
+    private func trimRestOffset(panelWidth: CGFloat) -> CGSize {
+        guard videoRect.width > 0, editorWidth > 0 else { return .zero }
+        let gap: CGFloat = 10
+        let slotMinX = trimSlotMinX(panelWidth: panelWidth)
+        let zone: ClosedRange<CGFloat> = trimOnRight
+            ? (videoRect.maxX + gap)...max(videoRect.maxX + gap, editorWidth - panelWidth)
+            : min(66 + gap, videoRect.minX - gap - panelWidth)...(videoRect.minX - gap - panelWidth)
+        let restMinX = min(max(trimRestMinX ?? slotMinX, zone.lowerBound), zone.upperBound)
+        return CGSize(width: restMinX - slotMinX, height: max(0, videoRect.minY))
     }
 
     private var collapseCaret: some View {
         Button {
             withAnimation(.easeInOut(duration: 0.15)) { panelHidden = true }
         } label: {
-            Image(systemName: "chevron.left")
+            Image(systemName: trimOnRight ? "chevron.right" : "chevron.left")
                 .font(.system(size: 10, weight: .bold))
                 .foregroundStyle(Color.white.opacity(0.6))
                 .frame(width: 20, height: 20)
@@ -1503,7 +1589,7 @@ struct VideoEditorView: View {
     /// The cuts and the picture zoom, with the words that explain them.
     private var trimPanel: some View {
         let zoom = model.selectedClip?.zoom ?? 1
-        return toolCard(title: "TRIM", trailing: model.selectedClip.map { "\($0.name) · \(VideoEditorModel.clock($0.duration))" }) {
+        return toolCard(title: "TRIM", trailing: model.selectedClip.map { "\($0.name) · \(VideoEditorModel.clock($0.duration))" }, movable: true) {
             VStack(alignment: .leading, spacing: 14) {
                 Text("Press Play and stop where you want to cut. Everything here works on the highlighted clip, at the playhead.")
                     .font(.system(size: 13))
@@ -2007,24 +2093,31 @@ struct VideoEditorView: View {
     // MARK: - Bits
 
     private func card<Content: View>(title: String?, trailing: String?, @ViewBuilder content: () -> Content) -> some View {
-        card(title: title, trailing: trailing, accessory: { EmptyView() }, content: content)
+        card(title: title, trailing: trailing, accessory: { EmptyView() }, header: { EmptyView() }, content: content)
     }
 
-    /// `accessory` sits at the far right of the header, after `trailing`.
-    private func card<Accessory: View, Content: View>(title: String?, trailing: String?,
-                                                      @ViewBuilder accessory: () -> Accessory,
-                                                      @ViewBuilder content: () -> Content) -> some View {
+    /// `accessory` sits at the far right of the header, after `trailing`;
+    /// `header` is laid over the header's text (a grab area), under
+    /// `accessory`, and again behind the whole card so any empty spot in
+    /// the panel — padding, gaps between controls — grabs too.
+    private func card<Accessory: View, Header: View, Content: View>(title: String?, trailing: String?,
+                                                                    @ViewBuilder accessory: () -> Accessory,
+                                                                    @ViewBuilder header: () -> Header,
+                                                                    @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             if let title {
                 HStack(spacing: 8) {
-                    sectionLabel(title)
-                    Spacer()
-                    if let trailing {
-                        Text(trailing)
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.4))
-                            .lineLimit(1)
+                    HStack(spacing: 8) {
+                        sectionLabel(title)
+                        Spacer()
+                        if let trailing {
+                            Text(trailing)
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.4))
+                                .lineLimit(1)
+                        }
                     }
+                    .overlay(header())
                     accessory()
                 }
             }
@@ -2033,8 +2126,12 @@ struct VideoEditorView: View {
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.white.opacity(0.035))
+            ZStack {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.white.opacity(0.035))
+                header()
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
