@@ -187,6 +187,8 @@ final class CodeDocumentaryModel: ObservableObject {
 
     // MARK: Choosing a file
 
+    /// Same picker setup as the Video tab: activate the accessory app and
+    /// float the panel, or its sidebar opens inactive and ignores clicks.
     func pickFile() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
@@ -194,8 +196,11 @@ final class CodeDocumentaryModel: ObservableObject {
         panel.allowsMultipleSelection = false
         panel.message = "Choose the code file to make a documentary about"
         panel.prompt = "Choose"
-        if panel.runModal() == .OK, let url = panel.url {
-            setSource(url, kind: .code)
+        panel.level = .floating
+        NSApp.activate(ignoringOtherApps: true)
+        panel.begin { [weak self] response in
+            guard response == .OK, let url = panel.url, let self else { return }
+            self.setSource(url, kind: .code)
         }
     }
 
@@ -208,8 +213,11 @@ final class CodeDocumentaryModel: ObservableObject {
         panel.allowedContentTypes = [.plainText]
         panel.message = "Choose the .txt file to make a documentary about"
         panel.prompt = "Choose"
-        if panel.runModal() == .OK, let url = panel.url {
-            setSource(url, kind: .text)
+        panel.level = .floating
+        NSApp.activate(ignoringOtherApps: true)
+        panel.begin { [weak self] response in
+            guard response == .OK, let url = panel.url, let self else { return }
+            self.setSource(url, kind: .text)
         }
     }
 

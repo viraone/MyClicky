@@ -29,8 +29,13 @@ if [[ "$branch" == "main" ]] && git remote get-url origin >/dev/null 2>&1; then
   fi
 fi
 
+# Xcode 26's default package build system ("swiftbuild") compiles SwiftTerm's
+# Metal shader, which needs the separately downloaded Metal Toolchain and
+# fails without it. The classic build system skips the shader, as every
+# earlier build did. If `--build-system native` is ever removed, install the
+# toolchain instead: `xcodebuild -downloadComponent MetalToolchain`.
 SWIFTPM_MODULECACHE_OVERRIDE="$cache_dir" CLANG_MODULE_CACHE_PATH="$cache_dir" \
-  swift build -c release --disable-sandbox
+  swift build --build-system native -c release --disable-sandbox
 
 mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
 cp "$build_dir/release/MyClicky" "$app_dir/Contents/MacOS/MyClicky"
