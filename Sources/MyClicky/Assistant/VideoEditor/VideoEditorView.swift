@@ -549,7 +549,9 @@ struct VideoEditorView: View {
     private func preview(height: CGFloat) -> some View {
         let width = height * 9 / 16
         return ZStack {
-            VideoEditorSurface(player: model.player)
+            VideoEditorSurface(player: model.player,
+                               zoom: CGFloat(model.playheadClip?.zoom ?? 1),
+                               clipID: model.playheadClip?.id)
             if !hasClips {
                 VStack(spacing: 10) {
                     Image(systemName: "iphone").font(.system(size: 36, weight: .thin))
@@ -1917,19 +1919,83 @@ private struct CaptionDragHandle: NSViewRepresentable {
 }
 
 /// The preview player without AVKit's own controls; the transport is ours.
+/// The clip under the playhead's zoom is a scale on the player's layer:
+/// a zoom on the same clip glides there, a cut to another clip is a hard
+/// switch, and the player itself is never rebuilt for either.
 private struct VideoEditorSurface: NSViewRepresentable {
     let player: AVPlayer
+    var zoom: CGFloat = 1
+    var clipID: UUID? = nil
 
-    func makeNSView(context: Context) -> AVPlayerView {
-        let view = AVPlayerView()
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    final class Coordinator {
+        var clipID: UUID?
+    }
+
+    func makeNSView(context: Context) -> ZoomingPlayerView {
+        let view = ZoomingPlayerView()
         view.player = player
         view.controlsStyle = .none
         view.videoGravity = .resizeAspect
         view.showsFullScreenToggleButton = false
+        view.setZoom(zoom, animated: false)
+        context.coordinator.clipID = clipID
         return view
     }
 
-    func updateNSView(_ view: AVPlayerView, context: Context) {
+    func updateNSView(_ view: ZoomingPlayerView, context: Context) {
         if view.player !== player { view.player = player }
+        let sameClip = context.coordinator.clipID == clipID
+        context.coordinator.clipID = clipID
+        view.setZoom(zoom, animated: sameClip)
+    }
+}
+
+/// An AVPlayerView that scales its picture about the centre — the same
+/// crop the export makes — and glides between zooms.
+private final class ZoomingPlayerView: AVPlayerView {
+    private var zoom: CGFloat = 1
+
+    func setZoom(_ target: CGFloat, animated: Bool) {
+        let clamped = max(0.1, target)
+        guard abs(clamped - zoom) > 0.0005 else { return }
+        zoom = clamped
+        guard let layer else { return }
+        let to = transform(for: zoom)
+        // Start from wherever the picture is *now*, so a second click
+        // mid-glide carries on rather than snapping.
+        let from = layer.presentation()?.transform ?? layer.transform
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.transform = to
+        if animated {
+            let glide = CABasicAnimation(keyPath: "transform")
+            glide.fromValue = from
+            glide.toValue = to
+            glide.duration = 0.32
+            glide.timingFunction = CAMediaTimingFunction(controlPoints: 0.22, 1, 0.36, 1)
+            layer.add(glide, forKey: "zoom")
+        } else {
+            layer.removeAnimation(forKey: "zoom")
+        }
+        CATransaction.commit()
+    }
+
+    override func layout() {
+        super.layout()
+        // The centre moved with the size; re-aim the scale at it, silently.
+        guard let layer else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.transform = transform(for: zoom)
+        CATransaction.commit()
+    }
+
+    private func transform(for zoom: CGFloat) -> CATransform3D {
+        let centre = CGPoint(x: bounds.midX, y: bounds.midY)
+        var t = CATransform3DMakeTranslation(centre.x, centre.y, 0)
+        t = CATransform3DScale(t, zoom, zoom, 1)
+        return CATransform3DTranslate(t, -centre.x, -centre.y, 0)
     }
 }

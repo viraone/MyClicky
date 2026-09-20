@@ -200,12 +200,12 @@ final class VideoEditorModel: ObservableObject {
 
     /// Change the project, save it, and refresh the preview at `seek`
     /// (or where the playhead is).
-    private func edit(seekTo requested: Double? = nil, _ change: (inout VideoProject) -> Void) {
+    private func edit(seekTo requested: Double? = nil, rebuild: Bool = true, _ change: (inout VideoProject) -> Void) {
         guard var p = project else { return }
         change(&p)
         project = p
         save()
-        rebuildPreview(seekTo: requested)
+        if rebuild { rebuildPreview(seekTo: requested) }
     }
 
     // MARK: Clips
@@ -393,12 +393,18 @@ final class VideoEditorModel: ObservableObject {
 
     // MARK: Zoom
 
-    /// Zoom the clip under the playhead. The preview is rebuilt so it shows
-    /// exactly what will export.
+    /// Zoom the clip under the playhead. The player isn't rebuilt: the
+    /// preview scales its own layer to match, smoothly, and the export
+    /// bakes the same zoom in.
     func setZoom(_ zoom: Double) {
         guard let id = selectedClipID else { return }
-        let t = currentTime
-        edit(seekTo: t) { $0.setZoom(zoom, for: id) }
+        edit(rebuild: false) { $0.setZoom(zoom, for: id) }
+    }
+
+    /// The clip under the playhead, whose zoom the preview shows live.
+    var playheadClip: EditClip? {
+        guard let project, let (index, _) = project.locate(currentTime) else { return nil }
+        return project.clips[safe: index]
     }
 
     func zoom(by factor: Double) {
@@ -639,7 +645,7 @@ final class VideoEditorModel: ObservableObject {
         let target = requested ?? currentTime
         Task {
             do {
-                let timeline = try await VideoExporter.build(project)
+                let timeline = try await VideoExporter.build(project, zoomed: false)
                 guard generation == previewGeneration else { return }
                 let item = AVPlayerItem(asset: timeline.composition)
                 item.videoComposition = timeline.videoComposition

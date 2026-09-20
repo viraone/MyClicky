@@ -60,7 +60,9 @@ enum VideoExporter {
 
     /// The clips laid end to end, each framed for 1080×1920. No captions:
     /// those are drawn by the preview itself, and burned in only on export.
-    static func build(_ project: VideoProject) async throws -> Timeline {
+    /// `zoomed` false leaves every clip at the fit; the preview zooms live
+    /// on its own layer instead, so a zoom never rebuilds the player.
+    static func build(_ project: VideoProject, zoomed: Bool = true) async throws -> Timeline {
         let composition = AVMutableComposition()
         guard let videoTrack = composition.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else {
             throw Failure.noVideo
@@ -88,7 +90,8 @@ enum VideoExporter {
             instruction.timeRange = CMTimeRange(start: cursor, duration: range.duration)
             instruction.backgroundColor = CGColor(gray: 0, alpha: 1)
             let layer = AVMutableVideoCompositionLayerInstruction(assetTrack: videoTrack)
-            layer.setTransform(fitTransform(naturalSize: natural, preferredTransform: preferred, zoom: CGFloat(clip.zoom)), at: cursor)
+            layer.setTransform(fitTransform(naturalSize: natural, preferredTransform: preferred,
+                                            zoom: zoomed ? CGFloat(clip.zoom) : 1), at: cursor)
             instruction.layerInstructions = [layer]
             instructions.append(instruction)
             cursor = cursor + range.duration
