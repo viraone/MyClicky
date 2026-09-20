@@ -477,6 +477,43 @@ final class VideoEditorModel: ObservableObject {
         save()
     }
 
+    /// A line's start and end typed into the Subtitles panel, in timeline seconds.
+    func setCueTiming(_ id: UUID, start: Double, end: Double) {
+        guard var p = project else { return }
+        p.setCueTiming(id, start: start, end: end)
+        project = p
+        save()
+    }
+
+    /// Where a line sits: its own spot if it's detached, else the shared one.
+    func anchor(for cue: TimelineCue) -> CaptionAnchor? { cue.anchor ?? captionAnchor }
+
+    /// Detach a line, as on VEED: it keeps the spot it's in now as its
+    /// own, so dragging it on the video moves it alone.
+    func detachCue(_ cue: TimelineCue) {
+        let spot = anchor(for: cue) ?? CaptionAnchor(x: 0.5, y: Double(style.centreFromBottom))
+        setCueAnchor(cue.id, spot)
+    }
+
+    func setCueAnchor(_ id: UUID, _ anchor: CaptionAnchor?) {
+        guard var p = project else { return }
+        p.setCueAnchor(id, anchor)
+        project = p
+        save()
+    }
+
+    /// "0:06.18", "1:02.5" or "6.18" as seconds; nil if it isn't a time.
+    nonisolated static func seconds(from text: String) -> Double? {
+        let parts = text.trimmingCharacters(in: .whitespaces).split(separator: ":", omittingEmptySubsequences: false)
+        guard (1...3).contains(parts.count) else { return nil }
+        var total = 0.0
+        for part in parts {
+            guard let value = Double(part.trimmingCharacters(in: .whitespaces)), value >= 0 else { return nil }
+            total = total * 60 + value
+        }
+        return total
+    }
+
     /// What the takes are spoken in.
     var spokenLocale: Locale { Locale(identifier: project?.spokenLanguage ?? VideoProject.defaultSpokenLanguage) }
 

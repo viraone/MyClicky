@@ -583,7 +583,7 @@ struct VideoEditorView: View {
                 // The export's own caption layer, so the preview is exact.
                 CaptionLayerView(text: cue.displayText,
                                  highlight: model.style.accentColor == nil ? nil : model.project?.wordIndex(in: cue, at: model.currentTime),
-                                 style: model.style, anchor: dragAnchor ?? model.captionAnchor, placement: .onVideo)
+                                 style: model.style, anchor: dragAnchor ?? model.anchor(for: cue), placement: .onVideo)
                     .frame(width: width, height: height)
                     .allowsHitTesting(false)
                 captionHandle(for: cue, width: width, height: height)
@@ -651,7 +651,8 @@ struct VideoEditorView: View {
         let style = model.style
         let scale = width / VideoExporter.renderSize.width
         let pill = VideoExporter.captionFrame(for: style.display(cue.displayText), style: style,
-                                              anchor: dragAnchor ?? model.captionAnchor).pill
+                                              anchor: dragAnchor ?? model.anchor(for: cue)).pill
+        let detached = cue.anchor != nil
         // Render space has its origin at the bottom; the preview's is at the top.
         let centre = CGPoint(x: pill.midX * scale, y: height - pill.midY * scale)
         let active = captionHover || dragAnchor != nil
@@ -671,15 +672,20 @@ struct VideoEditorView: View {
                                                    y: min(max(0, (height - to.y) / height), 1))
                     },
                     onEnd: {
-                        model.setCaptionAnchor(dragAnchor)
+                        // A detached line moves alone; the rest move together.
+                        if detached { model.setCueAnchor(cue.id, dragAnchor) } else { model.setCaptionAnchor(dragAnchor) }
                         dragAnchor = nil
                         dragStart = nil
                     },
-                    onReset: { model.setCaptionAnchor(nil) }
+                    onReset: {
+                        if detached { model.setCueAnchor(cue.id, nil) } else { model.setCaptionAnchor(nil) }
+                    }
                 )
             )
             .position(centre)
-            .help("Drag to move the subtitles anywhere on the video — double-click to put them back")
+            .help(detached
+                  ? "This line has its own spot — drag to move just this line; double-click to rejoin the others"
+                  : "Drag to move the subtitles anywhere on the video — double-click to put them back")
     }
 
     private func badge(_ text: String, tint: Color) -> some View {
@@ -926,8 +932,8 @@ struct VideoEditorView: View {
     @State private var gripHover = false
     @State private var gripDragStart: CGFloat?
 
-    /// Ruler 18 + gap 4 + subtitles 22 + gap 4 + clips.
-    private var tracksHeight: CGFloat { 48 + clipHeight }
+    /// Ruler 22 + gap 4 + subtitles 22 + gap 4 + clips.
+    private var tracksHeight: CGFloat { 52 + clipHeight }
     /// A clip is iMovie's shape: frames along the top, sound underneath.
     /// Pulling the timeline taller grows both, the frames faster.
     private var clipHeight: CGFloat { 84 + CGFloat(timelineExtra) }
@@ -991,11 +997,11 @@ struct VideoEditorView: View {
                 tick.move(to: CGPoint(x: x, y: size.height))
                 tick.addLine(to: CGPoint(x: x, y: size.height - (isMajor ? 6 : 3)))
                 context.stroke(tick, with: .color(Color.white.opacity(isMajor ? 0.35 : 0.18)), lineWidth: 1)
-                if isMajor && x + 36 < size.width {
+                if isMajor && x + 44 < size.width {
                     let label = Text(Self.rulerLabel(t))
-                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(Color.white.opacity(0.45))
-                    context.draw(label, at: CGPoint(x: x + 3, y: 5), anchor: .leading)
+                        .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(Color.white.opacity(0.7))
+                    context.draw(label, at: CGPoint(x: x + 4, y: 7), anchor: .leading)
                 }
                 i += 1
                 t = Double(i) * minor
@@ -1005,14 +1011,14 @@ struct VideoEditorView: View {
             base.addLine(to: CGPoint(x: size.width, y: size.height - 0.5))
             context.stroke(base, with: .color(Color.white.opacity(0.12)), lineWidth: 1)
         }
-        .frame(width: width, height: 18)
+        .frame(width: width, height: 22)
         .allowsHitTesting(false)
     }
 
-    /// The label spacing in seconds: the first that keeps labels 64 pt apart.
+    /// The label spacing in seconds: the first that keeps labels 80 pt apart.
     private static func rulerStep(for total: Double, width: CGFloat) -> Double {
         let options: [Double] = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600]
-        return options.first { CGFloat($0 / total) * width >= 64 } ?? 600
+        return options.first { CGFloat($0 / total) * width >= 80 } ?? 600
     }
 
     private static func rulerLabel(_ t: Double) -> String {
@@ -1770,42 +1776,52 @@ struct VideoEditorView: View {
         }
     }
 
+    /// Which lines have their start and end fields open.
+    @State private var timingRows: Set<UUID> = []
+
     private func cueRow(_ cue: TimelineCue) -> some View {
         let live = model.currentTime >= cue.start && model.currentTime < cue.end
-        return HStack(alignment: .center, spacing: 10) {
-            Button { model.seek(to: cue.start) } label: {
-                Text(VideoEditorModel.clock(cue.start))
-                    .font(.system(size: 11, weight: live ? .bold : .regular, design: .monospaced))
-                    .foregroundStyle(live ? accent : .white.opacity(0.5))
-                    .frame(width: 58, alignment: .leading)
-            }
-            .buttonStyle(.plain)
-            .help("Jump to this moment")
-            VStack(alignment: .leading, spacing: 2) {
-                TextField("", text: Binding(
-                    get: { cue.text },
-                    set: { model.setCueText(cue.id, $0) }
-                ))
-                .textFieldStyle(.plain)
-                .font(.system(size: 13, weight: live ? .semibold : .regular, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.92))
-                if model.translationEnabled {
-                    TextField(cue.translation == nil ? "translating…" : "", text: Binding(
-                        get: { cue.translation ?? "" },
-                        set: { model.setCueTranslation(cue.id, $0) }
+        let showTimings = timingRows.contains(cue.id)
+        return VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .center, spacing: 10) {
+                Button { model.seek(to: cue.start) } label: {
+                    Text(VideoEditorModel.clock(cue.start))
+                        .font(.system(size: 11, weight: live ? .bold : .regular, design: .monospaced))
+                        .foregroundStyle(live ? accent : .white.opacity(0.5))
+                        .frame(width: 58, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .help("Jump to this moment")
+                VStack(alignment: .leading, spacing: 2) {
+                    TextField("", text: Binding(
+                        get: { cue.text },
+                        set: { model.setCueText(cue.id, $0) }
                     ))
                     .textFieldStyle(.plain)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(accent.opacity(0.85))
-                    .disabled(cue.translation == nil)
+                    .font(.system(size: 13, weight: live ? .semibold : .regular, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.92))
+                    if model.translationEnabled {
+                        TextField(cue.translation == nil ? "translating…" : "", text: Binding(
+                            get: { cue.translation ?? "" },
+                            set: { model.setCueTranslation(cue.id, $0) }
+                        ))
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(accent.opacity(0.85))
+                        .disabled(cue.translation == nil)
+                    }
                 }
+                if cue.anchor != nil {
+                    Image(systemName: "pin.fill")
+                        .font(.system(size: 9))
+                        .foregroundStyle(accent.opacity(0.85))
+                        .help("Detached: this line has its own spot on the video")
+                }
+                cueMenu(cue, showTimings: showTimings)
             }
-            Button { model.removeCue(cue.id) } label: {
-                Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
+            if showTimings {
+                timingFields(cue)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.white.opacity(0.35))
-            .help("Remove this subtitle")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
@@ -1817,6 +1833,48 @@ struct VideoEditorView: View {
             RoundedRectangle(cornerRadius: 7, style: .continuous)
                 .strokeBorder(live ? accent.opacity(0.6) : .clear, lineWidth: 1)
         )
+    }
+
+    /// VEED's three dots on a line: Detach (or Reattach), Delete, Show timings.
+    private func cueMenu(_ cue: TimelineCue, showTimings: Bool) -> some View {
+        Image(systemName: "ellipsis")
+            .font(.system(size: 12, weight: .bold))
+            .rotationEffect(.degrees(90))
+            .foregroundStyle(.white.opacity(0.5))
+            .frame(width: 20, height: 20)
+            .contentShape(Rectangle())
+            .overlay(invisibleMenu {
+                if cue.anchor == nil {
+                    Button { model.detachCue(cue) } label: {
+                        Label("Detach", systemImage: "arrow.up.and.down.and.arrow.left.and.right")
+                    }
+                } else {
+                    Button { model.setCueAnchor(cue.id, nil) } label: { Label("Reattach", systemImage: "link") }
+                }
+                Button(role: .destructive) { model.removeCue(cue.id) } label: { Label("Delete", systemImage: "trash") }
+                Button {
+                    if showTimings { timingRows.remove(cue.id) } else { timingRows.insert(cue.id) }
+                } label: {
+                    Label(showTimings ? "Hide timings" : "Show timings", systemImage: "stopwatch")
+                }
+            })
+            .help("Detach this line so it can sit somewhere of its own, delete it, or show its timings")
+    }
+
+    /// Start and end under a line, typed as 1:02.50 or plain seconds.
+    private func timingFields(_ cue: TimelineCue) -> some View {
+        HStack(spacing: 6) {
+            TimingField(label: "Start", value: cue.start, accent: accent) { model.setCueTiming(cue.id, start: $0, end: cue.end) }
+            Image(systemName: "arrow.right")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(.white.opacity(0.4))
+            TimingField(label: "End", value: cue.end, accent: accent) { model.setCueTiming(cue.id, start: cue.start, end: $0) }
+            Text(String(format: "%.2f s", cue.end - cue.start))
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.45))
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, 68)
     }
 
     // MARK: - Bits
@@ -1882,6 +1940,48 @@ struct VideoEditorView: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(.white.opacity(0.92))
+    }
+}
+
+/// One editable time under a subtitle line. Commits on Return or when
+/// focus leaves; anything that isn't a time snaps back.
+private struct TimingField: View {
+    let label: String
+    let value: Double
+    let accent: Color
+    let commit: (Double) -> Void
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(label)
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.4))
+            TextField("", text: $text)
+                .textFieldStyle(.plain)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(accent)
+                .frame(width: 60)
+                .focused($focused)
+                .onSubmit(apply)
+                .onChange(of: focused) { _, now in if !now { apply() } }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.white.opacity(0.08)))
+        .onAppear { text = VideoEditorModel.clock(value) }
+        .onChange(of: value) { _, now in text = VideoEditorModel.clock(now) }
+        .help("Type a time like 1:02.50 and press Return")
+    }
+
+    private func apply() {
+        if let seconds = VideoEditorModel.seconds(from: text) {
+            commit(seconds)
+            text = VideoEditorModel.clock(seconds)
+        } else {
+            text = VideoEditorModel.clock(value)
+        }
     }
 }
 
