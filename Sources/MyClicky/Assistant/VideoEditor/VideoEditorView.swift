@@ -157,9 +157,16 @@ struct VideoEditorView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
                 .frame(maxHeight: .infinity)
+                timelineGrip(maxExtra: Self.maxTimelineExtra(for: geo.size.height))
+                    .padding(.bottom, -6)
                 timelineDock
             }
             .frame(width: geo.size.width, height: geo.size.height, alignment: .top)
+            // A timeline pulled tall on a big panel is reined in on a short one.
+            .onChange(of: geo.size.height, initial: true) { _, height in
+                let most = Double(Self.maxTimelineExtra(for: height))
+                if timelineExtra > most { timelineExtra = most }
+            }
         }
         // Hosts the on-device translator; it has to be somewhere that's
         // always on screen while a project is open.
@@ -774,6 +781,53 @@ struct VideoEditorView: View {
 
     // MARK: Timeline
 
+    /// How far the timeline may be pulled up on a panel this tall: the
+    /// video keeps enough room to be worth looking at.
+    private static func maxTimelineExtra(for height: CGFloat) -> CGFloat {
+        max(0, min(260, height - 520))
+    }
+
+    /// VEED's split between the canvas and the timeline: pull it up for a
+    /// taller timeline (bigger frames, a taller sound strip), down for more
+    /// video. Double-click puts it back.
+    private func timelineGrip(maxExtra: CGFloat) -> some View {
+        let active = gripHover || gripDragStart != nil
+        return ZStack {
+            Rectangle()
+                .fill(active ? accent : Color.white.opacity(0.12))
+                .frame(height: active ? 2 : 1)
+            VStack(spacing: 1.5) {
+                Triangle().frame(width: 8, height: 4).rotationEffect(.degrees(180))
+                Rectangle().frame(width: 12, height: 1.5)
+                Rectangle().frame(width: 12, height: 1.5)
+                Triangle().frame(width: 8, height: 4)
+            }
+            .foregroundStyle(active ? accent : Color.white.opacity(0.7))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(Color.black.opacity(0.7)))
+            .overlay(Capsule().strokeBorder(active ? accent.opacity(0.8) : Color.white.opacity(0.15), lineWidth: 1))
+        }
+        .frame(height: 16)
+        .frame(maxWidth: .infinity)
+        .overlay(
+            MouseHandle(
+                cursor: .resizeUpDown,
+                onHover: { gripHover = $0 },
+                onDrag: { translation in
+                    let from = gripDragStart ?? CGFloat(timelineExtra)
+                    if gripDragStart == nil { gripDragStart = from }
+                    // Up is a negative translation, and up means taller.
+                    timelineExtra = Double(min(max(0, from - translation.height), maxExtra))
+                },
+                onEnd: { gripDragStart = nil },
+                onReset: { timelineExtra = 0 }
+            )
+        )
+        .animation(.easeOut(duration: 0.12), value: active)
+        .help("Drag up for a taller timeline, down for more video — double-click to put it back")
+    }
+
     /// Docked along the bottom like VEED's: the transport row, then a time
     /// ruler, the subtitles track and the clips with their sound.
     private var timelineDock: some View {
@@ -866,11 +920,18 @@ struct VideoEditorView: View {
         .help(help)
     }
 
+    /// How much taller than its slimmest the timeline has been pulled, in
+    /// points. Remembered between launches, like VEED's split.
+    @AppStorage("peekyVideoTimelineExtra") private var timelineExtra: Double = 0
+    @State private var gripHover = false
+    @State private var gripDragStart: CGFloat?
+
     /// Ruler 18 + gap 4 + subtitles 22 + gap 4 + clips.
-    private static let tracksHeight: CGFloat = 48 + clipHeight
+    private var tracksHeight: CGFloat { 48 + clipHeight }
     /// A clip is iMovie's shape: frames along the top, sound underneath.
-    private static let clipHeight: CGFloat = 84
-    private static let filmHeight: CGFloat = 56
+    /// Pulling the timeline taller grows both, the frames faster.
+    private var clipHeight: CGFloat { 84 + CGFloat(timelineExtra) }
+    private var filmHeight: CGFloat { 56 + CGFloat(timelineExtra) * 0.7 }
     /// iMovie's yellow for the loud bits.
     private static let loud = Color(red: 1.0, green: 0.8, blue: 0.25)
 
@@ -891,12 +952,12 @@ struct VideoEditorView: View {
                     Triangle().fill(accent).frame(width: 10, height: 6)
                     Rectangle().fill(accent).frame(width: 2)
                 }
-                .frame(height: Self.tracksHeight)
+                .frame(height: tracksHeight)
                 .offset(x: x - 5)
                 .shadow(color: accent.opacity(0.7), radius: 3)
                 .allowsHitTesting(false)
             }
-            .frame(width: width, height: Self.tracksHeight, alignment: .topLeading)
+            .frame(width: width, height: tracksHeight, alignment: .topLeading)
             .contentShape(Rectangle())
             // One gesture covers both a click (jump there) and a drag (scrub),
             // anywhere on the ruler or a track. The clip under the new time
@@ -911,7 +972,7 @@ struct VideoEditorView: View {
                     }
             )
         }
-        .frame(height: Self.tracksHeight)
+        .frame(height: tracksHeight)
     }
 
     /// Time along the top, like VEED's: a label every few seconds (the gap
@@ -1017,7 +1078,7 @@ struct VideoEditorView: View {
                         let near = hoverX.map { abs($0 - seamX) < 16 } ?? false
                         if near {
                             rejoinPill(index: index)
-                                .position(x: seamX, y: Self.clipHeight / 2)
+                                .position(x: seamX, y: clipHeight / 2)
                                 .transition(.opacity.combined(with: .scale(scale: 0.9)))
                         } else {
                             Image(systemName: "arrow.left.and.right")
@@ -1025,13 +1086,13 @@ struct VideoEditorView: View {
                                 .foregroundStyle(.white.opacity(0.75))
                                 .frame(width: 14, height: 14)
                                 .background(Circle().fill(Color.black.opacity(0.7)))
-                                .position(x: seamX, y: Self.clipHeight / 2)
+                                .position(x: seamX, y: clipHeight / 2)
                                 .allowsHitTesting(false)
                         }
                     }
                 }
             }
-            .frame(height: Self.clipHeight)
+            .frame(height: clipHeight)
             .onHover { inside in
                 if inside { NSCursor.pointingHand.push() } else { NSCursor.pop(); hoverX = nil }
             }
@@ -1043,7 +1104,7 @@ struct VideoEditorView: View {
             }
             .animation(.easeOut(duration: 0.12), value: hoverX == nil)
         }
-        .frame(height: Self.clipHeight)
+        .frame(height: clipHeight)
     }
 
     /// Where the mouse is over the timeline strip, for the Rejoin pill.
@@ -1100,7 +1161,7 @@ struct VideoEditorView: View {
                 .padding(5)
                 .frame(maxWidth: width, alignment: .leading)
             }
-            .frame(width: width, height: Self.clipHeight, alignment: .topLeading)
+            .frame(width: width, height: clipHeight, alignment: .topLeading)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(selected ? accent.opacity(0.32) : Color.white.opacity(0.09))
@@ -1118,7 +1179,7 @@ struct VideoEditorView: View {
     /// frame from that moment, at the picture's own shape.
     @ViewBuilder
     private func filmstrip(for clip: EditClip, width: CGFloat) -> some View {
-        let height = Self.filmHeight
+        let height = filmHeight
         if let frames = model.filmstrips[clip.source.path], let first = frames.first {
             let tileWidth = max(12, height * CGFloat(first.width) / CGFloat(max(1, first.height)))
             Canvas { context, size in
@@ -1146,7 +1207,7 @@ struct VideoEditorView: View {
     /// brighter so the playhead has a trail.
     @ViewBuilder
     private func waveform(for clip: EditClip, width: CGFloat) -> some View {
-        let height = Self.clipHeight - Self.filmHeight
+        let height = clipHeight - filmHeight
         let step: CGFloat = 2
         let count = max(2, Int(width / step))
         if let raw = model.waveformBars(for: clip, count: count) {
