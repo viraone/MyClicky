@@ -211,6 +211,11 @@ final class VideoEditorModel: ObservableObject {
 
     static let importableTypes: [UTType] = [.movie, .mpeg4Movie, .quickTimeMovie, .video, .audiovisualContent]
 
+    /// The Import button and drop zone: a native picker for the takes. Peeky
+    /// is an accessory app living in a non-activating panel, so the app has
+    /// to be brought forward first; otherwise the picker opens as an
+    /// inactive window whose sidebar (Desktop, external drives, ...) ignores
+    /// clicks. It floats so the Peeky panel can't cover it.
     func chooseClips() {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
@@ -218,8 +223,12 @@ final class VideoEditorModel: ObservableObject {
         panel.allowedContentTypes = Self.importableTypes
         panel.message = "Choose the takes and screen recordings for this video"
         panel.prompt = "Import"
-        guard panel.runModal() == .OK else { return }
-        importClips(panel.urls)
+        panel.level = .floating
+        NSApp.activate(ignoringOtherApps: true)
+        panel.begin { [weak self] response in
+            guard response == .OK, let self else { return }
+            self.importClips(panel.urls)
+        }
     }
 
     func importClips(_ urls: [URL]) {
