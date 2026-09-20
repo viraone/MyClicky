@@ -447,6 +447,27 @@ final class VideoExporterGeometryTests: XCTestCase {
         XCTAssertGreaterThan(pill.height, textSize.height)
     }
 
+    func testCaptionFollowsItsAnchorAndStaysInsideTheFrame() {
+        let style = CaptionStyle()
+        let moved = VideoExporter.captionFrame(for: "hello", style: style, anchor: CaptionAnchor(x: 0.5, y: 0.8)).pill
+        XCTAssertEqual(moved.midX, 540, accuracy: 1)
+        XCTAssertEqual(moved.midY, 1920 * 0.8, accuracy: 1)
+        let corner = VideoExporter.captionFrame(for: "hello", style: style, anchor: CaptionAnchor(x: 0, y: 1)).pill
+        XCTAssertEqual(corner.minX, 0, accuracy: 1, "kept inside the left edge")
+        XCTAssertEqual(corner.maxY, 1920, accuracy: 1, "kept inside the top edge")
+        let unmoved = VideoExporter.captionFrame(for: "hello", style: style).pill
+        XCTAssertEqual(unmoved.midY, 1920 * style.centreFromBottom, accuracy: 1, "no anchor means the style's spot")
+    }
+
+    func testCaptionAnchorSurvivesSaving() throws {
+        var project = VideoProject(name: "Anchored")
+        project.captionAnchor = CaptionAnchor(x: 0.25, y: 0.75)
+        let data = try JSONEncoder().encode(project)
+        XCTAssertEqual(try JSONDecoder().decode(VideoProject.self, from: data).captionAnchor, CaptionAnchor(x: 0.25, y: 0.75))
+        let old = Data("{\"name\":\"Old\",\"clips\":[],\"created\":0}".utf8)
+        XCTAssertNil(try JSONDecoder().decode(VideoProject.self, from: old).captionAnchor, "older files have no anchor")
+    }
+
     @MainActor
     func testEachCaptionLayerIsScheduledForItsOwnStretch() {
         let overlay = VideoExporter.captionOverlay(for: [

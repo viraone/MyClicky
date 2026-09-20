@@ -73,6 +73,12 @@ enum VideoTranscriber {
     /// cancelling the calling task stops the recogniser.
     static func words(in url: URL, locale: Locale = Locale(identifier: "en-US"),
                       progress: (@MainActor @Sendable (Progress) -> Void)? = nil) async throws -> [SpokenWord] {
+        // macOS 26's SpeechAnalyzer hears a whole take at once, with word
+        // timings that hold up; the older recogniser dropped most of a
+        // noisy room. It needs no permission prompt for files.
+        if #available(macOS 26, *), let match = await analyzerLocale(for: locale) {
+            return try await analyzerWords(in: url, locale: match, progress: progress)
+        }
         guard await requestAuthorization() else { throw Failure.notAuthorized }
         guard let recognizer = SFSpeechRecognizer(locale: locale), recognizer.isAvailable else { throw Failure.unavailable }
 
@@ -189,6 +195,82 @@ enum VideoTranscriber {
     private static func timedWords(_ segments: [SFTranscriptionSegment]) -> [SpokenWord]? {
         guard segments.contains(where: { $0.timestamp > 0 || $0.duration > 0 }) else { return nil }
         return segments.map { SpokenWord(text: $0.substring, start: $0.timestamp, end: $0.timestamp + $0.duration) }
+    }
+
+    // MARK: - macOS 26: SpeechAnalyzer
+
+    /// The analyser's locale for what the user picked: the same tag, or
+    /// failing that the same language in any region. Nil means it can't
+    /// listen in that language and the older recogniser should.
+    @available(macOS 26, *)
+    static func analyzerLocale(for locale: Locale) async -> Locale? {
+        let wanted = locale.identifier(.bcp47).lowercased()
+        let supported = await SpeechTranscriber.supportedLocales
+        if let exact = supported.first(where: { $0.identifier(.bcp47).lowercased() == wanted }) { return exact }
+        guard let language = locale.language.languageCode?.identifier.lowercased() else { return nil }
+        return supported.first { $0.language.languageCode?.identifier.lowercased() == language }
+    }
+
+    /// Every word in the file, in file seconds, from the on-device
+    /// analyser. The whole take goes in at once; results stream back a
+    /// phrase at a time with a time range on every word.
+    @available(macOS 26, *)
+    static func analyzerWords(in url: URL, locale: Locale,
+                              progress: (@MainActor @Sendable (Progress) -> Void)?) async throws -> [SpokenWord] {
+        let asset = AVURLAsset(url: url)
+        guard try await !asset.loadTracks(withMediaType: .audio).isEmpty else { return [] }
+        let duration = try await asset.load(.duration).seconds
+        guard duration.isFinite, duration > 0 else { return [] }
+
+        let scratch = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PeekyTranscribe-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let audio = scratch.appendingPathComponent("take.m4a")
+        try await exportAudio(of: asset, range: 0...duration, to: audio)
+
+        let transcriber = SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: [],
+                                            attributeOptions: [.audioTimeRange])
+        // The language model is a one-time download the system keeps.
+        if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
+            await progress?(Progress(secondsHeard: 0, latestText: "Downloading the \(SubtitleLanguages.name(of: locale)) speech model, once only…"))
+            try await request.downloadAndInstall()
+        }
+        try Task.checkCancellation()
+
+        let analyzer = SpeechAnalyzer(modules: [transcriber])
+        let file = try AVAudioFile(forReading: audio)
+        let collector = Task { () -> [SpokenWord] in
+            var words: [SpokenWord] = []
+            for try await result in transcriber.results where result.isFinal {
+                let text = result.text
+                var heardTo = 0.0
+                for run in text.runs {
+                    guard let range = run.audioTimeRange else { continue }
+                    let piece = String(text[run.range].characters).trimmingCharacters(in: .whitespacesAndNewlines)
+                    // A lone full stop gets a run of its own; only words count.
+                    guard piece.rangeOfCharacter(from: .alphanumerics) != nil else { continue }
+                    words.append(SpokenWord(text: piece, start: range.start.seconds, end: range.end.seconds))
+                    heardTo = max(heardTo, range.end.seconds)
+                }
+                if let progress {
+                    let tail = words.suffix(12).map(\.text).joined(separator: " ")
+                    await progress(Progress(secondsHeard: heardTo, latestText: tail))
+                }
+            }
+            return words
+        }
+        try await withTaskCancellationHandler {
+            if let last = try await analyzer.analyzeSequence(from: file) {
+                try await analyzer.finalizeAndFinish(through: last)
+            } else {
+                await analyzer.cancelAndFinishNow()
+            }
+        } onCancel: {
+            Task { await analyzer.cancelAndFinishNow() }
+        }
+        try Task.checkCancellation()
+        return try await collector.value
     }
 
     /// Holds the recogniser's task so a Swift cancellation can reach it.

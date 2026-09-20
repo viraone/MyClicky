@@ -105,8 +105,11 @@ enum VideoExporter {
     // MARK: Captions
 
     /// The pill a caption sits in, and where, for a frame of `render`.
-    /// `text` is taken as already spelled by the style.
-    static func captionFrame(for text: String, style: CaptionStyle, render: CGSize = renderSize) -> (pill: CGRect, textSize: CGSize) {
+    /// `text` is taken as already spelled by the style. With an `anchor`
+    /// the pill is centred there (kept inside the frame); without one it
+    /// sits where the style puts it.
+    static func captionFrame(for text: String, style: CaptionStyle, anchor: CaptionAnchor? = nil,
+                             render: CGSize = renderSize) -> (pill: CGRect, textSize: CGSize) {
         let inset = style.strokeColor == nil ? 0 : style.strokeWidth
         let maxWidth = render.width * style.maxWidthShare - style.horizontalPadding * 2 - inset * 2
         let attributes: [NSAttributedString.Key: Any] = [.font: style.font]
@@ -118,8 +121,10 @@ enum VideoExporter {
         let textSize = CGSize(width: ceil(bounds.width) + inset * 2, height: ceil(bounds.height) + inset * 2)
         let pillSize = CGSize(width: textSize.width + style.horizontalPadding * 2,
                               height: textSize.height + style.verticalPadding * 2)
-        let pill = CGRect(x: (render.width - pillSize.width) / 2,
-                          y: render.height * style.centreFromBottom - pillSize.height / 2,
+        let centre = anchor.map { CGPoint(x: render.width * $0.x, y: render.height * $0.y) }
+            ?? CGPoint(x: render.width / 2, y: render.height * style.centreFromBottom)
+        let pill = CGRect(x: min(max(0, centre.x - pillSize.width / 2), max(0, render.width - pillSize.width)),
+                          y: min(max(0, centre.y - pillSize.height / 2), max(0, render.height - pillSize.height)),
                           width: pillSize.width, height: pillSize.height)
         return (pill.integral, textSize)
     }
@@ -129,9 +134,10 @@ enum VideoExporter {
     /// with the `highlight`-th word of the first line in the accent colour.
     /// The same layer serves the export, the preview and the style tiles.
     @MainActor
-    static func captionLayer(text raw: String, highlight: Int? = nil, style: CaptionStyle, render: CGSize = renderSize) -> CALayer {
+    static func captionLayer(text raw: String, highlight: Int? = nil, style: CaptionStyle, anchor: CaptionAnchor? = nil,
+                             render: CGSize = renderSize) -> CALayer {
         let shown = style.display(raw)
-        let (pill, textSize) = captionFrame(for: shown, style: style, render: render)
+        let (pill, textSize) = captionFrame(for: shown, style: style, anchor: anchor, render: render)
         let container = CALayer()
         container.frame = pill
         container.backgroundColor = (style.pillColor ?? .clear).cgColor
@@ -212,7 +218,8 @@ enum VideoExporter {
     /// Animation's timeline is the video's, so a plain opacity animation
     /// with a begin time does the scheduling.
     @MainActor
-    static func captionOverlay(for cues: [TimelineCue], style: CaptionStyle, render: CGSize = renderSize,
+    static func captionOverlay(for cues: [TimelineCue], style: CaptionStyle, anchor: CaptionAnchor? = nil,
+                               render: CGSize = renderSize,
                                wordStarts: (TimelineCue) -> [Double] = { _ in [] }) -> CALayer {
         let overlay = CALayer()
         overlay.frame = CGRect(origin: .zero, size: render)
@@ -228,7 +235,7 @@ enum VideoExporter {
                 }
             }
             for stretch in stretches where stretch.end > stretch.start {
-                let container = captionLayer(text: shown, highlight: stretch.highlight, style: style, render: render)
+                let container = captionLayer(text: shown, highlight: stretch.highlight, style: style, anchor: anchor, render: render)
                 container.opacity = 0
                 let show = CABasicAnimation(keyPath: "opacity")
                 show.fromValue = 1
@@ -257,7 +264,7 @@ enum VideoExporter {
         let videoLayer = CALayer()
         videoLayer.frame = parent.frame
         parent.addSublayer(videoLayer)
-        parent.addSublayer(captionOverlay(for: project.timelineCues, style: style) { project.wordStarts(for: $0) })
+        parent.addSublayer(captionOverlay(for: project.timelineCues, style: style, anchor: project.captionAnchor) { project.wordStarts(for: $0) })
         timeline.videoComposition.animationTool = AVVideoCompositionCoreAnimationTool(postProcessingAsVideoLayer: videoLayer, in: parent)
 
         guard let session = AVAssetExportSession(asset: timeline.composition, presetName: AVAssetExportPresetHighestQuality) else {
