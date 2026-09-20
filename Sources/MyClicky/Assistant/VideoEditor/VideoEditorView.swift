@@ -2256,10 +2256,7 @@ private struct FrameFormatPicker: View {
         let lit = current || hovered == format.id
         return Button { choose(format) } label: {
             HStack(spacing: 10) {
-                Image(systemName: format.symbol)
-                    .font(.system(size: 12, weight: .semibold))
-                    .frame(width: 20)
-                    .foregroundStyle(current ? Color.accentColor : .secondary)
+                brandTile(format)
                 Text(format.platform).font(.system(size: 13, weight: .medium))
                 Text(format.ratio).font(.system(size: 13)).foregroundStyle(.secondary)
                 Spacer(minLength: 0)
@@ -2277,5 +2274,34 @@ private struct FrameFormatPicker: View {
         .id(format.id)
         .onHover { hovered = $0 ? format.id : (hovered == format.id ? nil : hovered) }
         .help("Reframe the video for \(format.name) — \(format.pixels)")
+    }
+
+    /// The platform's mark: its symbol in white on a tile of its colour.
+    private func brandTile(_ format: FrameFormat) -> some View {
+        RoundedRectangle(cornerRadius: 5, style: .continuous)
+            .fill(Self.fill(for: format.brand))
+            .frame(width: 22, height: 22)
+            .overlay(
+                Image(systemName: format.symbol)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(format.brand == .snapchat ? Color.black : Color.white)
+            )
+    }
+
+    private static func fill(for brand: FrameFormat.Brand) -> AnyShapeStyle {
+        switch brand {
+        case .instagram:
+            AnyShapeStyle(LinearGradient(colors: [Color(red: 0.99, green: 0.73, blue: 0.27),
+                                                  Color(red: 0.87, green: 0.18, blue: 0.44),
+                                                  Color(red: 0.51, green: 0.23, blue: 0.71)],
+                                         startPoint: .bottomLeading, endPoint: .topTrailing))
+        case .tiktok: AnyShapeStyle(Color(red: 0.06, green: 0.06, blue: 0.06))
+        case .youtube: AnyShapeStyle(Color(red: 1.0, green: 0.0, blue: 0.0))
+        case .linkedin: AnyShapeStyle(Color(red: 0.04, green: 0.40, blue: 0.71))
+        case .x: AnyShapeStyle(Color.black)
+        case .facebook: AnyShapeStyle(Color(red: 0.09, green: 0.47, blue: 0.95))
+        case .pinterest: AnyShapeStyle(Color(red: 0.90, green: 0.0, blue: 0.14))
+        case .snapchat: AnyShapeStyle(Color(red: 1.0, green: 0.99, blue: 0.0))
+        }
     }
 }
