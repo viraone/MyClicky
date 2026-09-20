@@ -1406,10 +1406,26 @@ struct VideoEditorView: View {
     // MARK: Panels
 
     /// A tool's panel beside the rail: a card that takes the full height
-    /// and scrolls inside itself.
+    /// and scrolls inside itself. The caret in its corner folds the panel
+    /// away (as clicking its rail icon does); the rail brings it back.
     private func toolCard<Content: View>(title: String, trailing: String?, @ViewBuilder content: () -> Content) -> some View {
-        card(title: title, trailing: trailing, content: content)
+        card(title: title, trailing: trailing, accessory: { collapseCaret }, content: content)
             .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    private var collapseCaret: some View {
+        Button {
+            withAnimation(.easeInOut(duration: 0.15)) { panelHidden = true }
+        } label: {
+            Image(systemName: "chevron.left")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(Color.white.opacity(0.6))
+                .frame(width: 20, height: 20)
+                .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Color.white.opacity(0.07)))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Hide this panel for more video — click \(activeTool.title) on the left to bring it back")
     }
 
     /// The takes in play order; click one to jump to it.
@@ -1991,9 +2007,16 @@ struct VideoEditorView: View {
     // MARK: - Bits
 
     private func card<Content: View>(title: String?, trailing: String?, @ViewBuilder content: () -> Content) -> some View {
+        card(title: title, trailing: trailing, accessory: { EmptyView() }, content: content)
+    }
+
+    /// `accessory` sits at the far right of the header, after `trailing`.
+    private func card<Accessory: View, Content: View>(title: String?, trailing: String?,
+                                                      @ViewBuilder accessory: () -> Accessory,
+                                                      @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             if let title {
-                HStack {
+                HStack(spacing: 8) {
                     sectionLabel(title)
                     Spacer()
                     if let trailing {
@@ -2002,6 +2025,7 @@ struct VideoEditorView: View {
                             .foregroundStyle(.white.opacity(0.4))
                             .lineLimit(1)
                     }
+                    accessory()
                 }
             }
             content()
