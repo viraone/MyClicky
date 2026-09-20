@@ -424,15 +424,29 @@ final class VideoEditorModel: ObservableObject {
         setZoom(clip.zoom * factor)
     }
 
-    /// Just enough zoom that the picture covers the whole 9:16 frame.
+    /// Just enough zoom that the picture covers the whole frame.
     func zoomToFill() {
         guard let clip = selectedClip else { return }
+        let render = renderSize
         Task {
             let asset = AVURLAsset(url: clip.source)
             guard let track = try? await asset.loadTracks(withMediaType: .video).first,
                   let (natural, preferred) = try? await track.load(.naturalSize, .preferredTransform) else { return }
-            setZoom(VideoExporter.fillZoom(naturalSize: natural, preferredTransform: preferred))
+            setZoom(VideoExporter.fillZoom(naturalSize: natural, preferredTransform: preferred, into: render))
         }
+    }
+
+    // MARK: Frame
+
+    /// The shape the video is framed and exported in.
+    var frameFormat: FrameFormat { project?.format ?? .default }
+    var renderSize: CGSize { frameFormat.renderSize }
+
+    /// Reframe the whole video for another platform. The preview is rebuilt
+    /// since the composition's own size changes; zoom and pan are kept.
+    func setFrameFormat(_ format: FrameFormat) {
+        guard let p = project, p.frameFormat != format.id else { return }
+        edit { $0.frameFormat = format.id }
     }
 
     // MARK: Subtitles
@@ -475,6 +489,19 @@ final class VideoEditorModel: ObservableObject {
         p.removeCue(id)
         project = p
         save()
+    }
+
+    /// A line picked on the timeline — just added, or clicked — for the
+    /// Subtitles panel to scroll to and put the cursor in. Cleared once it has.
+    @Published var cueToReveal: UUID?
+
+    /// VEED's "+ Add subtitle" on the timeline: a blank line at the playhead
+    /// for the user to type. Nothing happens if a line is already there.
+    func addCueAtPlayhead() {
+        guard var p = project, let id = p.addCue(at: currentTime) else { return }
+        project = p
+        save()
+        cueToReveal = id
     }
 
     /// A line's start and end typed into the Subtitles panel, in timeline seconds.

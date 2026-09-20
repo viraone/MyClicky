@@ -19,6 +19,37 @@ final class VideoProjectTests: XCTestCase {
         XCTAssertEqual(project.clips[0].cues[0].end - project.clips[0].cues[0].start, 0.1, accuracy: 0.0001, "never shorter than a tenth")
     }
 
+    func testAddCueFillsTheGapAtThePlayheadAndRefusesACoveredMoment() {
+        var project = VideoProject(name: "add")
+        var clip = EditClip(source: URL(fileURLWithPath: "/tmp/a.mov"), sourceDuration: 20, inPoint: 5, outPoint: 15)
+        clip.cues = [CaptionCue(start: 8, end: 9, text: "one")]
+        project.clips = [clip]
+
+        // Timeline 0 is source 5: a two-second blank line, stopping short of "one".
+        let first = project.addCue(at: 0)
+        XCTAssertNotNil(first)
+        XCTAssertEqual(project.clips[0].cues.map(\.text), ["", "one"], "kept in time order")
+        XCTAssertEqual(project.clips[0].cues[0].start, 5, accuracy: 0.0001)
+        XCTAssertEqual(project.clips[0].cues[0].end, 7, accuracy: 0.0001)
+
+        // Right before "one" the gap is shorter than two seconds.
+        XCTAssertNotNil(project.addCue(at: 2.5))
+        XCTAssertEqual(project.clips[0].cues[1].end, 8, accuracy: 0.0001, "runs up to the next line")
+
+        XCTAssertNil(project.addCue(at: 3.5), "a moment already covered gets no second line")
+        XCTAssertNil(project.addCue(at: 9.98), "no room at the very end of the clip")
+
+        // The tail end of the clip gets the rest of it.
+        XCTAssertNotNil(project.addCue(at: 9))
+        XCTAssertEqual(project.clips[0].cues.last?.end ?? 0, 15, accuracy: 0.0001)
+        XCTAssertTrue(project.timelineCues.allSatisfy { $0.end > $0.start })
+    }
+
+    func testAddCueWithoutClipsDoesNothing() {
+        var project = VideoProject(name: "empty")
+        XCTAssertNil(project.addCue(at: 0))
+    }
+
     func testTypedTimesParse() {
         XCTAssertEqual(VideoEditorModel.seconds(from: "0:06.18")!, 6.18, accuracy: 0.0001)
         XCTAssertEqual(VideoEditorModel.seconds(from: "1:02.5")!, 62.5, accuracy: 0.0001)
@@ -509,6 +540,50 @@ final class VideoExporterGeometryTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(VideoProject.self, from: data).captionAnchor, CaptionAnchor(x: 0.25, y: 0.75))
         let old = Data("{\"name\":\"Old\",\"clips\":[],\"created\":0}".utf8)
         XCTAssertNil(try JSONDecoder().decode(VideoProject.self, from: old).captionAnchor, "older files have no anchor")
+    }
+
+    func testFrameFormatDefaultsToReelsAndSurvivesSaving() throws {
+        let old = Data("{\"name\":\"Old\",\"clips\":[],\"created\":0}".utf8)
+        let loaded = try JSONDecoder().decode(VideoProject.self, from: old)
+        XCTAssertEqual(loaded.format, FrameFormat.default, "older files were all Reels-shaped")
+        XCTAssertEqual(loaded.renderSize, CGSize(width: 1080, height: 1920))
+
+        var project = VideoProject(name: "Wide")
+        project.frameFormat = "youtube"
+        let round = try JSONDecoder().decode(VideoProject.self, from: JSONEncoder().encode(project))
+        XCTAssertEqual(round.format.ratio, "16:9")
+        XCTAssertEqual(round.renderSize, CGSize(width: 1920, height: 1080))
+
+        project.frameFormat = "not-a-platform"
+        XCTAssertEqual(project.format, FrameFormat.default, "an unknown id falls back rather than breaking the project")
+    }
+
+    func testFrameFormatPresetsAreDistinctAndSearchable() {
+        XCTAssertEqual(Set(FrameFormat.all.map(\.id)).count, FrameFormat.all.count, "ids are unique")
+        for format in FrameFormat.all {
+            XCTAssertGreaterThan(format.renderSize.width, 0)
+            XCTAssertGreaterThan(format.renderSize.height, 0)
+        }
+        XCTAssertEqual(FrameFormat.matching("  "), FrameFormat.all)
+        XCTAssertTrue(FrameFormat.matching("linkedin").allSatisfy { $0.platform == "LinkedIn" })
+        XCTAssertEqual(FrameFormat.matching("linkedin").count, 3)
+        XCTAssertTrue(FrameFormat.matching("1:1").allSatisfy { $0.ratio == "1:1" })
+        XCTAssertTrue(FrameFormat.matching("zzz").isEmpty)
+    }
+
+    func testLandscapeFrameFitsAWidescreenTakeExactly() {
+        let render = FrameFormat.named("youtube").renderSize
+        let natural = CGSize(width: 3840, height: 2160)
+        let t = VideoExporter.fitTransform(naturalSize: natural, preferredTransform: .identity, into: render)
+        let placed = CGRect(origin: .zero, size: natural).applying(t)
+        XCTAssertEqual(placed.minX, 0, accuracy: 0.01)
+        XCTAssertEqual(placed.minY, 0, accuracy: 0.01)
+        XCTAssertEqual(placed.width, 1920, accuracy: 0.01)
+        XCTAssertEqual(placed.height, 1080, accuracy: 0.01)
+        XCTAssertEqual(VideoExporter.fillZoom(naturalSize: natural, preferredTransform: .identity, into: render), 1, accuracy: 0.0001)
+        // The same take needs zooming to fill a square.
+        let square = FrameFormat.named("instagram-post").renderSize
+        XCTAssertEqual(VideoExporter.fillZoom(naturalSize: natural, preferredTransform: .identity, into: square), 16 / 9, accuracy: 0.0001)
     }
 
     @MainActor

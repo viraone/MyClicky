@@ -6,7 +6,7 @@ import SwiftUI
 /// on a style tile it's centred and shrunk to fit the tile.
 struct CaptionLayerView: NSViewRepresentable {
     enum Placement: Equatable {
-        /// Where it lands on a 9:16 video filling the view.
+        /// Where it lands on a video of `render` shape filling the view.
         case onVideo
         /// Centred, shrunk so the whole caption fits the view.
         case fitted
@@ -18,6 +18,8 @@ struct CaptionLayerView: NSViewRepresentable {
     /// Where the user dragged the subtitles to; nil is the style's spot.
     var anchor: CaptionAnchor? = nil
     var placement: Placement
+    /// The frame the caption is laid out for.
+    var render: CGSize = VideoExporter.renderSize
 
     func makeNSView(context: Context) -> Host {
         let host = Host()
@@ -28,12 +30,13 @@ struct CaptionLayerView: NSViewRepresentable {
     }
 
     func updateNSView(_ host: Host, context: Context) {
-        host.draw(text: text, highlight: highlight, style: style, anchor: anchor, placement: placement)
+        host.draw(text: text, highlight: highlight, style: style, anchor: anchor, placement: placement, render: render)
     }
 
     final class Host: NSView {
         private var key: String?
         private var caption: CALayer?
+        private var render = VideoExporter.renderSize
 
         override var isFlipped: Bool { false }
 
@@ -43,16 +46,17 @@ struct CaptionLayerView: NSViewRepresentable {
         }
 
         @MainActor
-        func draw(text: String, highlight: Int?, style: CaptionStyle, anchor: CaptionAnchor?, placement: Placement) {
+        func draw(text: String, highlight: Int?, style: CaptionStyle, anchor: CaptionAnchor?, placement: Placement, render: CGSize) {
             let spot = anchor.map { "\($0.x),\($0.y)" } ?? "-"
-            let next = "\(text)|\(highlight.map(String.init) ?? "-")|\(placement)|\(spot)|\(style.hashKey)"
+            let next = "\(text)|\(highlight.map(String.init) ?? "-")|\(placement)|\(spot)|\(render)|\(style.hashKey)"
             guard next != key else { return }
             key = next
             caption?.removeFromSuperlayer()
-            let layer = VideoExporter.captionLayer(text: text, highlight: highlight, style: style, anchor: anchor)
+            let layer = VideoExporter.captionLayer(text: text, highlight: highlight, style: style, anchor: anchor, render: render)
             caption = layer
             self.layer?.addSublayer(layer)
             self.placement = placement
+            self.render = render
             position()
         }
 
@@ -60,7 +64,6 @@ struct CaptionLayerView: NSViewRepresentable {
 
         private func position() {
             guard let caption, bounds.width > 0, bounds.height > 0 else { return }
-            let render = VideoExporter.renderSize
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             switch placement {

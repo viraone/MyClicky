@@ -147,10 +147,12 @@ struct VideoProject: Codable, Equatable {
     var subtitleStyle: String
     /// Where the subtitles were dragged to, or nil for the style's own spot.
     var captionAnchor: CaptionAnchor?
+    /// The shape of the finished video — a `FrameFormat` by id.
+    var frameFormat: String
 
     init(name: String, clips: [EditClip] = [], created: Date = Date(), transcripts: [String: [SpokenWord]] = [:],
          spokenLanguage: String = VideoProject.defaultSpokenLanguage, translationLanguage: String? = nil,
-         subtitleStyle: String = SubtitleStylePreset.default.rawValue) {
+         subtitleStyle: String = SubtitleStylePreset.default.rawValue, frameFormat: String = FrameFormat.default.id) {
         self.name = name
         self.clips = clips
         self.created = created
@@ -158,10 +160,12 @@ struct VideoProject: Codable, Equatable {
         self.spokenLanguage = spokenLanguage
         self.translationLanguage = translationLanguage
         self.subtitleStyle = subtitleStyle
+        self.frameFormat = frameFormat
     }
 
     private enum CodingKeys: String, CodingKey {
-        case version, name, clips, created, transcripts, transcriptVersion, spokenLanguage, translationLanguage, subtitleStyle, captionAnchor
+        case version, name, clips, created, transcripts, transcriptVersion, spokenLanguage, translationLanguage, subtitleStyle, captionAnchor,
+             frameFormat
     }
 
     init(from decoder: Decoder) throws {
@@ -178,9 +182,16 @@ struct VideoProject: Codable, Equatable {
         translationLanguage = try c.decodeIfPresent(String.self, forKey: .translationLanguage)
         subtitleStyle = try c.decodeIfPresent(String.self, forKey: .subtitleStyle) ?? SubtitleStylePreset.default.rawValue
         captionAnchor = try c.decodeIfPresent(CaptionAnchor.self, forKey: .captionAnchor)
+        // Projects saved before the picker existed were all Reels-shaped.
+        frameFormat = try c.decodeIfPresent(String.self, forKey: .frameFormat) ?? FrameFormat.default.id
     }
 
     var stylePreset: SubtitleStylePreset { SubtitleStylePreset(rawValue: subtitleStyle) ?? .default }
+
+    var format: FrameFormat { FrameFormat.named(frameFormat) }
+
+    /// The pixel size the preview is framed for and the export is written at.
+    var renderSize: CGSize { format.renderSize }
 
     var duration: Double { clips.reduce(0) { $0 + $1.duration } }
 
@@ -428,6 +439,25 @@ struct VideoProject: Codable, Equatable {
 
     mutating func removeCue(_ cueID: UUID) {
         for c in clips.indices { clips[c].cues.removeAll { $0.id == cueID } }
+    }
+
+    /// A blank line starting at `time` (timeline seconds), for the user to
+    /// type: it runs to the next line in the clip, the clip's end or two
+    /// seconds, whichever comes first. Nil when a line already covers that
+    /// moment or the gap is too small for one. Returns the new line's id.
+    @discardableResult
+    mutating func addCue(at time: Double) -> UUID? {
+        guard let (index, sourceTime) = locate(time) else { return nil }
+        let clip = clips[index]
+        let start = min(sourceTime, clip.outPoint)
+        guard !clip.cues.contains(where: { start >= $0.start && start < $0.end }) else { return nil }
+        let nextStart = clip.cues.map(\.start).filter { $0 > start }.min() ?? clip.outPoint
+        let end = min(nextStart, clip.outPoint, start + 2)
+        guard end - start >= Self.minimumClipDuration else { return nil }
+        let cue = CaptionCue(start: start, end: end, text: "")
+        let at = clip.cues.firstIndex { $0.start > start } ?? clip.cues.count
+        clips[index].cues.insert(cue, at: at)
+        return cue.id
     }
 
     // MARK: Translation
