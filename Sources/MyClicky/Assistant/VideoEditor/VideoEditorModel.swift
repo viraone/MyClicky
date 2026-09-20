@@ -183,6 +183,7 @@ final class VideoEditorModel: ObservableObject {
         refreshRecentProjects()
         rebuildPreview(seekTo: 0)
         loadWaveforms()
+        loadFilmstrips()
     }
 
     /// What typing in the panel's input does here: name a new project.
@@ -274,6 +275,7 @@ final class VideoEditorModel: ObservableObject {
             : "Added \(added); couldn't read \(skipped.joined(separator: ", "))."
         rebuildPreview(seekTo: nil)
         loadWaveforms()
+        loadFilmstrips()
     }
 
     // MARK: Waveforms
@@ -318,6 +320,29 @@ final class VideoEditorModel: ObservableObject {
         guard let peaks = waveforms[clip.source.path], !peaks.isEmpty else { return nil }
         return AudioWaveform.bars(from: peaks, sourceDuration: clip.sourceDuration,
                                   inPoint: clip.inPoint, outPoint: clip.outPoint, count: count)
+    }
+
+    /// Frames per source path for the filmstrip along the top of each
+    /// clip, like iMovie's. Small, so they're regenerated on open rather
+    /// than saved.
+    @Published private(set) var filmstrips: [String: [CGImage]] = [:]
+    private var filmstripTasks: Set<String> = []
+
+    private func loadFilmstrips() {
+        guard let project else { return }
+        for url in project.clips.map(\.source) {
+            let key = url.path
+            guard filmstrips[key] == nil, !filmstripTasks.contains(key) else { continue }
+            filmstripTasks.insert(key)
+            Task { [weak self] in
+                let frames = try? await Filmstrip.frames(for: url)
+                guard let self else { return }
+                // An unreadable clip still gets an entry so we don't retry
+                // on every open.
+                self.filmstrips[key] = frames ?? []
+                self.filmstripTasks.remove(key)
+            }
+        }
     }
 
     func removeSelectedClip() {
