@@ -541,7 +541,7 @@ struct VideoEditorView: View {
         case .importClips:
             "Step 1 — Press Import clips (top right) or drop your video files here."
         case .trim:
-            "Step 2 — Press Play to watch. Stop where you want to cut, then use Split, Cut before or Cut after. When it looks right, press Auto-subtitle under the video."
+            "Step 2 — Press Play to watch. Stop where you want to cut, then use Split, Cut before or Cut after in the Trim panel. When it looks right, press Auto-subtitle under the video."
         case .captions:
             "Step 3 — Press Auto-subtitle under the video to transcribe your takes."
         case .export:
@@ -803,7 +803,9 @@ struct VideoEditorView: View {
 
     /// VEED's split between the canvas and the timeline: pull it up for a
     /// taller timeline (bigger frames, a taller sound strip), down for more
-    /// video. Double-click puts it back.
+    /// video. The whole line is the handle, not just the pill: the grab
+    /// band runs the full width and well above and below the line. Double-
+    /// click puts it back.
     private func timelineGrip(maxExtra: CGFloat) -> some View {
         let active = gripHover || gripDragStart != nil
         return ZStack {
@@ -837,7 +839,12 @@ struct VideoEditorView: View {
                 onEnd: { gripDragStart = nil },
                 onReset: { timelineExtra = 0 }
             )
+            // Taller than the strip it sits on, so a hand near the line
+            // catches it without aiming at the pixel.
+            .frame(height: 28)
         )
+        // Over the dock below, which otherwise covers the band's lower half.
+        .zIndex(1)
         .animation(.easeOut(duration: 0.12), value: active)
         .help("Drag up for a taller timeline, down for more video — double-click to put it back")
     }
@@ -858,8 +865,9 @@ struct VideoEditorView: View {
         }
     }
 
-    /// Split and the cuts on the left, play in the middle, the highlighted
-    /// clip's moves on the right. Labels drop off when the panel is narrow.
+    /// Play in the middle, the highlighted clip's moves on the right. Split
+    /// and the cuts live in the Trim panel. Labels drop off when the panel
+    /// is narrow.
     private var transportRow: some View {
         ViewThatFits(in: .horizontal) {
             transportContent(labels: true)
@@ -870,49 +878,47 @@ struct VideoEditorView: View {
     }
 
     private func transportContent(labels: Bool) -> some View {
-        HStack(spacing: 6) {
-            transportButton("scissors", labels ? "Split" : nil,
-                            help: "Cut the clip into two at the playhead — then remove the half you don't want") { model.splitAtPlayhead() }
-            transportButton("arrow.right.to.line", labels ? "Cut before" : nil,
-                            help: "Throw away everything in this clip before the playhead") { model.trimStartToPlayhead() }
-            transportButton("arrow.left.to.line", labels ? "Cut after" : nil,
-                            help: "Throw away everything in this clip after the playhead") { model.trimEndToPlayhead() }
-            Spacer(minLength: 8)
-            transportButton("backward.end.fill", nil, help: "Jump to the beginning") { model.seek(to: 0) }
-            transportButton("gobackward.5", nil, help: "Go back five seconds") { model.seek(to: model.currentTime - 5) }
-            Button { model.togglePlay() } label: {
-                Image(systemName: model.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundStyle(Color.black)
-                    .frame(width: 34, height: 34)
-                    .background(Circle().fill(accent))
+        // The play cluster sits at the true centre whatever is on the right.
+        ZStack {
+            HStack(spacing: 6) {
+                transportButton("backward.end.fill", nil, help: "Jump to the beginning") { model.seek(to: 0) }
+                transportButton("gobackward.5", nil, help: "Go back five seconds") { model.seek(to: model.currentTime - 5) }
+                Button { model.togglePlay() } label: {
+                    Image(systemName: model.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(Color.black)
+                        .frame(width: 34, height: 34)
+                        .background(Circle().fill(accent))
+                }
+                .buttonStyle(.plain)
+                .help(model.isPlaying ? "Pause" : "Play")
+                transportButton("goforward.5", nil, help: "Go forward five seconds") { model.seek(to: model.currentTime + 5) }
+                HStack(spacing: 4) {
+                    Text(VideoEditorModel.clock(model.currentTime))
+                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                        .foregroundStyle(accent)
+                    Text("/ \(VideoEditorModel.clock(model.duration))")
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundStyle(Color.white.opacity(0.45))
+                }
+                .padding(.leading, 4)
             }
-            .buttonStyle(.plain)
-            .help(model.isPlaying ? "Pause" : "Play")
-            transportButton("goforward.5", nil, help: "Go forward five seconds") { model.seek(to: model.currentTime + 5) }
-            HStack(spacing: 4) {
-                Text(VideoEditorModel.clock(model.currentTime))
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    .foregroundStyle(accent)
-                Text("/ \(VideoEditorModel.clock(model.duration))")
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(Color.white.opacity(0.45))
+            HStack(spacing: 6) {
+                Spacer(minLength: 8)
+                if labels, let clip = model.selectedClip {
+                    Label(clip.name, systemImage: "film")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(Color.white.opacity(0.55))
+                        .lineLimit(1)
+                        .frame(maxWidth: 160, alignment: .trailing)
+                }
+                transportButton("arrow.left", labels ? "Earlier" : nil,
+                                help: "Move the highlighted clip one place earlier") { model.moveSelectedClip(by: -1) }
+                transportButton("arrow.right", labels ? "Later" : nil,
+                                help: "Move the highlighted clip one place later") { model.moveSelectedClip(by: 1) }
+                transportButton("trash", labels ? "Remove" : nil, destructive: true,
+                                help: "Take the highlighted clip out of the video (the file stays on disk)") { model.removeSelectedClip() }
             }
-            .padding(.leading, 4)
-            Spacer(minLength: 8)
-            if labels, let clip = model.selectedClip {
-                Label(clip.name, systemImage: "film")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(Color.white.opacity(0.55))
-                    .lineLimit(1)
-                    .frame(maxWidth: 160, alignment: .trailing)
-            }
-            transportButton("arrow.left", labels ? "Earlier" : nil,
-                            help: "Move the highlighted clip one place earlier") { model.moveSelectedClip(by: -1) }
-            transportButton("arrow.right", labels ? "Later" : nil,
-                            help: "Move the highlighted clip one place later") { model.moveSelectedClip(by: 1) }
-            transportButton("trash", labels ? "Remove" : nil, destructive: true,
-                            help: "Take the highlighted clip out of the video (the file stays on disk)") { model.removeSelectedClip() }
         }
     }
 
@@ -941,7 +947,8 @@ struct VideoEditorView: View {
     @State private var gripDragStart: CGFloat?
 
     /// Ruler 22 + gap 4 + subtitles 22 + gap 4 + clips.
-    private var tracksHeight: CGFloat { 52 + clipHeight }
+    private var tracksHeight: CGFloat { 22 + 4 + Self.subtitleLaneHeight + 4 + clipHeight }
+    private static let subtitleLaneHeight: CGFloat = 30
     /// A clip is iMovie's shape: frames along the top, sound underneath.
     /// Pulling the timeline taller grows both, the frames faster.
     private var clipHeight: CGFloat { 84 + CGFloat(timelineExtra) }
@@ -1036,39 +1043,114 @@ struct VideoEditorView: View {
         return String(format: "%d:%02d", s / 60, s % 60)
     }
 
-    /// VEED's subtitles lane: a bar the length of the video with a block
-    /// for every line, the live one lit.
+    /// VEED's subtitles lane: a block for every line with its words inside,
+    /// the live one lit. Click a block to jump to it and open that line in
+    /// the Subtitles panel; with the playhead in a gap, "+ Add subtitle"
+    /// offers a blank line to type. Before the first subtitles the lane is
+    /// one button that takes you to Auto-subtitle.
     private func subtitlesTrack(width: CGFloat, total: Double) -> some View {
         let cues = model.project?.timelineCues ?? []
         let now = model.currentTime
+        let inGap = !cues.isEmpty && model.currentCue == nil && hasClips
+        let height = Self.subtitleLaneHeight
         return ZStack(alignment: .leading) {
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(cues.isEmpty ? Color.white.opacity(0.05) : accent.opacity(0.14))
-            Canvas { context, size in
-                let scale = size.width / total
-                for cue in cues {
-                    let live = now >= cue.start && now < cue.end
-                    let rect = CGRect(x: cue.start * scale, y: 5,
-                                      width: max(2, (cue.end - cue.start) * scale - 1), height: size.height - 10)
-                    context.fill(Path(roundedRect: rect, cornerRadius: 3), with: .color(accent.opacity(live ? 0.95 : 0.5)))
+                .fill(cues.isEmpty ? Color.white.opacity(0.05) : accent.opacity(0.12))
+            if cues.isEmpty {
+                // The whole lane is the hint, and the hint is the way in.
+                Button { open(.subtitles) } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "captions.bubble.fill")
+                        Text(hasClips ? "No subtitles yet — click here, then press Auto-subtitle" : "Subtitles appear here once your clips are transcribed")
+                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    }
+                    .foregroundStyle(Color.white.opacity(0.75))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: height)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .disabled(!hasClips)
+                .help("Open the Subtitles panel")
+            } else {
+                Canvas { context, size in
+                    let scale = size.width / total
+                    for cue in cues {
+                        let live = now >= cue.start && now < cue.end
+                        let rect = CGRect(x: cue.start * scale, y: 4,
+                                          width: max(2, (cue.end - cue.start) * scale - 2), height: size.height - 8)
+                        context.fill(Path(roundedRect: rect, cornerRadius: 4), with: .color(accent.opacity(live ? 0.95 : 0.45)))
+                        guard rect.width > 24 else { continue }
+                        // The words, clipped to the block: the lane reads like a script.
+                        context.drawLayer { layer in
+                            layer.clip(to: Path(rect.insetBy(dx: 5, dy: 0)))
+                            let words = Text(cue.text.isEmpty ? "(empty — type it in the panel)" : cue.text)
+                                .font(.system(size: 10.5, weight: live ? .bold : .medium, design: .monospaced))
+                                .foregroundStyle(live ? Color.black : Color.white.opacity(0.95))
+                            layer.draw(words, at: CGPoint(x: rect.minX + 6, y: rect.midY), anchor: .leading)
+                        }
+                    }
+                }
+                .allowsHitTesting(false)
+                // A click on a block: go there and open that line to edit.
+                ForEach(cues) { cue in
+                    let x = width * cue.start / total
+                    let w = max(2, width * (cue.end - cue.start) / total - 2)
+                    Button {
+                        model.seek(to: cue.start)
+                        model.cueToReveal = cue.id
+                        open(.subtitles)
+                    } label: {
+                        Color.clear.frame(width: w, height: height).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .offset(x: x)
+                    .help("“\(cue.text)” — click to jump here and edit this line")
                 }
             }
-            HStack(spacing: 4) {
-                Image(systemName: "captions.bubble.fill").font(.system(size: 9))
-                Text(cues.isEmpty ? "No subtitles yet — press Auto-subtitle" : "Subtitles")
-                    .font(.system(size: 9.5, weight: .bold, design: .monospaced))
-            }
-            .foregroundStyle(Color.white.opacity(cues.isEmpty ? 0.45 : 0.95))
-            .padding(.horizontal, 6).padding(.vertical, 2)
-            .background(Capsule().fill(Color.black.opacity(0.55)))
-            .padding(.leading, 5)
         }
-        .frame(width: width, height: 22)
+        .frame(width: width, height: height)
         .overlay(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .strokeBorder(cues.isEmpty ? Color.white.opacity(0.1) : accent.opacity(0.35), lineWidth: 1)
+                .strokeBorder(cues.isEmpty ? Color.white.opacity(0.12) : accent.opacity(0.35), lineWidth: 1)
         )
-        .allowsHitTesting(false)
+        .overlay(alignment: .topLeading) {
+            if inGap {
+                // Always the same pill, floating just above the lane beside
+                // the playhead, so it never sits on a neighbour's words and
+                // looks the same wherever you click.
+                let pillWidth: CGFloat = 150
+                addSubtitlePill
+                    .frame(width: pillWidth)
+                    .offset(x: min(max(0, width * now / total - pillWidth / 2), width - pillWidth), y: -(Self.addPillHeight + 2))
+                    .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.12), value: inGap)
+    }
+
+    private static let addPillHeight: CGFloat = 22
+
+    /// The one button that lives on the tracks: it wins over the scrub
+    /// gesture beneath, so a click adds a line instead of jumping.
+    private var addSubtitlePill: some View {
+        Button {
+            model.addCueAtPlayhead()
+            open(.subtitles)
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "plus").font(.system(size: 10, weight: .black))
+                Text("Add subtitle here").font(.system(size: 10.5, weight: .bold, design: .monospaced)).lineLimit(1)
+            }
+            .foregroundStyle(Color.black)
+            .frame(height: Self.addPillHeight)
+            .frame(maxWidth: .infinity)
+            .background(Capsule().fill(accent))
+            .shadow(color: .black.opacity(0.5), radius: 3, y: 1)
+        }
+        .buttonStyle(.plain)
+        .disabled(model.phase.isBusy)
+        .help("Add a blank subtitle at the playhead and type it in the Subtitles panel")
     }
 
     /// The clips in play order, each with its sound drawn inside.
@@ -1450,12 +1532,20 @@ struct VideoEditorView: View {
                     Text("Click a time to jump there; click words to fix them.")
                         .font(.system(size: 13))
                         .foregroundStyle(Color.white.opacity(0.65))
-                    ScrollView(showsIndicators: false) {
-                        VStack(spacing: 4) {
-                            ForEach(cues) { cue in cueRow(cue) }
+                    ScrollViewReader { proxy in
+                        ScrollView(showsIndicators: false) {
+                            VStack(spacing: 4) {
+                                ForEach(cues) { cue in cueRow(cue).id(cue.id) }
+                            }
                         }
+                        .frame(maxHeight: .infinity)
+                        // A line just added from the timeline: scroll to it
+                        // and put the cursor in it, ready to type. The panel
+                        // may have been opened by that same click, so the
+                        // first appearance checks too.
+                        .onChange(of: model.cueToReveal) { _, _ in revealCue(proxy) }
+                        .onAppear { revealCue(proxy) }
                     }
-                    .frame(maxHeight: .infinity)
                 }
             }
         }
@@ -1786,6 +1876,18 @@ struct VideoEditorView: View {
 
     /// Which lines have their start and end fields open.
     @State private var timingRows: Set<UUID> = []
+    /// The line whose text field has the cursor.
+    @FocusState private var focusedCue: UUID?
+
+    private func revealCue(_ proxy: ScrollViewProxy) {
+        guard let id = model.cueToReveal else { return }
+        model.cueToReveal = nil
+        // Let the row land in the list before asking for it.
+        DispatchQueue.main.async {
+            withAnimation { proxy.scrollTo(id, anchor: .center) }
+            focusedCue = id
+        }
+    }
 
     private func cueRow(_ cue: TimelineCue) -> some View {
         let live = model.currentTime >= cue.start && model.currentTime < cue.end
@@ -1801,11 +1903,12 @@ struct VideoEditorView: View {
                 .buttonStyle(.plain)
                 .help("Jump to this moment")
                 VStack(alignment: .leading, spacing: 2) {
-                    TextField("", text: Binding(
+                    TextField(cue.text.isEmpty ? "Type the subtitle…" : "", text: Binding(
                         get: { cue.text },
                         set: { model.setCueText(cue.id, $0) }
                     ))
                     .textFieldStyle(.plain)
+                    .focused($focusedCue, equals: cue.id)
                     .font(.system(size: 13, weight: live ? .semibold : .regular, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.92))
                     if model.translationEnabled {

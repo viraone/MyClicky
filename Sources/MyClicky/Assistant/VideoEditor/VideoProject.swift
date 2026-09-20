@@ -441,6 +441,25 @@ struct VideoProject: Codable, Equatable {
         for c in clips.indices { clips[c].cues.removeAll { $0.id == cueID } }
     }
 
+    /// A blank line starting at `time` (timeline seconds), for the user to
+    /// type: it runs to the next line in the clip, the clip's end or two
+    /// seconds, whichever comes first. Nil when a line already covers that
+    /// moment or the gap is too small for one. Returns the new line's id.
+    @discardableResult
+    mutating func addCue(at time: Double) -> UUID? {
+        guard let (index, sourceTime) = locate(time) else { return nil }
+        let clip = clips[index]
+        let start = min(sourceTime, clip.outPoint)
+        guard !clip.cues.contains(where: { start >= $0.start && start < $0.end }) else { return nil }
+        let nextStart = clip.cues.map(\.start).filter { $0 > start }.min() ?? clip.outPoint
+        let end = min(nextStart, clip.outPoint, start + 2)
+        guard end - start >= Self.minimumClipDuration else { return nil }
+        let cue = CaptionCue(start: start, end: end, text: "")
+        let at = clip.cues.firstIndex { $0.start > start } ?? clip.cues.count
+        clips[index].cues.insert(cue, at: at)
+        return cue.id
+    }
+
     // MARK: Translation
 
     /// Cues on the timeline that still need a translated line.

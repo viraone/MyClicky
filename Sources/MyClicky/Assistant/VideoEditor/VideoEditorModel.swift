@@ -491,6 +491,19 @@ final class VideoEditorModel: ObservableObject {
         save()
     }
 
+    /// A line picked on the timeline — just added, or clicked — for the
+    /// Subtitles panel to scroll to and put the cursor in. Cleared once it has.
+    @Published var cueToReveal: UUID?
+
+    /// VEED's "+ Add subtitle" on the timeline: a blank line at the playhead
+    /// for the user to type. Nothing happens if a line is already there.
+    func addCueAtPlayhead() {
+        guard var p = project, let id = p.addCue(at: currentTime) else { return }
+        project = p
+        save()
+        cueToReveal = id
+    }
+
     /// A line's start and end typed into the Subtitles panel, in timeline seconds.
     func setCueTiming(_ id: UUID, start: Double, end: Double) {
         guard var p = project else { return }

@@ -19,6 +19,37 @@ final class VideoProjectTests: XCTestCase {
         XCTAssertEqual(project.clips[0].cues[0].end - project.clips[0].cues[0].start, 0.1, accuracy: 0.0001, "never shorter than a tenth")
     }
 
+    func testAddCueFillsTheGapAtThePlayheadAndRefusesACoveredMoment() {
+        var project = VideoProject(name: "add")
+        var clip = EditClip(source: URL(fileURLWithPath: "/tmp/a.mov"), sourceDuration: 20, inPoint: 5, outPoint: 15)
+        clip.cues = [CaptionCue(start: 8, end: 9, text: "one")]
+        project.clips = [clip]
+
+        // Timeline 0 is source 5: a two-second blank line, stopping short of "one".
+        let first = project.addCue(at: 0)
+        XCTAssertNotNil(first)
+        XCTAssertEqual(project.clips[0].cues.map(\.text), ["", "one"], "kept in time order")
+        XCTAssertEqual(project.clips[0].cues[0].start, 5, accuracy: 0.0001)
+        XCTAssertEqual(project.clips[0].cues[0].end, 7, accuracy: 0.0001)
+
+        // Right before "one" the gap is shorter than two seconds.
+        XCTAssertNotNil(project.addCue(at: 2.5))
+        XCTAssertEqual(project.clips[0].cues[1].end, 8, accuracy: 0.0001, "runs up to the next line")
+
+        XCTAssertNil(project.addCue(at: 3.5), "a moment already covered gets no second line")
+        XCTAssertNil(project.addCue(at: 9.98), "no room at the very end of the clip")
+
+        // The tail end of the clip gets the rest of it.
+        XCTAssertNotNil(project.addCue(at: 9))
+        XCTAssertEqual(project.clips[0].cues.last?.end ?? 0, 15, accuracy: 0.0001)
+        XCTAssertTrue(project.timelineCues.allSatisfy { $0.end > $0.start })
+    }
+
+    func testAddCueWithoutClipsDoesNothing() {
+        var project = VideoProject(name: "empty")
+        XCTAssertNil(project.addCue(at: 0))
+    }
+
     func testTypedTimesParse() {
         XCTAssertEqual(VideoEditorModel.seconds(from: "0:06.18")!, 6.18, accuracy: 0.0001)
         XCTAssertEqual(VideoEditorModel.seconds(from: "1:02.5")!, 62.5, accuracy: 0.0001)
