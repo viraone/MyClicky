@@ -824,8 +824,13 @@ struct VideoEditorView: View {
         .help(help)
     }
 
-    /// Ruler 18 + gap 4 + subtitles 22 + gap 4 + clips 68.
-    private static let tracksHeight: CGFloat = 116
+    /// Ruler 18 + gap 4 + subtitles 22 + gap 4 + clips.
+    private static let tracksHeight: CGFloat = 48 + clipHeight
+    /// A clip is iMovie's shape: frames along the top, sound underneath.
+    private static let clipHeight: CGFloat = 84
+    private static let filmHeight: CGFloat = 56
+    /// iMovie's yellow for the loud bits.
+    private static let loud = Color(red: 1.0, green: 0.8, blue: 0.25)
 
     /// Ruler, subtitles and clips share one width, so one playhead runs
     /// through all of them and one drag scrubs anywhere.
@@ -970,7 +975,7 @@ struct VideoEditorView: View {
                         let near = hoverX.map { abs($0 - seamX) < 16 } ?? false
                         if near {
                             rejoinPill(index: index)
-                                .position(x: seamX, y: 34)
+                                .position(x: seamX, y: Self.clipHeight / 2)
                                 .transition(.opacity.combined(with: .scale(scale: 0.9)))
                         } else {
                             Image(systemName: "arrow.left.and.right")
@@ -978,13 +983,13 @@ struct VideoEditorView: View {
                                 .foregroundStyle(.white.opacity(0.75))
                                 .frame(width: 14, height: 14)
                                 .background(Circle().fill(Color.black.opacity(0.7)))
-                                .position(x: seamX, y: 34)
+                                .position(x: seamX, y: Self.clipHeight / 2)
                                 .allowsHitTesting(false)
                         }
                     }
                 }
             }
-            .frame(height: 68)
+            .frame(height: Self.clipHeight)
             .onHover { inside in
                 if inside { NSCursor.pointingHand.push() } else { NSCursor.pop(); hoverX = nil }
             }
@@ -996,7 +1001,7 @@ struct VideoEditorView: View {
             }
             .animation(.easeOut(duration: 0.12), value: hoverX == nil)
         }
-        .frame(height: 68)
+        .frame(height: Self.clipHeight)
     }
 
     /// Where the mouse is over the timeline strip, for the Rejoin pill.
@@ -1027,7 +1032,10 @@ struct VideoEditorView: View {
     private func clipBlock(_ clip: EditClip, width: CGFloat) -> some View {
         let selected = clip.id == model.selectedClipID
         return ZStack(alignment: .topLeading) {
-                waveform(for: clip, width: width)
+                VStack(spacing: 0) {
+                    filmstrip(for: clip, width: width)
+                    waveform(for: clip, width: width)
+                }
                 HStack(spacing: 5) {
                     Text(clip.name)
                         .font(.system(size: 10, weight: .semibold, design: .monospaced))
@@ -1050,7 +1058,7 @@ struct VideoEditorView: View {
                 .padding(5)
                 .frame(maxWidth: width, alignment: .leading)
             }
-            .frame(width: width, height: 68, alignment: .topLeading)
+            .frame(width: width, height: Self.clipHeight, alignment: .topLeading)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(selected ? accent.opacity(0.32) : Color.white.opacity(0.09))
@@ -1064,46 +1072,70 @@ struct VideoEditorView: View {
             .help("\(clip.source.path)\nClick anywhere on the timeline to jump there; drag to scrub.")
     }
 
-    /// The sound inside the clip as a soft mirrored shape: tall where
-    /// someone's talking, thin in the gaps. What's already played is tinted
-    /// so the playhead has a trail.
+    /// iMovie's filmstrip: one frame per tile along the clip, each the
+    /// frame from that moment, at the picture's own shape.
+    @ViewBuilder
+    private func filmstrip(for clip: EditClip, width: CGFloat) -> some View {
+        let height = Self.filmHeight
+        if let frames = model.filmstrips[clip.source.path], let first = frames.first {
+            let tileWidth = max(12, height * CGFloat(first.width) / CGFloat(max(1, first.height)))
+            Canvas { context, size in
+                var x: CGFloat = 0
+                while x < size.width {
+                    let visible = min(tileWidth, size.width - x)
+                    let offset = clip.duration * Double((x + visible / 2) / size.width)
+                    if let frame = Filmstrip.frame(in: frames, at: clip.inPoint + offset, sourceDuration: clip.sourceDuration) {
+                        var tile = context
+                        tile.clip(to: Path(CGRect(x: x, y: 0, width: visible, height: height)))
+                        tile.draw(Image(decorative: frame, scale: 1), in: CGRect(x: x, y: 0, width: tileWidth, height: height))
+                    }
+                    x += tileWidth
+                }
+            }
+            .frame(width: width, height: height)
+            .allowsHitTesting(false)
+        } else {
+            Color.clear.frame(width: width, height: height)
+        }
+    }
+
+    /// iMovie's sound strip: loudness rises from the bottom in blue and the
+    /// loudest moments tip over into yellow. What's already played is
+    /// brighter so the playhead has a trail.
     @ViewBuilder
     private func waveform(for clip: EditClip, width: CGFloat) -> some View {
-        let step: CGFloat = 3
+        let height = Self.clipHeight - Self.filmHeight
+        let step: CGFloat = 2
         let count = max(2, Int(width / step))
         if let raw = model.waveformBars(for: clip, count: count) {
             let bars = smoothed(raw)
             let played = playedFraction(of: clip)
             Canvas { context, size in
-                let mid = size.height / 2
-                let amp = (size.height - 14) / 2
+                let amp = size.height - 3
                 var shape = Path()
-                shape.move(to: CGPoint(x: 0, y: mid))
+                shape.move(to: CGPoint(x: 0, y: size.height))
                 for (i, level) in bars.enumerated() {
-                    shape.addLine(to: CGPoint(x: CGFloat(i) * step, y: mid - max(1, CGFloat(level) * amp)))
+                    shape.addLine(to: CGPoint(x: CGFloat(i) * step, y: size.height - max(1.5, CGFloat(level) * amp)))
                 }
-                shape.addLine(to: CGPoint(x: CGFloat(bars.count - 1) * step, y: mid))
-                for (i, level) in bars.enumerated().reversed() {
-                    shape.addLine(to: CGPoint(x: CGFloat(i) * step, y: mid + max(1, CGFloat(level) * amp)))
-                }
+                shape.addLine(to: CGPoint(x: CGFloat(bars.count - 1) * step, y: size.height))
                 shape.closeSubpath()
+                let loudLine = size.height - 0.72 * amp
 
-                let quiet = Gradient(colors: [.white.opacity(0.42), .white.opacity(0.16), .white.opacity(0.42)])
-                let loud = Gradient(colors: [accent.opacity(0.95), accent.opacity(0.55), accent.opacity(0.95)])
-                let top = CGPoint(x: 0, y: 0), bottom = CGPoint(x: 0, y: size.height)
-                context.fill(shape, with: .linearGradient(quiet, startPoint: top, endPoint: bottom))
+                func paint(_ ctx: GraphicsContext, body: Color, cap: Color) {
+                    ctx.fill(shape, with: .color(body))
+                    var caps = ctx
+                    caps.clip(to: Path(CGRect(x: 0, y: 0, width: size.width, height: loudLine)))
+                    caps.fill(shape, with: .color(cap))
+                }
+                paint(context, body: accent.opacity(0.55), cap: Self.loud.opacity(0.7))
                 if played > 0 {
                     var trail = context
                     trail.clip(to: Path(CGRect(x: 0, y: 0, width: size.width * played, height: size.height)))
-                    trail.fill(shape, with: .linearGradient(loud, startPoint: top, endPoint: bottom))
+                    paint(trail, body: accent.opacity(0.95), cap: Self.loud)
                 }
-                // A hairline through the middle so silence still reads as a track.
-                var line = Path()
-                line.move(to: CGPoint(x: 0, y: mid))
-                line.addLine(to: CGPoint(x: size.width, y: mid))
-                context.stroke(line, with: .color(.white.opacity(0.12)), lineWidth: 1)
             }
-            .frame(width: width, height: 68)
+            .frame(width: width, height: height)
+            .background(accent.opacity(0.12))
             .allowsHitTesting(false)
         } else if model.waveforms[clip.source.path] == nil {
             HStack {
@@ -1111,7 +1143,9 @@ struct VideoEditorView: View {
                 ProgressView().controlSize(.mini).opacity(0.5)
                 Spacer()
             }
-            .frame(width: width, height: 68)
+            .frame(width: width, height: height)
+        } else {
+            Color.clear.frame(width: width, height: height)
         }
     }
 
