@@ -39,7 +39,7 @@ struct VideoEditorView: View {
                     Text("Peeky Video")
                         .font(.system(size: 20, weight: .bold, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.95))
-                    Text("Turn your takes into a subtitled 9:16 video for Reels, TikTok and your portfolio.")
+                    Text("Turn your takes into a subtitled video for Reels, TikTok, YouTube and your portfolio.")
                         .foregroundStyle(.white.opacity(0.6))
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: 420)
@@ -344,7 +344,7 @@ struct VideoEditorView: View {
             pillButton("Export video", icon: "square.and.arrow.up", prominent: true) { model.export() }
                 .disabled(!hasClips)
                 .opacity(hasClips ? 1 : 0.45)
-                .help("Save the finished MP4 at 1080 × 1920 with subtitles burned in")
+                .help("Save the finished MP4 at \(model.frameFormat.pixels) with subtitles burned in")
         }
         .disabled(model.phase.isBusy)
     }
@@ -458,7 +458,7 @@ struct VideoEditorView: View {
         case .importClips: "Choose the takes and screen recordings for this video"
         case .trim: "Watch it back and cut out the bits you don't want"
         case .captions: "Listen to every take and lay word-timed subtitles on the video"
-        case .export: "Save the finished MP4 (1080 × 1920) with its .srt and transcript"
+        case .export: "Save the finished MP4 (\(model.frameFormat.pixels)) with its .srt and transcript"
         }
     }
 
@@ -554,7 +554,9 @@ struct VideoEditorView: View {
     // MARK: Preview
 
     private func preview(height: CGFloat) -> some View {
-        let width = height * 9 / 16
+        let format = model.frameFormat
+        let width = height * format.aspect
+        let render = format.renderSize
         return ZStack {
             VideoEditorSurface(player: model.player,
                                zoom: CGFloat(model.playheadClip?.zoom ?? 1),
@@ -563,7 +565,7 @@ struct VideoEditorView: View {
             if hasClips { panHandle(width: width, height: height) }
             if !hasClips {
                 VStack(spacing: 10) {
-                    Image(systemName: "iphone").font(.system(size: 36, weight: .thin))
+                    Image(systemName: format.isPortrait ? "iphone" : "rectangle.on.rectangle").font(.system(size: 36, weight: .thin))
                     Text("Your video shows here").font(.system(size: 12, design: .monospaced))
                 }
                 .foregroundStyle(.white.opacity(0.35))
@@ -583,7 +585,7 @@ struct VideoEditorView: View {
                 // The export's own caption layer, so the preview is exact.
                 CaptionLayerView(text: cue.displayText,
                                  highlight: model.style.accentColor == nil ? nil : model.project?.wordIndex(in: cue, at: model.currentTime),
-                                 style: model.style, anchor: dragAnchor ?? model.anchor(for: cue), placement: .onVideo)
+                                 style: model.style, anchor: dragAnchor ?? model.anchor(for: cue), placement: .onVideo, render: render)
                     .frame(width: width, height: height)
                     .allowsHitTesting(false)
                 captionHandle(for: cue, width: width, height: height)
@@ -596,7 +598,7 @@ struct VideoEditorView: View {
                         if let zoom = model.selectedClip?.zoom, zoom > 1.01 {
                             badge(String(format: "%.1f×", zoom), tint: accent)
                         }
-                        badge("9:16", tint: .white.opacity(0.5))
+                        badge(format.ratio, tint: .white.opacity(0.5))
                     }
                     .padding(8)
                 }
@@ -649,9 +651,10 @@ struct VideoEditorView: View {
     /// its background is dragged, and only a real view can refuse that.
     private func captionHandle(for cue: TimelineCue, width: CGFloat, height: CGFloat) -> some View {
         let style = model.style
-        let scale = width / VideoExporter.renderSize.width
+        let render = model.renderSize
+        let scale = width / render.width
         let pill = VideoExporter.captionFrame(for: style.display(cue.displayText), style: style,
-                                              anchor: dragAnchor ?? model.anchor(for: cue)).pill
+                                              anchor: dragAnchor ?? model.anchor(for: cue), render: render).pill
         let detached = cue.anchor != nil
         // Render space has its origin at the bottom; the preview's is at the top.
         let centre = CGPoint(x: pill.midX * scale, y: height - pill.midY * scale)
@@ -704,7 +707,8 @@ struct VideoEditorView: View {
     private var canvas: some View {
         GeometryReader { geo in
             let barHeight: CGFloat = 44
-            let height = max(160, min(geo.size.height - barHeight - 12, (geo.size.width - 16) * 16 / 9))
+            // As tall as the panel allows, but never wider than the canvas.
+            let height = max(160, min(geo.size.height - barHeight - 12, (geo.size.width - 16) / model.frameFormat.aspect))
             VStack(spacing: 12) {
                 Spacer(minLength: 0)
                 preview(height: height)
@@ -724,21 +728,25 @@ struct VideoEditorView: View {
         .opacity(hasClips ? 1 : 0.45)
     }
 
+    /// The frame picker's popover, open or not.
+    @State private var showFramePicker = false
+
     private func canvasBarContent(full: Bool) -> some View {
         let preset = model.stylePreset
+        let format = model.frameFormat
         let zoom = model.selectedClip?.zoom ?? 1
         return HStack(spacing: 2) {
-            if full {
-                HStack(spacing: 5) {
-                    Image(systemName: "iphone").font(.system(size: 11, weight: .semibold))
-                    Text("Reels · 9:16")
-                }
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .foregroundStyle(Color.white.opacity(0.7))
-                .padding(.horizontal, 10)
-                .help("Every export is 1080 × 1920 — the shape of Reels, TikTok and Shorts")
-                barDivider
+            barButton(format.isPortrait ? "iphone" : "rectangle.on.rectangle", full ? format.name : format.ratio, chevron: true,
+                      help: "Frame: \(format.name) · exports at \(format.pixels) — click to resize for another platform") {
+                showFramePicker.toggle()
             }
+            .popover(isPresented: $showFramePicker, arrowEdge: .top) {
+                FrameFormatPicker(selected: format) { chosen in
+                    model.setFrameFormat(chosen)
+                    showFramePicker = false
+                }
+            }
+            barDivider
             HStack(spacing: 2) {
                 barButton("minus.magnifyingglass", help: "Zoom the picture out (or pinch on the video)") { model.zoom(by: 1 / 1.15) }
                 Text(String(format: "%.1f×", zoom))
@@ -747,9 +755,9 @@ struct VideoEditorView: View {
                     .frame(width: 34)
                 barButton("plus.magnifyingglass", help: "Zoom the picture in — crops from the centre (or pinch on the video)") { model.zoom(by: 1.15) }
                 barButton("rectangle.arrowtriangle.2.inward", full ? "Fill" : nil,
-                          help: "Zoom just enough that the picture fills the whole 9:16 frame with no black bars") { model.zoomToFill() }
+                          help: "Zoom just enough that the picture fills the whole \(format.ratio) frame with no black bars") { model.zoomToFill() }
                 barButton("rectangle.arrowtriangle.2.outward", full ? "Fit" : nil,
-                          help: "Show the whole picture (black bars if it's landscape)") { model.setZoom(1) }
+                          help: "Show the whole picture (black bars where the shapes differ)") { model.setZoom(1) }
             }
             barDivider
             barButton("textformat", full ? preset.name : nil, chevron: true,
@@ -1411,8 +1419,8 @@ struct VideoEditorView: View {
                 controlGroup("PICTURE ZOOM  \(String(format: "%.1f×", zoom))") {
                     tile("minus.magnifyingglass", "Out", help: "Zoom out (or pinch on the video)") { model.zoom(by: 1 / 1.15) }
                     tile("plus.magnifyingglass", "In", help: "Zoom in — crops from the centre (or pinch on the video)") { model.zoom(by: 1.15) }
-                    tile("rectangle.arrowtriangle.2.inward", "Fill", help: "Zoom just enough that the picture fills the whole 9:16 frame with no black bars") { model.zoomToFill() }
-                    tile("rectangle.arrowtriangle.2.outward", "Fit", help: "Show the whole picture (black bars if it's landscape)") { model.setZoom(1) }
+                    tile("rectangle.arrowtriangle.2.inward", "Fill", help: "Zoom just enough that the picture fills the whole \(model.frameFormat.ratio) frame with no black bars") { model.zoomToFill() }
+                    tile("rectangle.arrowtriangle.2.outward", "Fit", help: "Show the whole picture (black bars where the shapes differ)") { model.setZoom(1) }
                 }
                 Text("The bars on the timeline are the sound: tall where you're talking, flat in the gaps — cut in a gap. Click anywhere on the timeline to jump there, or drag to scrub. Two halves of the same take show a Rejoin pill on their seam.")
                     .font(.system(size: 13))
@@ -1465,7 +1473,7 @@ struct VideoEditorView: View {
     private var exportPanel: some View {
         toolCard(title: "EXPORT", trailing: nil) {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Saves an MP4 at 1080 × 1920 with the subtitles burned in, plus the .srt and a transcript, in this project's exports folder.")
+                Text("Saves an MP4 at \(model.frameFormat.pixels) (\(model.frameFormat.name)) with the subtitles burned in, plus the .srt and a transcript, in this project's exports folder. Change the shape with the frame button under the video.")
                     .font(.system(size: 13))
                     .foregroundStyle(Color.white.opacity(0.65))
                     .fixedSize(horizontal: false, vertical: true)
@@ -2186,5 +2194,88 @@ private final class ZoomingPlayerView: AVPlayerView {
                                              centre.y + down * pan.height * bounds.height, 0)
         t = CATransform3DScale(t, zoom, zoom, 1)
         return CATransform3DTranslate(t, -centre.x, -centre.y, 0)
+    }
+}
+
+/// VEED's frame picker: a search box over every social-media preset, the
+/// current one ticked, and the export size on the footer. Choosing a row
+/// reframes the whole video.
+private struct FrameFormatPicker: View {
+    let selected: FrameFormat
+    let choose: (FrameFormat) -> Void
+    @State private var query = ""
+    @State private var hovered: FrameFormat.ID?
+    @FocusState private var searching: Bool
+
+    private var shown: [FrameFormat] { FrameFormat.matching(query) }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Search…", text: $query)
+                    .textFieldStyle(.plain)
+                    .focused($searching)
+                    .onSubmit { if let first = shown.first { choose(first) } }
+            }
+            .font(.system(size: 13))
+            .padding(.horizontal, 14)
+            .frame(height: 44)
+            Divider()
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        if shown.isEmpty {
+                            Text("No preset matches “\(query)”")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
+                                .padding(.vertical, 24)
+                        }
+                        ForEach(shown) { format in row(format) }
+                    }
+                    .padding(6)
+                }
+                .frame(maxHeight: 340)
+                .onAppear { proxy.scrollTo(selected.id, anchor: .center) }
+            }
+            Divider()
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.left.and.right.righttriangle.left.righttriangle.right")
+                Text("Resize for social media · exports at \(selected.pixels)")
+            }
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(.secondary)
+            .frame(height: 40)
+        }
+        .frame(width: 320)
+        .onAppear { searching = true }
+    }
+
+    private func row(_ format: FrameFormat) -> some View {
+        let current = format.id == selected.id
+        let lit = current || hovered == format.id
+        return Button { choose(format) } label: {
+            HStack(spacing: 10) {
+                Image(systemName: format.symbol)
+                    .font(.system(size: 12, weight: .semibold))
+                    .frame(width: 20)
+                    .foregroundStyle(current ? Color.accentColor : .secondary)
+                Text(format.platform).font(.system(size: 13, weight: .medium))
+                Text(format.ratio).font(.system(size: 13)).foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                if current {
+                    Image(systemName: "checkmark").font(.system(size: 11, weight: .bold)).foregroundStyle(Color.accentColor)
+                }
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 36)
+            .frame(maxWidth: .infinity)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(lit ? 0.08 : 0)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .id(format.id)
+        .onHover { hovered = $0 ? format.id : (hovered == format.id ? nil : hovered) }
+        .help("Reframe the video for \(format.name) — \(format.pixels)")
     }
 }

@@ -424,15 +424,29 @@ final class VideoEditorModel: ObservableObject {
         setZoom(clip.zoom * factor)
     }
 
-    /// Just enough zoom that the picture covers the whole 9:16 frame.
+    /// Just enough zoom that the picture covers the whole frame.
     func zoomToFill() {
         guard let clip = selectedClip else { return }
+        let render = renderSize
         Task {
             let asset = AVURLAsset(url: clip.source)
             guard let track = try? await asset.loadTracks(withMediaType: .video).first,
                   let (natural, preferred) = try? await track.load(.naturalSize, .preferredTransform) else { return }
-            setZoom(VideoExporter.fillZoom(naturalSize: natural, preferredTransform: preferred))
+            setZoom(VideoExporter.fillZoom(naturalSize: natural, preferredTransform: preferred, into: render))
         }
+    }
+
+    // MARK: Frame
+
+    /// The shape the video is framed and exported in.
+    var frameFormat: FrameFormat { project?.format ?? .default }
+    var renderSize: CGSize { frameFormat.renderSize }
+
+    /// Reframe the whole video for another platform. The preview is rebuilt
+    /// since the composition's own size changes; zoom and pan are kept.
+    func setFrameFormat(_ format: FrameFormat) {
+        guard let p = project, p.frameFormat != format.id else { return }
+        edit { $0.frameFormat = format.id }
     }
 
     // MARK: Subtitles

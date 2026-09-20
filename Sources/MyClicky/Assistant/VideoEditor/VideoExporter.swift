@@ -5,7 +5,9 @@ import QuartzCore
 /// Turns a `VideoProject` into an AVFoundation composition — for the preview
 /// player and for the exported file — and writes the finished MP4.
 enum VideoExporter {
-    static let renderSize = CGSize(width: 1080, height: 1920)
+    /// The Reels frame — what a project renders at unless it picks another
+    /// `FrameFormat`. The default for every helper that takes a `render`.
+    static let renderSize = FrameFormat.default.renderSize
     static let frameRate: Int32 = 30
     static let timescale: CMTimeScale = 600
 
@@ -70,8 +72,9 @@ enum VideoExporter {
         return Double(fill / fit)
     }
 
-    /// The clips laid end to end, each framed for 1080×1920. No captions:
-    /// those are drawn by the preview itself, and burned in only on export.
+    /// The clips laid end to end, each framed for the project's format. No
+    /// captions: those are drawn by the preview itself, and burned in only
+    /// on export.
     /// `zoomed` false leaves every clip at the fit; the preview zooms live
     /// on its own layer instead, so a zoom never rebuilds the player.
     static func build(_ project: VideoProject, zoomed: Bool = true) async throws -> Timeline {
@@ -80,6 +83,7 @@ enum VideoExporter {
             throw Failure.noVideo
         }
         let audioTrack = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid)
+        let render = project.renderSize
         var instructions: [AVMutableVideoCompositionInstruction] = []
         var cursor = CMTime.zero
 
@@ -104,7 +108,8 @@ enum VideoExporter {
             let layer = AVMutableVideoCompositionLayerInstruction(assetTrack: videoTrack)
             layer.setTransform(fitTransform(naturalSize: natural, preferredTransform: preferred,
                                             zoom: zoomed ? CGFloat(clip.zoom) : 1,
-                                            pan: zoomed ? CGSize(width: clip.panX, height: clip.panY) : .zero), at: cursor)
+                                            pan: zoomed ? CGSize(width: clip.panX, height: clip.panY) : .zero,
+                                            into: render), at: cursor)
             instruction.layerInstructions = [layer]
             instructions.append(instruction)
             cursor = cursor + range.duration
@@ -112,7 +117,7 @@ enum VideoExporter {
         guard !instructions.isEmpty else { throw Failure.noClips }
 
         let videoComposition = AVMutableVideoComposition()
-        videoComposition.renderSize = renderSize
+        videoComposition.renderSize = render
         videoComposition.frameDuration = CMTime(value: 1, timescale: frameRate)
         videoComposition.instructions = instructions
         return Timeline(composition: composition, videoComposition: videoComposition)
@@ -269,19 +274,21 @@ enum VideoExporter {
 
     // MARK: Export
 
-    /// Writes the project as an H.264 MP4 at 1080×1920, captions burned in.
-    /// `progress` is called on the main actor with 0…1.
+    /// Writes the project as an H.264 MP4 at its format's size, captions
+    /// burned in. `progress` is called on the main actor with 0…1.
     @MainActor
     static func export(_ project: VideoProject, style: CaptionStyle, to url: URL,
                        progress: @escaping @MainActor (Double) -> Void) async throws {
         let timeline = try await build(project)
+        let render = project.renderSize
 
         let parent = CALayer()
-        parent.frame = CGRect(origin: .zero, size: renderSize)
+        parent.frame = CGRect(origin: .zero, size: render)
         let videoLayer = CALayer()
         videoLayer.frame = parent.frame
         parent.addSublayer(videoLayer)
-        parent.addSublayer(captionOverlay(for: project.timelineCues, style: style, anchor: project.captionAnchor) { project.wordStarts(for: $0) })
+        parent.addSublayer(captionOverlay(for: project.timelineCues, style: style, anchor: project.captionAnchor,
+                                          render: render) { project.wordStarts(for: $0) })
         timeline.videoComposition.animationTool = AVVideoCompositionCoreAnimationTool(postProcessingAsVideoLayer: videoLayer, in: parent)
 
         guard let session = AVAssetExportSession(asset: timeline.composition, presetName: AVAssetExportPresetHighestQuality) else {

@@ -511,6 +511,50 @@ final class VideoExporterGeometryTests: XCTestCase {
         XCTAssertNil(try JSONDecoder().decode(VideoProject.self, from: old).captionAnchor, "older files have no anchor")
     }
 
+    func testFrameFormatDefaultsToReelsAndSurvivesSaving() throws {
+        let old = Data("{\"name\":\"Old\",\"clips\":[],\"created\":0}".utf8)
+        let loaded = try JSONDecoder().decode(VideoProject.self, from: old)
+        XCTAssertEqual(loaded.format, FrameFormat.default, "older files were all Reels-shaped")
+        XCTAssertEqual(loaded.renderSize, CGSize(width: 1080, height: 1920))
+
+        var project = VideoProject(name: "Wide")
+        project.frameFormat = "youtube"
+        let round = try JSONDecoder().decode(VideoProject.self, from: JSONEncoder().encode(project))
+        XCTAssertEqual(round.format.ratio, "16:9")
+        XCTAssertEqual(round.renderSize, CGSize(width: 1920, height: 1080))
+
+        project.frameFormat = "not-a-platform"
+        XCTAssertEqual(project.format, FrameFormat.default, "an unknown id falls back rather than breaking the project")
+    }
+
+    func testFrameFormatPresetsAreDistinctAndSearchable() {
+        XCTAssertEqual(Set(FrameFormat.all.map(\.id)).count, FrameFormat.all.count, "ids are unique")
+        for format in FrameFormat.all {
+            XCTAssertGreaterThan(format.renderSize.width, 0)
+            XCTAssertGreaterThan(format.renderSize.height, 0)
+        }
+        XCTAssertEqual(FrameFormat.matching("  "), FrameFormat.all)
+        XCTAssertTrue(FrameFormat.matching("linkedin").allSatisfy { $0.platform == "LinkedIn" })
+        XCTAssertEqual(FrameFormat.matching("linkedin").count, 3)
+        XCTAssertTrue(FrameFormat.matching("1:1").allSatisfy { $0.ratio == "1:1" })
+        XCTAssertTrue(FrameFormat.matching("zzz").isEmpty)
+    }
+
+    func testLandscapeFrameFitsAWidescreenTakeExactly() {
+        let render = FrameFormat.named("youtube").renderSize
+        let natural = CGSize(width: 3840, height: 2160)
+        let t = VideoExporter.fitTransform(naturalSize: natural, preferredTransform: .identity, into: render)
+        let placed = CGRect(origin: .zero, size: natural).applying(t)
+        XCTAssertEqual(placed.minX, 0, accuracy: 0.01)
+        XCTAssertEqual(placed.minY, 0, accuracy: 0.01)
+        XCTAssertEqual(placed.width, 1920, accuracy: 0.01)
+        XCTAssertEqual(placed.height, 1080, accuracy: 0.01)
+        XCTAssertEqual(VideoExporter.fillZoom(naturalSize: natural, preferredTransform: .identity, into: render), 1, accuracy: 0.0001)
+        // The same take needs zooming to fill a square.
+        let square = FrameFormat.named("instagram-post").renderSize
+        XCTAssertEqual(VideoExporter.fillZoom(naturalSize: natural, preferredTransform: .identity, into: square), 16 / 9, accuracy: 0.0001)
+    }
+
     @MainActor
     func testEachCaptionLayerIsScheduledForItsOwnStretch() {
         let overlay = VideoExporter.captionOverlay(for: [
