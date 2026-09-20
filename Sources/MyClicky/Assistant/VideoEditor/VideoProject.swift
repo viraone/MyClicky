@@ -95,12 +95,24 @@ struct TimelineCue: Equatable, Identifiable {
 
 /// Everything the editor needs to rebuild a video: an ordered list of clips
 /// plus their captions. Saved as `project.json` in the project folder.
+/// Where the subtitles sit on the video, dragged there in the preview:
+/// the caption's centre as a share of the frame width, and of the frame
+/// height measured from the bottom.
+struct CaptionAnchor: Codable, Equatable {
+    var x: Double
+    var y: Double
+}
+
 struct VideoProject: Codable, Equatable {
     static let currentVersion = 1
     /// The shortest clip the editor will make — a split or trim closer than
     /// this to an edge is refused rather than leaving a sliver.
     static let minimumClipDuration = 0.1
     static let defaultSpokenLanguage = "en-US"
+    /// Bumped when the listener changes enough that old transcripts should
+    /// be thrown away and every take heard again: 1 was SFSpeechRecognizer,
+    /// 2 is SpeechAnalyzer.
+    static let currentTranscriptVersion = 2
 
     var version = VideoProject.currentVersion
     var name: String
@@ -109,12 +121,16 @@ struct VideoProject: Codable, Equatable {
     /// Every word heard in each source file, by path, so re-captioning
     /// after a split or trim doesn't listen to the whole take again.
     var transcripts: [String: [SpokenWord]]
+    /// Which listener made `transcripts`; see `currentTranscriptVersion`.
+    var transcriptVersion = VideoProject.currentTranscriptVersion
     /// The locale the takes are spoken in — what the recogniser listens for.
     var spokenLanguage: String
     /// A language to add under every subtitle, or nil for none.
     var translationLanguage: String?
     /// The look of every subtitle — a `SubtitleStylePreset` by name.
     var subtitleStyle: String
+    /// Where the subtitles were dragged to, or nil for the style's own spot.
+    var captionAnchor: CaptionAnchor?
 
     init(name: String, clips: [EditClip] = [], created: Date = Date(), transcripts: [String: [SpokenWord]] = [:],
          spokenLanguage: String = VideoProject.defaultSpokenLanguage, translationLanguage: String? = nil,
@@ -128,7 +144,9 @@ struct VideoProject: Codable, Equatable {
         self.subtitleStyle = subtitleStyle
     }
 
-    private enum CodingKeys: String, CodingKey { case version, name, clips, created, transcripts, spokenLanguage, translationLanguage, subtitleStyle }
+    private enum CodingKeys: String, CodingKey {
+        case version, name, clips, created, transcripts, transcriptVersion, spokenLanguage, translationLanguage, subtitleStyle, captionAnchor
+    }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -137,10 +155,13 @@ struct VideoProject: Codable, Equatable {
         clips = try c.decode([EditClip].self, forKey: .clips)
         created = try c.decode(Date.self, forKey: .created)
         transcripts = try c.decodeIfPresent([String: [SpokenWord]].self, forKey: .transcripts) ?? [:]
+        // Saved before the field existed means the old recogniser made them.
+        transcriptVersion = try c.decodeIfPresent(Int.self, forKey: .transcriptVersion) ?? 1
         // Projects saved before languages existed were all English.
         spokenLanguage = try c.decodeIfPresent(String.self, forKey: .spokenLanguage) ?? Self.defaultSpokenLanguage
         translationLanguage = try c.decodeIfPresent(String.self, forKey: .translationLanguage)
         subtitleStyle = try c.decodeIfPresent(String.self, forKey: .subtitleStyle) ?? SubtitleStylePreset.default.rawValue
+        captionAnchor = try c.decodeIfPresent(CaptionAnchor.self, forKey: .captionAnchor)
     }
 
     var stylePreset: SubtitleStylePreset { SubtitleStylePreset(rawValue: subtitleStyle) ?? .default }

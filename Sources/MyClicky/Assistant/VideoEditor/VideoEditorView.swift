@@ -572,9 +572,10 @@ struct VideoEditorView: View {
                 // The export's own caption layer, so the preview is exact.
                 CaptionLayerView(text: cue.displayText,
                                  highlight: model.style.accentColor == nil ? nil : model.project?.wordIndex(in: cue, at: model.currentTime),
-                                 style: model.style, placement: .onVideo)
+                                 style: model.style, anchor: dragAnchor ?? model.captionAnchor, placement: .onVideo)
                     .frame(width: width, height: height)
                     .allowsHitTesting(false)
+                captionHandle(for: cue, width: width, height: height)
             }
             if hasClips {
                 VStack {
@@ -607,6 +608,49 @@ struct VideoEditorView: View {
     }
 
     @State private var pinchBaseZoom: Double?
+    /// The subtitle's spot while it's being dragged, and where the drag began.
+    @State private var dragAnchor: CaptionAnchor?
+    @State private var dragStart: CGPoint?
+    @State private var captionHover = false
+
+    /// A grab area over the subtitle: drag it anywhere on the video and the
+    /// export follows. A dashed outline shows on hover so it reads as
+    /// movable; double-click puts it back where the style keeps it. The
+    /// mouse work is AppKit's (`CaptionDragHandle`): the panel moves when
+    /// its background is dragged, and only a real view can refuse that.
+    private func captionHandle(for cue: TimelineCue, width: CGFloat, height: CGFloat) -> some View {
+        let style = model.style
+        let scale = width / VideoExporter.renderSize.width
+        let pill = VideoExporter.captionFrame(for: style.display(cue.displayText), style: style,
+                                              anchor: dragAnchor ?? model.captionAnchor).pill
+        // Render space has its origin at the bottom; the preview's is at the top.
+        let centre = CGPoint(x: pill.midX * scale, y: height - pill.midY * scale)
+        let active = captionHover || dragAnchor != nil
+        return RoundedRectangle(cornerRadius: style.cornerRadius * scale + 3, style: .continuous)
+            .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+            .foregroundStyle(accent.opacity(active ? 0.9 : 0))
+            .frame(width: pill.width * scale + 8, height: pill.height * scale + 8)
+            .overlay(
+                CaptionDragHandle(
+                    onHover: { captionHover = $0 },
+                    onDrag: { translation in
+                        let from = dragStart ?? centre
+                        if dragStart == nil { dragStart = centre }
+                        let to = CGPoint(x: from.x + translation.width, y: from.y + translation.height)
+                        dragAnchor = CaptionAnchor(x: min(max(0, to.x / width), 1),
+                                                   y: min(max(0, (height - to.y) / height), 1))
+                    },
+                    onEnd: {
+                        model.setCaptionAnchor(dragAnchor)
+                        dragAnchor = nil
+                        dragStart = nil
+                    },
+                    onReset: { model.setCaptionAnchor(nil) }
+                )
+            )
+            .position(centre)
+            .help("Drag to move the subtitles anywhere on the video — double-click to put them back")
+    }
 
     private func badge(_ text: String, tint: Color) -> some View {
         Text(text)
@@ -1790,6 +1834,85 @@ private struct Triangle: Shape {
         p.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
         p.closeSubpath()
         return p
+    }
+}
+
+/// The mouse side of the subtitle's grab area. AppKit asks the view under
+/// the mouse whether a drag should move the window (the panel says yes for
+/// its background), so this view says no and tracks the drag itself,
+/// reporting in window points so its own movement mid-drag doesn't matter.
+private struct CaptionDragHandle: NSViewRepresentable {
+    var onHover: (Bool) -> Void
+    /// How far the mouse has moved since it went down, in view points
+    /// (y grows downwards, as in SwiftUI).
+    var onDrag: (CGSize) -> Void
+    var onEnd: () -> Void
+    var onReset: () -> Void
+
+    func makeNSView(context: Context) -> Handle {
+        let handle = Handle()
+        update(handle)
+        return handle
+    }
+
+    func updateNSView(_ handle: Handle, context: Context) { update(handle) }
+
+    private func update(_ handle: Handle) {
+        handle.onHover = onHover
+        handle.onDrag = onDrag
+        handle.onEnd = onEnd
+        handle.onReset = onReset
+    }
+
+    final class Handle: NSView {
+        var onHover: ((Bool) -> Void)?
+        var onDrag: ((CGSize) -> Void)?
+        var onEnd: (() -> Void)?
+        var onReset: (() -> Void)?
+        private var origin: NSPoint?
+        private var moved = false
+
+        override var mouseDownCanMoveWindow: Bool { false }
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+        // AppKit owns the cursor rectangle, so a subtitle that vanishes
+        // under the mouse (its line ends) can't leave a hand cursor behind.
+        override func resetCursorRects() {
+            addCursorRect(visibleRect, cursor: .openHand)
+        }
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            trackingAreas.forEach(removeTrackingArea)
+            addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+        }
+
+        override func mouseEntered(with event: NSEvent) { onHover?(true) }
+        override func mouseExited(with event: NSEvent) { onHover?(false) }
+
+        override func mouseDown(with event: NSEvent) {
+            if event.clickCount == 2 {
+                origin = nil
+                onReset?()
+                return
+            }
+            origin = event.locationInWindow
+            moved = false
+        }
+
+        override func mouseDragged(with event: NSEvent) {
+            guard let origin else { return }
+            let now = event.locationInWindow
+            moved = true
+            // Window coordinates grow upwards; the preview's grow downwards.
+            onDrag?(CGSize(width: now.x - origin.x, height: origin.y - now.y))
+        }
+
+        override func mouseUp(with event: NSEvent) {
+            if moved { onEnd?() }
+            origin = nil
+            moved = false
+        }
     }
 }
 

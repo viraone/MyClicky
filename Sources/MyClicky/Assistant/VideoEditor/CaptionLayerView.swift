@@ -15,6 +15,8 @@ struct CaptionLayerView: NSViewRepresentable {
     var text: String
     var highlight: Int?
     var style: CaptionStyle
+    /// Where the user dragged the subtitles to; nil is the style's spot.
+    var anchor: CaptionAnchor? = nil
     var placement: Placement
 
     func makeNSView(context: Context) -> Host {
@@ -26,7 +28,7 @@ struct CaptionLayerView: NSViewRepresentable {
     }
 
     func updateNSView(_ host: Host, context: Context) {
-        host.draw(text: text, highlight: highlight, style: style, placement: placement)
+        host.draw(text: text, highlight: highlight, style: style, anchor: anchor, placement: placement)
     }
 
     final class Host: NSView {
@@ -41,12 +43,13 @@ struct CaptionLayerView: NSViewRepresentable {
         }
 
         @MainActor
-        func draw(text: String, highlight: Int?, style: CaptionStyle, placement: Placement) {
-            let next = "\(text)|\(highlight.map(String.init) ?? "-")|\(placement)|\(style.hashKey)"
+        func draw(text: String, highlight: Int?, style: CaptionStyle, anchor: CaptionAnchor?, placement: Placement) {
+            let spot = anchor.map { "\($0.x),\($0.y)" } ?? "-"
+            let next = "\(text)|\(highlight.map(String.init) ?? "-")|\(placement)|\(spot)|\(style.hashKey)"
             guard next != key else { return }
             key = next
             caption?.removeFromSuperlayer()
-            let layer = VideoExporter.captionLayer(text: text, highlight: highlight, style: style)
+            let layer = VideoExporter.captionLayer(text: text, highlight: highlight, style: style, anchor: anchor)
             caption = layer
             self.layer?.addSublayer(layer)
             self.placement = placement

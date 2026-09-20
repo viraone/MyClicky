@@ -426,6 +426,18 @@ final class VideoEditorModel: ObservableObject {
         save()
     }
 
+    /// Where the subtitles sit on the video; nil is the style's own spot.
+    var captionAnchor: CaptionAnchor? { project?.captionAnchor }
+
+    /// Dragged in the preview. Saved, and the export follows; the player
+    /// itself doesn't change, so no preview rebuild.
+    func setCaptionAnchor(_ anchor: CaptionAnchor?) {
+        guard var p = project, p.captionAnchor != anchor else { return }
+        p.captionAnchor = anchor
+        project = p
+        save()
+    }
+
     func setCueText(_ id: UUID, _ text: String) {
         guard var p = project else { return }
         p.setCueText(id, text)
@@ -565,6 +577,14 @@ final class VideoEditorModel: ObservableObject {
         transcriptionRun += 1
         let run = transcriptionRun
         let locale = spokenLocale
+        // Transcripts from the older recogniser are thrown away once, so a
+        // project it left half-captioned is heard again by the new one.
+        if p.transcriptVersion < VideoProject.currentTranscriptVersion {
+            p.transcripts = [:]
+            p.transcriptVersion = VideoProject.currentTranscriptVersion
+            project = p
+            save()
+        }
         let pending = p.untranscribedSources
         for (index, url) in pending.enumerated() {
             let duration = p.clips.first { $0.source == url }?.sourceDuration ?? 0
