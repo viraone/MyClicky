@@ -35,18 +35,30 @@ enum VideoExporter {
     /// phone take fills the frame exactly; a widescreen screen recording
     /// sits letterboxed in the middle.
     /// `zoom` scales around the centre on top of that: 1 is the fit,
-    /// larger crops in — how a landscape clip is made to fill 9:16.
-    static func fitTransform(naturalSize: CGSize, preferredTransform: CGAffineTransform, zoom: CGFloat = 1, into render: CGSize = renderSize) -> CGAffineTransform {
+    /// larger crops in — how a landscape clip is made to fill 9:16. `pan`
+    /// then moves the picture anywhere, as a share of the frame (right and
+    /// down positive), like dragging the video about VEED's canvas; only
+    /// its centre is kept inside the frame so it can't be lost.
+    static func fitTransform(naturalSize: CGSize, preferredTransform: CGAffineTransform, zoom: CGFloat = 1,
+                             pan: CGSize = .zero, into render: CGSize = renderSize) -> CGAffineTransform {
         let oriented = CGRect(origin: .zero, size: naturalSize).applying(preferredTransform)
         let width = abs(oriented.width), height = abs(oriented.height)
         guard width > 0, height > 0 else { return .identity }
         let scale = min(render.width / width, render.height / height) * max(0.1, zoom)
+        let dx = clampPan(pan.width) * render.width
+        let dy = clampPan(pan.height) * render.height
         return preferredTransform
             .concatenating(CGAffineTransform(translationX: -oriented.minX, y: -oriented.minY))
             .concatenating(CGAffineTransform(scaleX: scale, y: scale))
-            .concatenating(CGAffineTransform(translationX: (render.width - width * scale) / 2,
-                                             y: (render.height - height * scale) / 2))
+            .concatenating(CGAffineTransform(translationX: (render.width - width * scale) / 2 + dx,
+                                             y: (render.height - height * scale) / 2 + dy))
     }
+
+    /// How far the picture may be moved each way: half the frame, so its
+    /// centre never leaves the frame.
+    static let maxPan: CGFloat = 0.5
+
+    static func clampPan(_ share: CGFloat) -> CGFloat { min(max(-maxPan, share), maxPan) }
 
     /// The zoom at which a clip just covers the frame — no black bars.
     static func fillZoom(naturalSize: CGSize, preferredTransform: CGAffineTransform, into render: CGSize = renderSize) -> Double {
@@ -91,7 +103,8 @@ enum VideoExporter {
             instruction.backgroundColor = CGColor(gray: 0, alpha: 1)
             let layer = AVMutableVideoCompositionLayerInstruction(assetTrack: videoTrack)
             layer.setTransform(fitTransform(naturalSize: natural, preferredTransform: preferred,
-                                            zoom: zoomed ? CGFloat(clip.zoom) : 1), at: cursor)
+                                            zoom: zoomed ? CGFloat(clip.zoom) : 1,
+                                            pan: zoomed ? CGSize(width: clip.panX, height: clip.panY) : .zero), at: cursor)
             instruction.layerInstructions = [layer]
             instructions.append(instruction)
             cursor = cursor + range.duration

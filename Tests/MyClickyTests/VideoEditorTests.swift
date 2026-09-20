@@ -447,6 +447,25 @@ final class VideoExporterGeometryTests: XCTestCase {
         XCTAssertGreaterThan(pill.height, textSize.height)
     }
 
+    func testPanMovesThePictureAnywhereAtAnyZoom() {
+        let render = CGSize(width: 1080, height: 1920)
+        for (natural, zoom) in [(CGSize(width: 1080, height: 1920), CGFloat(1)),
+                                (CGSize(width: 1920, height: 1080), CGFloat(1)),
+                                (CGSize(width: 1080, height: 1920), CGFloat(2))] {
+            let centred = VideoExporter.fitTransform(naturalSize: natural, preferredTransform: .identity, zoom: zoom, into: render)
+            let moved = VideoExporter.fitTransform(naturalSize: natural, preferredTransform: .identity, zoom: zoom,
+                                                   pan: CGSize(width: 0.25, height: -0.1), into: render)
+            XCTAssertEqual(moved.tx - centred.tx, 0.25 * 1080, accuracy: 0.01, "a quarter of the frame to the right")
+            XCTAssertEqual(moved.ty - centred.ty, -0.1 * 1920, accuracy: 0.01, "a tenth of the frame up")
+        }
+        let portrait = CGSize(width: 1080, height: 1920)
+        let centred = VideoExporter.fitTransform(naturalSize: portrait, preferredTransform: .identity, into: render)
+        let tooFar = VideoExporter.fitTransform(naturalSize: portrait, preferredTransform: .identity,
+                                                pan: CGSize(width: 3, height: -3), into: render)
+        XCTAssertEqual(tooFar.tx - centred.tx, 0.5 * 1080, accuracy: 0.01, "held with its centre on the frame's edge")
+        XCTAssertEqual(tooFar.ty - centred.ty, -0.5 * 1920, accuracy: 0.01)
+    }
+
     func testCaptionFollowsItsAnchorAndStaysInsideTheFrame() {
         let style = CaptionStyle()
         let moved = VideoExporter.captionFrame(for: "hello", style: style, anchor: CaptionAnchor(x: 0.5, y: 0.8)).pill

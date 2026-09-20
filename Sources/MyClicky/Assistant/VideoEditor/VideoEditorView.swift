@@ -551,7 +551,9 @@ struct VideoEditorView: View {
         return ZStack {
             VideoEditorSurface(player: model.player,
                                zoom: CGFloat(model.playheadClip?.zoom ?? 1),
+                               pan: dragPan ?? model.playheadClip.map { CGSize(width: $0.panX, height: $0.panY) } ?? .zero,
                                clipID: model.playheadClip?.id)
+            if hasClips { panHandle(width: width, height: height) }
             if !hasClips {
                 VStack(spacing: 10) {
                     Image(systemName: "iphone").font(.system(size: 36, weight: .thin))
@@ -597,19 +599,37 @@ struct VideoEditorView: View {
         .background(Color.black)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
-        .onTapGesture { if hasClips { model.togglePlay() } }
-        .gesture(
-            MagnificationGesture()
-                .onChanged { value in
-                    guard hasClips, let base = pinchBaseZoom ?? model.selectedClip?.zoom else { return }
-                    if pinchBaseZoom == nil { pinchBaseZoom = base }
-                    model.setZoom(base * value)
-                }
-                .onEnded { _ in pinchBaseZoom = nil }
-        )
     }
 
-    @State private var pinchBaseZoom: Double?
+    /// The picture's spot while it's being dragged, and where the drag began.
+    @State private var dragPan: CGSize?
+    @State private var dragPanStart: CGSize?
+
+    /// The whole picture is a grab area, as on VEED's canvas: drag the
+    /// picture anywhere, at any zoom, pinch to zoom, click to play or
+    /// pause, double-click to put the picture back in the middle.
+    private func panHandle(width: CGFloat, height: CGFloat) -> some View {
+        let clip = model.selectedClip
+        return MouseHandle(
+            cursor: .openHand,
+            onTap: { model.togglePlay() },
+            onDrag: { translation in
+                guard let clip else { return }
+                let from = dragPanStart ?? CGSize(width: clip.panX, height: clip.panY)
+                if dragPanStart == nil { dragPanStart = from }
+                dragPan = CGSize(width: VideoExporter.clampPan(from.width + translation.width / width),
+                                 height: VideoExporter.clampPan(from.height + translation.height / height))
+            },
+            onEnd: {
+                if let dragPan { model.setPan(dragPan) }
+                dragPan = nil
+                dragPanStart = nil
+            },
+            onReset: { model.setPan(.zero) },
+            onMagnify: { factor in model.zoom(by: factor) }
+        )
+        .help("Drag to move the picture anywhere in the frame; double-click to centre it. Pinch to zoom.")
+    }
     /// The subtitle's spot while it's being dragged, and where the drag began.
     @State private var dragAnchor: CaptionAnchor?
     @State private var dragStart: CGPoint?
@@ -633,7 +653,8 @@ struct VideoEditorView: View {
             .foregroundStyle(accent.opacity(active ? 0.9 : 0))
             .frame(width: pill.width * scale + 8, height: pill.height * scale + 8)
             .overlay(
-                CaptionDragHandle(
+                MouseHandle(
+                    cursor: .openHand,
                     onHover: { captionHover = $0 },
                     onDrag: { translation in
                         let from = dragStart ?? centre
@@ -665,8 +686,8 @@ struct VideoEditorView: View {
     // MARK: Canvas
 
     /// The video, centred like VEED's canvas, with the quick-action bar
-    /// floating under it: Auto-subtitle, the frame shape, picture zoom and
-    /// the subtitle style.
+    /// floating under it: the frame shape, picture zoom and the subtitle
+    /// style. Auto-subtitle lives in the Subtitles panel.
     private var canvas: some View {
         GeometryReader { geo in
             let barHeight: CGFloat = 44
@@ -694,13 +715,7 @@ struct VideoEditorView: View {
         let preset = model.stylePreset
         let zoom = model.selectedClip?.zoom ?? 1
         return HStack(spacing: 2) {
-            if case .transcribing(let listening) = model.phase {
-                listeningChip(listening)
-            } else {
-                autoSubtitleButton
-            }
             if full {
-                barDivider
                 HStack(spacing: 5) {
                     Image(systemName: "iphone").font(.system(size: 11, weight: .semibold))
                     Text("Reels · 9:16")
@@ -709,8 +724,8 @@ struct VideoEditorView: View {
                 .foregroundStyle(Color.white.opacity(0.7))
                 .padding(.horizontal, 10)
                 .help("Every export is 1080 × 1920 — the shape of Reels, TikTok and Shorts")
+                barDivider
             }
-            barDivider
             HStack(spacing: 2) {
                 barButton("minus.magnifyingglass", help: "Zoom the picture out (or pinch on the video)") { model.zoom(by: 1 / 1.15) }
                 Text(String(format: "%.1f×", zoom))
@@ -755,25 +770,6 @@ struct VideoEditorView: View {
         }
         .buttonStyle(.plain)
         .help(help)
-    }
-
-    /// Auto-subtitle's seat in the bar while Peeky listens: progress and Stop.
-    private func listeningChip(_ l: VideoEditorModel.Listening) -> some View {
-        HStack(spacing: 8) {
-            ProgressView().controlSize(.small).tint(accent)
-            Text("Listening \(Int(l.fraction * 100))%")
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .foregroundStyle(Color.white.opacity(0.9))
-            Button { model.stopSubtitling() } label: {
-                Image(systemName: "stop.fill").font(.system(size: 10, weight: .bold))
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Color.white.opacity(0.7))
-            .help("Stop listening. What's been heard so far is kept.")
-        }
-        .padding(.horizontal, 10)
-        .frame(height: 28)
-        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(accent.opacity(0.14)))
     }
 
     // MARK: Timeline
@@ -1839,17 +1835,25 @@ private struct Triangle: Shape {
     }
 }
 
-/// The mouse side of the subtitle's grab area. AppKit asks the view under
-/// the mouse whether a drag should move the window (the panel says yes for
-/// its background), so this view says no and tracks the drag itself,
-/// reporting in window points so its own movement mid-drag doesn't matter.
-private struct CaptionDragHandle: NSViewRepresentable {
-    var onHover: (Bool) -> Void
+/// The mouse side of a grab area on the preview — the subtitle, or the
+/// picture itself. AppKit asks the view under the mouse whether a drag
+/// should move the window (the panel says yes for its background), so
+/// this view says no and tracks the drag itself, reporting in window
+/// points so its own movement mid-drag doesn't matter.
+private struct MouseHandle: NSViewRepresentable {
+    /// Shown over the area, or nil for the plain arrow.
+    var cursor: NSCursor? = nil
+    var onHover: ((Bool) -> Void)? = nil
+    /// A click that didn't turn into a drag.
+    var onTap: (() -> Void)? = nil
     /// How far the mouse has moved since it went down, in view points
     /// (y grows downwards, as in SwiftUI).
     var onDrag: (CGSize) -> Void
     var onEnd: () -> Void
-    var onReset: () -> Void
+    /// A double-click.
+    var onReset: (() -> Void)? = nil
+    /// A trackpad pinch, as the factor to multiply the zoom by.
+    var onMagnify: ((CGFloat) -> Void)? = nil
 
     func makeNSView(context: Context) -> Handle {
         let handle = Handle()
@@ -1860,27 +1864,35 @@ private struct CaptionDragHandle: NSViewRepresentable {
     func updateNSView(_ handle: Handle, context: Context) { update(handle) }
 
     private func update(_ handle: Handle) {
+        handle.cursor = cursor
         handle.onHover = onHover
+        handle.onTap = onTap
         handle.onDrag = onDrag
         handle.onEnd = onEnd
         handle.onReset = onReset
+        handle.onMagnify = onMagnify
     }
 
     final class Handle: NSView {
+        var cursor: NSCursor? {
+            didSet { if cursor !== oldValue { window?.invalidateCursorRects(for: self) } }
+        }
         var onHover: ((Bool) -> Void)?
+        var onTap: (() -> Void)?
         var onDrag: ((CGSize) -> Void)?
         var onEnd: (() -> Void)?
         var onReset: (() -> Void)?
+        var onMagnify: ((CGFloat) -> Void)?
         private var origin: NSPoint?
         private var moved = false
 
         override var mouseDownCanMoveWindow: Bool { false }
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-        // AppKit owns the cursor rectangle, so a subtitle that vanishes
-        // under the mouse (its line ends) can't leave a hand cursor behind.
+        // AppKit owns the cursor rectangle, so an area that vanishes under
+        // the mouse (a subtitle whose line ends) can't leave a hand behind.
         override func resetCursorRects() {
-            addCursorRect(visibleRect, cursor: .openHand)
+            if let cursor { addCursorRect(visibleRect, cursor: cursor) }
         }
 
         override func updateTrackingAreas() {
@@ -1905,15 +1917,22 @@ private struct CaptionDragHandle: NSViewRepresentable {
         override func mouseDragged(with event: NSEvent) {
             guard let origin else { return }
             let now = event.locationInWindow
-            moved = true
             // Window coordinates grow upwards; the preview's grow downwards.
-            onDrag?(CGSize(width: now.x - origin.x, height: origin.y - now.y))
+            let delta = CGSize(width: now.x - origin.x, height: origin.y - now.y)
+            // A twitch during a click isn't a drag.
+            if !moved, abs(delta.width) < 2, abs(delta.height) < 2 { return }
+            moved = true
+            onDrag?(delta)
         }
 
         override func mouseUp(with event: NSEvent) {
-            if moved { onEnd?() }
+            if moved { onEnd?() } else if origin != nil { onTap?() }
             origin = nil
             moved = false
+        }
+
+        override func magnify(with event: NSEvent) {
+            onMagnify?(1 + event.magnification)
         }
     }
 }
@@ -1925,6 +1944,7 @@ private struct CaptionDragHandle: NSViewRepresentable {
 private struct VideoEditorSurface: NSViewRepresentable {
     let player: AVPlayer
     var zoom: CGFloat = 1
+    var pan: CGSize = .zero
     var clipID: UUID? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -1939,7 +1959,7 @@ private struct VideoEditorSurface: NSViewRepresentable {
         view.controlsStyle = .none
         view.videoGravity = .resizeAspect
         view.showsFullScreenToggleButton = false
-        view.setZoom(zoom, animated: false)
+        view.set(zoom: zoom, pan: pan, animated: false)
         context.coordinator.clipID = clipID
         return view
     }
@@ -1948,19 +1968,24 @@ private struct VideoEditorSurface: NSViewRepresentable {
         if view.player !== player { view.player = player }
         let sameClip = context.coordinator.clipID == clipID
         context.coordinator.clipID = clipID
-        view.setZoom(zoom, animated: sameClip)
+        view.set(zoom: zoom, pan: pan, animated: sameClip)
     }
 }
 
-/// An AVPlayerView that scales its picture about the centre — the same
-/// crop the export makes — and glides between zooms.
+/// An AVPlayerView that scales its picture about the centre and shifts it
+/// by the pan — the same crop the export makes. A zoom glides; a pan
+/// (the user's own drag) follows the mouse as it is.
 private final class ZoomingPlayerView: AVPlayerView {
     private var zoom: CGFloat = 1
+    private var pan: CGSize = .zero
 
-    func setZoom(_ target: CGFloat, animated: Bool) {
+    func set(zoom target: CGFloat, pan newPan: CGSize, animated: Bool) {
         let clamped = max(0.1, target)
-        guard abs(clamped - zoom) > 0.0005 else { return }
+        let zoomChanged = abs(clamped - zoom) > 0.0005
+        let panChanged = abs(newPan.width - pan.width) > 0.00005 || abs(newPan.height - pan.height) > 0.00005
+        guard zoomChanged || panChanged else { return }
         zoom = clamped
+        pan = newPan
         guard let layer else { return }
         let to = transform(for: zoom)
         // Start from wherever the picture is *now*, so a second click
@@ -1969,7 +1994,7 @@ private final class ZoomingPlayerView: AVPlayerView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         layer.transform = to
-        if animated {
+        if animated && zoomChanged {
             let glide = CABasicAnimation(keyPath: "transform")
             glide.fromValue = from
             glide.toValue = to
@@ -1994,7 +2019,10 @@ private final class ZoomingPlayerView: AVPlayerView {
 
     private func transform(for zoom: CGFloat) -> CATransform3D {
         let centre = CGPoint(x: bounds.midX, y: bounds.midY)
-        var t = CATransform3DMakeTranslation(centre.x, centre.y, 0)
+        // The pan is "right and down"; this layer's y may grow upwards.
+        let down: CGFloat = isFlipped ? 1 : -1
+        var t = CATransform3DMakeTranslation(centre.x + pan.width * bounds.width,
+                                             centre.y + down * pan.height * bounds.height, 0)
         t = CATransform3DScale(t, zoom, zoom, 1)
         return CATransform3DTranslate(t, -centre.x, -centre.y, 0)
     }

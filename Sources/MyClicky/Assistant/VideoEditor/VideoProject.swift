@@ -45,11 +45,17 @@ struct EditClip: Codable, Equatable, Identifiable {
     /// How far the picture is zoomed into the 9:16 frame. 1 fits the whole
     /// clip (letterboxed if it's landscape); bigger crops in from the centre.
     var zoom: Double
+    /// How far the zoomed picture has been moved off-centre, as a share of
+    /// the frame width and height: positive is right and down. Kept within
+    /// the picture's spare edge so black never shows.
+    var panX: Double
+    var panY: Double
 
     static let minZoom = 1.0
     static let maxZoom = 4.0
 
-    init(id: UUID = UUID(), source: URL, sourceDuration: Double, inPoint: Double = 0, outPoint: Double? = nil, cues: [CaptionCue] = [], zoom: Double = 1) {
+    init(id: UUID = UUID(), source: URL, sourceDuration: Double, inPoint: Double = 0, outPoint: Double? = nil, cues: [CaptionCue] = [],
+         zoom: Double = 1, panX: Double = 0, panY: Double = 0) {
         self.id = id
         self.source = source
         self.sourceDuration = sourceDuration
@@ -57,9 +63,11 @@ struct EditClip: Codable, Equatable, Identifiable {
         self.outPoint = outPoint ?? sourceDuration
         self.cues = cues
         self.zoom = zoom
+        self.panX = panX
+        self.panY = panY
     }
 
-    private enum CodingKeys: String, CodingKey { case id, source, sourceDuration, inPoint, outPoint, cues, zoom }
+    private enum CodingKeys: String, CodingKey { case id, source, sourceDuration, inPoint, outPoint, cues, zoom, panX, panY }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -71,6 +79,8 @@ struct EditClip: Codable, Equatable, Identifiable {
         cues = try c.decode([CaptionCue].self, forKey: .cues)
         // Projects saved before zoom existed show every clip fitted.
         zoom = try c.decodeIfPresent(Double.self, forKey: .zoom) ?? 1
+        panX = try c.decodeIfPresent(Double.self, forKey: .panX) ?? 0
+        panY = try c.decodeIfPresent(Double.self, forKey: .panY) ?? 0
     }
 
     var duration: Double { max(0, outPoint - inPoint) }
@@ -354,6 +364,13 @@ struct VideoProject: Codable, Equatable {
     mutating func setZoom(_ zoom: Double, for clipID: UUID) {
         guard let index = clips.firstIndex(where: { $0.id == clipID }) else { return }
         clips[index].zoom = min(max(zoom, EditClip.minZoom), EditClip.maxZoom)
+    }
+
+    /// Where the picture sits; the caller keeps it within `VideoExporter.panLimit`.
+    mutating func setPan(x: Double, y: Double, for clipID: UUID) {
+        guard let index = clips.firstIndex(where: { $0.id == clipID }) else { return }
+        clips[index].panX = x
+        clips[index].panY = y
     }
 
     mutating func setCueText(_ cueID: UUID, _ text: String) {
