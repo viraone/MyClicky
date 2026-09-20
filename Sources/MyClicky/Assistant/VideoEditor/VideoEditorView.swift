@@ -1394,8 +1394,8 @@ struct VideoEditorView: View {
         return toolCard(title: "TRIM", trailing: model.selectedClip.map { "\($0.name) · \(VideoEditorModel.clock($0.duration))" }) {
             VStack(alignment: .leading, spacing: 14) {
                 Text("Press Play and stop where you want to cut. Everything here works on the highlighted clip, at the playhead.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color.white.opacity(0.5))
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.white.opacity(0.65))
                     .fixedSize(horizontal: false, vertical: true)
                 controlGroup("CUT AT THE PLAYHEAD") {
                     tile("scissors", "Split", help: "Cut the clip into two at the playhead — then remove the half you don't want") { model.splitAtPlayhead() }
@@ -1409,8 +1409,8 @@ struct VideoEditorView: View {
                     tile("rectangle.arrowtriangle.2.outward", "Fit", help: "Show the whole picture (black bars if it's landscape)") { model.setZoom(1) }
                 }
                 Text("The bars on the timeline are the sound: tall where you're talking, flat in the gaps — cut in a gap. Click anywhere on the timeline to jump there, or drag to scrub. Two halves of the same take show a Rejoin pill on their seam.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color.white.opacity(0.4))
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.white.opacity(0.65))
                     .fixedSize(horizontal: false, vertical: true)
             }
             .disabled(!hasClips || model.phase.isBusy)
@@ -1434,8 +1434,8 @@ struct VideoEditorView: View {
                     Divider().overlay(Color.white.opacity(0.08))
                     styleRow
                     Text("Click a time to jump there; click words to fix them.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.white.opacity(0.4))
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.white.opacity(0.65))
                     ScrollView(showsIndicators: false) {
                         VStack(spacing: 4) {
                             ForEach(cues) { cue in cueRow(cue) }
@@ -1460,8 +1460,8 @@ struct VideoEditorView: View {
         toolCard(title: "EXPORT", trailing: nil) {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Saves an MP4 at 1080 × 1920 with the subtitles burned in, plus the .srt and a transcript, in this project's exports folder.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color.white.opacity(0.5))
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.white.opacity(0.65))
                     .fixedSize(horizontal: false, vertical: true)
                 pillButton("Export video", icon: "square.and.arrow.up", prominent: true) { model.export() }
                     .disabled(!hasClips || model.phase.isBusy)
@@ -1540,8 +1540,8 @@ struct VideoEditorView: View {
                     }
                 }
                 Text("Styles that colour a word follow your voice, word by word.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.4))
+                    .font(.system(size: 13))
+                    .foregroundStyle(.white.opacity(0.65))
             }
             .padding(.bottom, 4)
         }
@@ -1642,8 +1642,8 @@ struct VideoEditorView: View {
             .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(0.05)))
             HStack(spacing: 10) {
                 Text("Peeky is turning the speech into text on this Mac — nothing is uploaded. It runs about as fast as the clip plays; you can keep trimming meanwhile.")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.5))
+                    .font(.system(size: 13))
+                    .foregroundStyle(.white.opacity(0.65))
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer()
                 pillButton("Stop", icon: "stop.fill") { model.stopSubtitling() }
