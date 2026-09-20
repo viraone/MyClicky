@@ -401,6 +401,18 @@ final class VideoEditorModel: ObservableObject {
         edit(rebuild: false) { $0.setZoom(zoom, for: id) }
     }
 
+    /// Move the highlighted clip's picture about the frame, in any
+    /// direction at any zoom, like dragging the video on VEED's canvas.
+    /// `pan` is a share of the frame each way; the picture's centre stays
+    /// inside the frame so it can't be lost.
+    func setPan(_ pan: CGSize) {
+        guard let clip = selectedClip else { return }
+        let x = Double(VideoExporter.clampPan(pan.width))
+        let y = Double(VideoExporter.clampPan(pan.height))
+        guard x != clip.panX || y != clip.panY else { return }
+        edit(rebuild: false) { $0.setPan(x: x, y: y, for: clip.id) }
+    }
+
     /// The clip under the playhead, whose zoom the preview shows live.
     var playheadClip: EditClip? {
         guard let project, let (index, _) = project.locate(currentTime) else { return nil }
