@@ -771,8 +771,13 @@ final class AssistantState: ObservableObject {
     /// stays put, so hidden really means gone from view.
     @Published var tab: AssistantTab = .ask {
         didSet {
-            guard hiddenTabs.contains(tab) else { return }
-            tab = hiddenTabs.contains(oldValue) ? (visibleTabs.first ?? oldValue) : oldValue
+            if hiddenTabs.contains(tab) {
+                tab = hiddenTabs.contains(oldValue) ? (visibleTabs.first ?? oldValue) : oldValue
+                return
+            }
+            if oldValue == .captureDictate && tab != .captureDictate {
+                captureEditing = false
+            }
         }
     }
     /// The video editor is meant to stay visible while the user works in
@@ -889,10 +894,13 @@ final class AssistantState: ObservableObject {
     /// answers are normally spoken rather than shown.
     @Published var restoredFromHistory = false
     @Published var historySearch = ""
-    /// Reloaded from disk when the saved capture is edited in an external
-    /// app (e.g. Preview.app's markup arrow) after being saved — nil until
-    /// the file actually changes.
+    /// The latest saved markup, produced by Peeky's inline editor or reloaded
+    /// after the file changes in another app.
     @Published var editedCaptureImage: NSImage?
+    /// The current capture is showing Peeky's inline markup tools.
+    @Published var captureEditing = false {
+        didSet { onCaptureEditingChanged?(captureEditing) }
+    }
     /// Which version is on the clipboard once there are two to choose from.
     /// Defaults to the edited one, since that's what the user just changed.
     @Published var clipboardChoice: CaptureClipboardChoice = .edited
@@ -934,6 +942,10 @@ final class AssistantState: ObservableObject {
     var onStop: (() -> Void)?
     /// Re-copies the current capture + dictation pair to the clipboard.
     var onCopyAgain: (() -> Void)?
+    /// Saves pixels produced by Peeky's inline capture editor.
+    var onSaveCaptureEdit: ((NSImage) -> Bool)?
+    /// Prevents annotation drags from moving the containing borderless panel.
+    var onCaptureEditingChanged: ((Bool) -> Void)?
     /// Dismisses the capture preview (the file on disk is untouched) and
     /// stops watching it for external edits.
     var onDismissCapture: (() -> Void)?
@@ -1404,6 +1416,9 @@ final class AssistantPanelController {
                 state?.shouldLowerForBackgroundClick == true
             }
         )
+        state.onCaptureEditingChanged = { [weak panel] editing in
+            panel?.isMovableByWindowBackground = !editing
+        }
         state.onDismiss = { [weak self] in self?.hide() }
         state.onRelaunch = { Self.relaunch() }
         state.onQuit = { NSApp.terminate(nil) }
@@ -2427,6 +2442,25 @@ struct AssistantPanelView: View {
     }
 
     private var captureColumn: some View {
+        Group {
+            if state.captureEditing, let image = state.editedCaptureImage ?? state.captureImage {
+                CaptureMarkupEditor(
+                    image: image,
+                    onCancel: { state.captureEditing = false },
+                    onSave: { edited in
+                        if state.onSaveCaptureEdit?(edited) == true {
+                            state.captureEditing = false
+                        }
+                    }
+                )
+            } else {
+                capturePreviewColumn
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var capturePreviewColumn: some View {
         VStack(spacing: 6) {
             if let image = state.captureImage {
                 Group {
@@ -2444,7 +2478,7 @@ struct AssistantPanelView: View {
                                 image: edited, title: "Edited", fileName: state.captureURL?.lastPathComponent,
                                 isSelected: state.clipboardChoice == .edited,
                                 help: "Reloaded from disk after your changes were saved in Preview. Click to reopen it.",
-                                onOpen: { if let url = state.captureURL { NSWorkspace.shared.open(url) } },
+                                onOpen: { state.captureEditing = true },
                                 onSelect: { selectClipboardChoice(.edited) }
                             )
                             .overlay(alignment: .topTrailing) { captureVersionCloseButton(.edited) }
@@ -2487,7 +2521,7 @@ struct AssistantPanelView: View {
                             .overlay(RoundedRectangle(cornerRadius: 8)
                                 .strokeBorder(Color.white.opacity(0.2), lineWidth: 1))
                             .onTapGesture {
-                                if let url = state.captureURL { NSWorkspace.shared.open(url) }
+                                state.captureEditing = true
                             }
                     }
                 }
@@ -2525,6 +2559,18 @@ struct AssistantPanelView: View {
                         .font(.system(size: 13, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.6))
                         .lineLimit(1)
+                    Spacer(minLength: 4)
+                    if state.attachmentKind != .file {
+                        Button {
+                            state.captureEditing = true
+                        } label: {
+                            Label("Edit", systemImage: "pencil.and.outline")
+                                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.cyan)
+                        .help("Open the image editor to add text, shapes, arrows, and more")
+                    }
                 }
             } else {
                 VStack(spacing: 8) {
@@ -2661,15 +2707,15 @@ struct AssistantPanelView: View {
             position = " · \(index + 1) of \(tray.count)"
         }
         switch state.attachmentKind {
-        case .image: return "\(name) — added from this Mac, on your clipboard, click to open\(position)"
+        case .image: return "\(name) — added from this Mac and on your clipboard\(position)"
         case .file: return "\(name) — added from this Mac, copied as a file, click to open\(position)"
         case .capture: break
         }
         guard state.editedCaptureImage != nil else {
-            return "\(name) — on your clipboard, click to open\(position)"
+            return "\(name) — on your clipboard\(position)"
         }
         let which = state.clipboardChoice == .edited ? "Edited version" : "Original"
-        return "\(which) on your clipboard — click the Edited thumbnail to reopen in Preview\(position)"
+        return "\(which) on your clipboard\(position)"
     }
 
     // Claude-style: big input field on top, mic status at top-right.

@@ -124,6 +124,7 @@ final class AssistantController {
         panel.state.captureImage = image
         panel.state.captureURL = url
         panel.state.editedCaptureImage = nil
+        panel.state.captureEditing = false
         panel.state.clipboardChoice = .edited
         // Earlier additions stay in the tray beneath the preview; the newest
         // becomes current. Oldest ones fall off once the tray is full.
@@ -162,6 +163,7 @@ final class AssistantController {
         panel.state.captureImage = item.image
         panel.state.captureURL = item.url
         panel.state.editedCaptureImage = item.edited
+        panel.state.captureEditing = false
         panel.state.clipboardChoice = item.edited == nil ? .edited : item.choice
         copyPairToClipboard()
         if item.kind == .file { captureFileWatcher.stop() } else { captureFileWatcher.start(url: item.url) }
@@ -372,12 +374,48 @@ final class AssistantController {
         copyPairToClipboard(ifUnchangedSince: clipboardChangeCount)
     }
 
+    private func saveCaptureEdit(_ image: NSImage) -> Bool {
+        guard let url = panel.state.captureURL,
+              let data = Self.captureData(image, for: url) else {
+            panel.state.errorText = "Couldn't encode the edited capture."
+            return false
+        }
+        do {
+            try data.write(to: url, options: .atomic)
+            panel.state.errorText = nil
+            handleCaptureEdited(image)
+            return true
+        } catch {
+            panel.state.errorText = "Couldn't save the edited capture: \(error.localizedDescription)"
+            return false
+        }
+    }
+
+    private static func captureData(_ image: NSImage, for url: URL) -> Data? {
+        var rect = CGRect(origin: .zero, size: image.size)
+        guard let cgImage = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) else { return nil }
+        let representation = NSBitmapImageRep(cgImage: cgImage)
+        switch url.pathExtension.lowercased() {
+        case "jpg", "jpeg":
+            return representation.representation(using: .jpeg, properties: [.compressionFactor: 0.95])
+        case "gif":
+            return representation.representation(using: .gif, properties: [:])
+        case "tif", "tiff":
+            return representation.representation(using: .tiff, properties: [:])
+        case "bmp":
+            return representation.representation(using: .bmp, properties: [:])
+        default:
+            return representation.representation(using: .png, properties: [:])
+        }
+    }
+
     /// Clears the whole tab — every tray item, the preview, the watcher.
     private func dismissCapture() {
         captureFileWatcher.stop()
         panel.state.captureImage = nil
         panel.state.captureURL = nil
         panel.state.editedCaptureImage = nil
+        panel.state.captureEditing = false
         panel.state.attachmentKind = .capture
         panel.state.captureTray.removeAll()
         panel.state.captureTraySelection = nil
@@ -1147,6 +1185,7 @@ final class AssistantController {
         }
         panel.state.onStop = { [weak self] in self?.stop() }
         panel.state.onCopyAgain = { [weak self] in self?.copyPairToClipboard() }
+        panel.state.onSaveCaptureEdit = { [weak self] image in self?.saveCaptureEdit(image) ?? false }
         panel.state.onDismissCapture = { [weak self] in self?.removeCurrentCapture() }
         panel.state.onSelectCaptureItem = { [weak self] id in self?.selectCaptureItem(id) }
         panel.state.onRemoveCaptureItem = { [weak self] id in self?.removeCaptureItem(id) }
