@@ -197,8 +197,7 @@ final class CodeDocumentaryModel: ObservableObject {
         panel.message = "Choose the code file to make a documentary about"
         panel.prompt = "Choose"
         panel.level = .floating
-        NSApp.activate(ignoringOtherApps: true)
-        panel.begin { [weak self] response in
+        panel.beginForPeeky { [weak self] response in
             guard response == .OK, let url = panel.url, let self else { return }
             self.setSource(url, kind: .code)
         }
@@ -214,8 +213,7 @@ final class CodeDocumentaryModel: ObservableObject {
         panel.message = "Choose the .txt file to make a documentary about"
         panel.prompt = "Choose"
         panel.level = .floating
-        NSApp.activate(ignoringOtherApps: true)
-        panel.begin { [weak self] response in
+        panel.beginForPeeky { [weak self] response in
             guard response == .OK, let url = panel.url, let self else { return }
             self.setSource(url, kind: .text)
         }

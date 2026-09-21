@@ -1552,6 +1552,10 @@ final class KeyablePanel: NSPanel {
     private var localMouseMonitor: Any?
     private var globalMouseMonitor: Any?
     private var mousePassthroughTimer: Timer?
+    /// Open/save panels are hosted by an AppKit service process. Their clicks
+    /// therefore arrive through the global monitor and otherwise look like
+    /// clicks in a background app.
+    private var nativeDialogDepth = 0
     /// Where the last mouse-down in another app landed. Set on the press,
     /// judged on the release: a press-and-release in place is a click on a
     /// background window (lower the panel so that app comes forward); a
@@ -1632,6 +1636,10 @@ final class KeyablePanel: NSPanel {
 
     /// A mouse press or release in another app. See `backgroundPressOrigin`.
     func handleBackgroundMouse(_ type: NSEvent.EventType, at location: NSPoint) {
+        guard nativeDialogDepth == 0 else {
+            backgroundPressOrigin = nil
+            return
+        }
         switch type {
         case .leftMouseDown:
             backgroundPressOrigin = location
@@ -1655,9 +1663,20 @@ final class KeyablePanel: NSPanel {
     }
 
     func lowerForBackgroundInteraction() {
-        guard isVisible, shouldLowerForBackgroundClick?() == true else { return }
+        guard nativeDialogDepth == 0, isVisible, shouldLowerForBackgroundClick?() == true else { return }
         level = .normal
         orderBack(nil)
+    }
+
+    func beginNativeDialog() {
+        nativeDialogDepth += 1
+        backgroundPressOrigin = nil
+    }
+
+    func endNativeDialog() {
+        nativeDialogDepth = max(0, nativeDialogDepth - 1)
+        backgroundPressOrigin = nil
+        if nativeDialogDepth == 0 { raiseForPanelInteraction() }
     }
 
     deinit {
@@ -1713,6 +1732,20 @@ final class KeyablePanel: NSPanel {
     override func cancelOperation(_ sender: Any?) {
         if onCancel?() == true { return }
         orderOut(nil)
+    }
+}
+
+extension NSOpenPanel {
+    /// Presents an AppKit service-hosted picker without letting its clicks
+    /// trigger Peeky's global "clicked another app" lowering behavior.
+    func beginForPeeky(completionHandler: @escaping (NSApplication.ModalResponse) -> Void) {
+        let peekyPanels = NSApp.windows.compactMap { $0 as? KeyablePanel }.filter(\.isVisible)
+        peekyPanels.forEach { $0.beginNativeDialog() }
+        NSApp.activate(ignoringOtherApps: true)
+        begin { response in
+            peekyPanels.forEach { $0.endNativeDialog() }
+            completionHandler(response)
+        }
     }
 }
 
