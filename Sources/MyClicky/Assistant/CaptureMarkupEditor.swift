@@ -80,6 +80,12 @@ struct CaptureMarkupAnnotation: Identifiable {
     }
 }
 
+enum CaptureMarkupDragTarget: Equatable {
+    case move
+    case arrowStart
+    case arrowEnd
+}
+
 struct CaptureMarkupEditor: View {
     let image: NSImage
     let onCancel: () -> Void
@@ -92,14 +98,14 @@ struct CaptureMarkupEditor: View {
     @State private var text = ""
     @State private var selectedID: UUID?
     @State private var movingOriginal: CaptureMarkupAnnotation?
+    @State private var dragTarget: CaptureMarkupDragTarget?
 
     var body: some View {
         VStack(spacing: 7) {
             HStack(spacing: 5) {
                 ForEach(CaptureMarkupTool.allCases, id: \.self) { candidate in
                     Button {
-                        tool = candidate
-                        if candidate != .select { selectedID = nil }
+                        choose(candidate)
                     } label: {
                         Label(candidate.label, systemImage: candidate.symbol)
                             .font(.system(size: 12, weight: .semibold, design: .monospaced))
@@ -139,40 +145,38 @@ struct CaptureMarkupEditor: View {
             }
 
             GeometryReader { geometry in
-                let fitted = Self.aspectFit(imageSize: image.size, in: geometry.size)
-                ZStack {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.black.opacity(0.35))
+                let canvasSize = Self.widthFit(imageSize: image.size, width: geometry.size.width)
+                ScrollView(.vertical) {
+                    ZStack {
+                        Image(nsImage: image)
+                            .resizable()
+                            .frame(width: canvasSize.width, height: canvasSize.height)
 
-                    Image(nsImage: image)
-                        .resizable()
-                        .frame(width: fitted.width, height: fitted.height)
-                        .position(x: fitted.midX, y: fitted.midY)
-
-                    Canvas { context, size in
-                        for annotation in annotations {
-                            draw(annotation, in: &context, size: size)
-                            if annotation.id == selectedID {
-                                drawSelection(around: annotation, in: &context, size: size)
+                        Canvas { context, size in
+                            for annotation in annotations {
+                                draw(annotation, in: &context, size: size)
+                                if annotation.id == selectedID {
+                                    drawSelection(around: annotation, in: &context, size: size)
+                                }
+                            }
+                            if let draft {
+                                draw(draft, in: &context, size: size)
                             }
                         }
-                        if let draft {
-                            draw(draft, in: &context, size: size)
-                        }
-                    }
-                    .frame(width: fitted.width, height: fitted.height)
-                    .position(x: fitted.midX, y: fitted.midY)
-                    .allowsHitTesting(false)
+                        .frame(width: canvasSize.width, height: canvasSize.height)
+                        .allowsHitTesting(false)
 
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .frame(width: fitted.width, height: fitted.height)
-                        .position(x: fitted.midX, y: fitted.midY)
-                        .gesture(markupGesture(in: fitted.size))
+                        Color.clear
+                            .contentShape(Rectangle())
+                            .frame(width: canvasSize.width, height: canvasSize.height)
+                            .highPriorityGesture(markupGesture(in: canvasSize))
+                    }
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .overlay(RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(Color.cyan.opacity(0.45), lineWidth: 1))
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .overlay(RoundedRectangle(cornerRadius: 8)
-                    .strokeBorder(Color.white.opacity(0.2), lineWidth: 1))
+                .background(Color.black.opacity(0.18))
             }
 
             HStack(spacing: 8) {
@@ -203,13 +207,15 @@ struct CaptureMarkupEditor: View {
                         .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.1)))
                 } else if tool == .select {
                     Text(selectedID == nil
-                         ? "Click markup to select it, then drag to move it."
-                         : "Drag the selected markup to move it.")
+                         ? "Choose a shape, then drag exactly where it should go."
+                         : selectedArrowHint)
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.5))
                         .lineLimit(1)
                 } else {
-                    Text("Drag on the image to add a \(tool.label.lowercased()).")
+                    Text(tool == .arrow
+                         ? "Drag from the arrow's exact start point to its tip."
+                         : "Drag on the image to add a \(tool.label.lowercased()).")
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.5))
                         .lineLimit(1)
@@ -236,6 +242,13 @@ struct CaptureMarkupEditor: View {
                 .disabled(annotations.isEmpty)
             }
         }
+    }
+
+    private func choose(_ candidate: CaptureMarkupTool) {
+        tool = candidate
+        if candidate != .select { selectedID = nil }
+        movingOriginal = nil
+        dragTarget = nil
     }
 
     private func markupGesture(in size: CGSize) -> some Gesture {
@@ -282,6 +295,7 @@ struct CaptureMarkupEditor: View {
                 }
                 if tool == .select {
                     movingOriginal = nil
+                    dragTarget = nil
                     return
                 }
                 guard let draft else { return }
@@ -295,24 +309,41 @@ struct CaptureMarkupEditor: View {
     private func moveSelection(from start: CGPoint, to current: CGPoint, in size: CGSize) {
         let normalizedStart = normalized(start, in: size)
         if movingOriginal == nil {
-            guard let match = annotations.last(where: {
-                CaptureMarkupInteraction.hitTest($0, at: normalizedStart)
-            }) else {
+            guard let match = CaptureMarkupInteraction.annotationToMove(
+                in: annotations,
+                selectedID: selectedID,
+                at: normalizedStart
+            ) else {
                 selectedID = nil
                 return
             }
             selectedID = match.id
             movingOriginal = match
+            dragTarget = CaptureMarkupInteraction.dragTarget(
+                for: match,
+                at: normalizedStart,
+                canvasSize: size
+            )
             color = match.color
         }
         guard let original = movingOriginal,
               let index = annotations.firstIndex(where: { $0.id == original.id }) else { return }
         let normalizedCurrent = normalized(current, in: size)
-        let delta = CGPoint(
-            x: normalizedCurrent.x - normalizedStart.x,
-            y: normalizedCurrent.y - normalizedStart.y
+        annotations[index] = CaptureMarkupInteraction.adjusted(
+            original,
+            target: dragTarget ?? .move,
+            dragStart: normalizedStart,
+            current: normalizedCurrent
         )
-        annotations[index] = CaptureMarkupInteraction.translated(original, by: delta)
+    }
+
+    private var selectedArrowHint: String {
+        guard let selectedID,
+              let annotation = annotations.first(where: { $0.id == selectedID }),
+              case .arrow = annotation.kind else {
+            return "Drag anywhere on the image to move the selected markup."
+        }
+        return "Drag either round handle to turn or resize the arrow; drag elsewhere to move it."
     }
 
     private func normalized(_ point: CGPoint, in size: CGSize) -> CGPoint {
@@ -339,6 +370,14 @@ struct CaptureMarkupEditor: View {
             with: .color(.cyan.opacity(0.9)),
             style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])
         )
+        if case .arrow(let start, let end) = annotation.kind {
+            for point in [start, end] {
+                let center = CGPoint(x: point.x * size.width, y: point.y * size.height)
+                let handle = CGRect(x: center.x - 6, y: center.y - 6, width: 12, height: 12)
+                context.fill(Path(ellipseIn: handle), with: .color(.cyan))
+                context.stroke(Path(ellipseIn: handle), with: .color(.white), lineWidth: 1.5)
+            }
+        }
     }
 
     static func aspectFit(imageSize: CGSize, in available: CGSize) -> CGRect {
@@ -354,15 +393,69 @@ struct CaptureMarkupEditor: View {
             height: size.height
         )
     }
+
+    static func widthFit(imageSize: CGSize, width: CGFloat) -> CGSize {
+        guard imageSize.width > 0, imageSize.height > 0, width > 0 else { return .zero }
+        return CGSize(width: width, height: width * imageSize.height / imageSize.width)
+    }
 }
 
 enum CaptureMarkupInteraction {
+    static func dragTarget(
+        for annotation: CaptureMarkupAnnotation,
+        at point: CGPoint,
+        canvasSize: CGSize,
+        handleRadius: CGFloat = 18
+    ) -> CaptureMarkupDragTarget {
+        guard case .arrow(let start, let end) = annotation.kind else { return .move }
+        let startDistance = pixelDistance(point, start, canvasSize: canvasSize)
+        let endDistance = pixelDistance(point, end, canvasSize: canvasSize)
+        if min(startDistance, endDistance) > handleRadius { return .move }
+        return startDistance <= endDistance ? .arrowStart : .arrowEnd
+    }
+
+    static func adjusted(
+        _ annotation: CaptureMarkupAnnotation,
+        target: CaptureMarkupDragTarget,
+        dragStart: CGPoint,
+        current: CGPoint
+    ) -> CaptureMarkupAnnotation {
+        var adjusted = annotation
+        switch (target, annotation.kind) {
+        case (.arrowStart, .arrow(_, let end)):
+            adjusted.kind = .arrow(clamped(current), end)
+        case (.arrowEnd, .arrow(let start, _)):
+            adjusted.kind = .arrow(start, clamped(current))
+        default:
+            adjusted = translated(
+                annotation,
+                by: CGPoint(x: current.x - dragStart.x, y: current.y - dragStart.y)
+            )
+        }
+        return adjusted
+    }
+
+    static func annotationToMove(
+        in annotations: [CaptureMarkupAnnotation],
+        selectedID: UUID?,
+        at point: CGPoint
+    ) -> CaptureMarkupAnnotation? {
+        if let selectedID,
+           let selected = annotations.first(where: { $0.id == selectedID }) {
+            return selected
+        }
+        return annotations.last(where: { hitTest($0, at: point) })
+    }
+
     static func hitTest(_ annotation: CaptureMarkupAnnotation, at point: CGPoint, tolerance: CGFloat = 0.025) -> Bool {
+        if bounds(of: annotation).insetBy(dx: -tolerance, dy: -tolerance).contains(point) {
+            return true
+        }
         switch annotation.kind {
         case .arrow(let start, let end):
             return distance(from: point, toSegmentFrom: start, to: end) <= tolerance
         case .rectangle, .ellipse, .text:
-            return bounds(of: annotation).insetBy(dx: -tolerance, dy: -tolerance).contains(point)
+            return false
         case .stroke(let points):
             if points.count == 1 {
                 return hypot(point.x - points[0].x, point.y - points[0].y) <= tolerance
@@ -421,6 +514,14 @@ enum CaptureMarkupInteraction {
         guard lengthSquared > 0 else { return hypot(point.x - start.x, point.y - start.y) }
         let projection = min(max(((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared, 0), 1)
         return hypot(point.x - (start.x + projection * dx), point.y - (start.y + projection * dy))
+    }
+
+    private static func pixelDistance(_ a: CGPoint, _ b: CGPoint, canvasSize: CGSize) -> CGFloat {
+        hypot((a.x - b.x) * canvasSize.width, (a.y - b.y) * canvasSize.height)
+    }
+
+    private static func clamped(_ point: CGPoint) -> CGPoint {
+        CGPoint(x: min(max(point.x, 0), 1), y: min(max(point.y, 0), 1))
     }
 
     private static func rect(_ a: CGPoint, _ b: CGPoint) -> CGRect {
