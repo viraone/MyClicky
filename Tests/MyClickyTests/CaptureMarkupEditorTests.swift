@@ -1,0 +1,68 @@
+import AppKit
+import XCTest
+@testable import MyClicky
+
+@MainActor
+final class CaptureMarkupEditorTests: XCTestCase {
+    func testAspectFitCentersImageWithoutChangingItsRatio() {
+        let rect = CaptureMarkupEditor.aspectFit(
+            imageSize: CGSize(width: 200, height: 100),
+            in: CGSize(width: 300, height: 300)
+        )
+
+        XCTAssertEqual(rect, CGRect(x: 0, y: 75, width: 300, height: 150))
+    }
+
+    func testRendererPreservesResolutionAndDrawsMarkup() throws {
+        let image = NSImage(size: NSSize(width: 200, height: 100))
+        image.lockFocus()
+        NSColor.white.setFill()
+        NSRect(x: 0, y: 0, width: 200, height: 100).fill()
+        image.unlockFocus()
+
+        let annotation = CaptureMarkupAnnotation(
+            kind: .rectangle(CGPoint(x: 0.1, y: 0.1), CGPoint(x: 0.9, y: 0.9)),
+            color: .red
+        )
+        var sourceRect = CGRect(origin: .zero, size: image.size)
+        let source = try XCTUnwrap(image.cgImage(forProposedRect: &sourceRect, context: nil, hints: nil))
+        let rendered = try XCTUnwrap(CaptureMarkupRenderer.render(image: image, annotations: [annotation]))
+        var rect = CGRect(origin: .zero, size: rendered.size)
+        let cgImage = try XCTUnwrap(rendered.cgImage(forProposedRect: &rect, context: nil, hints: nil))
+
+        XCTAssertEqual(cgImage.width, source.width)
+        XCTAssertEqual(cgImage.height, source.height)
+
+        let bitmap = NSBitmapImageRep(cgImage: cgImage)
+        let edge = try XCTUnwrap(bitmap.colorAt(x: cgImage.width / 10, y: cgImage.height / 2)?.usingColorSpace(.deviceRGB))
+        XCTAssertGreaterThan(edge.redComponent, 0.8)
+        XCTAssertLessThan(edge.greenComponent, 0.4)
+        XCTAssertLessThan(edge.blueComponent, 0.4)
+    }
+
+    func testArrowCanBeSelectedAlongItsLine() {
+        let arrow = CaptureMarkupAnnotation(
+            kind: .arrow(CGPoint(x: 0.2, y: 0.2), CGPoint(x: 0.8, y: 0.8)),
+            color: .red
+        )
+
+        XCTAssertTrue(CaptureMarkupInteraction.hitTest(arrow, at: CGPoint(x: 0.5, y: 0.5)))
+        XCTAssertFalse(CaptureMarkupInteraction.hitTest(arrow, at: CGPoint(x: 0.5, y: 0.7)))
+    }
+
+    func testMovingArrowKeepsItInsideImage() throws {
+        let arrow = CaptureMarkupAnnotation(
+            kind: .arrow(CGPoint(x: 0.7, y: 0.7), CGPoint(x: 0.9, y: 0.9)),
+            color: .red
+        )
+        let moved = CaptureMarkupInteraction.translated(arrow, by: CGPoint(x: 0.5, y: 0.5))
+
+        guard case .arrow(let start, let end) = moved.kind else {
+            return XCTFail("Expected an arrow")
+        }
+        XCTAssertEqual(start.x, 0.8, accuracy: 0.0001)
+        XCTAssertEqual(start.y, 0.8, accuracy: 0.0001)
+        XCTAssertEqual(end.x, 1, accuracy: 0.0001)
+        XCTAssertEqual(end.y, 1, accuracy: 0.0001)
+    }
+}
