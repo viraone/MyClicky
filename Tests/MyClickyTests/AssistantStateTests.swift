@@ -4,6 +4,20 @@ import XCTest
 
 @MainActor
 final class AssistantStateTests: XCTestCase {
+    func testVideoTabStaysAboveOtherAppsAfterBackgroundClick() {
+        let state = AssistantState()
+        state.collapsed = false
+
+        state.tab = .video
+        XCTAssertFalse(state.shouldLowerForBackgroundClick)
+
+        state.tab = .ask
+        XCTAssertTrue(state.shouldLowerForBackgroundClick)
+
+        state.collapsed = true
+        XCTAssertFalse(state.shouldLowerForBackgroundClick)
+    }
+
     func testFastQwenMigrationReplacesThePreviouslySelected80BModelOnce() throws {
         let suiteName = "AssistantStateTests.\(UUID().uuidString)"
         let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
