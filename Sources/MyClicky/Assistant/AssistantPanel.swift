@@ -775,6 +775,11 @@ final class AssistantState: ObservableObject {
             tab = hiddenTabs.contains(oldValue) ? (visibleTabs.first ?? oldValue) : oldValue
         }
     }
+    /// The video editor is meant to stay visible while the user works in
+    /// another app, such as playing a reference video in Safari.
+    var shouldLowerForBackgroundClick: Bool {
+        !collapsed && tab != .video
+    }
     /// Tabs the user has switched off in the gear menu. They drop out of the
     /// tab bar; everything else about them stays put so turning one back on
     /// is instant. Persisted so the choice sticks between launches.
@@ -1396,7 +1401,7 @@ final class AssistantPanelController {
                 return NSBezierPath(roundedRect: card, xRadius: radius, yRadius: radius).contains(point)
             },
             shouldLowerForBackgroundClick: { [weak state] in
-                state?.collapsed == false
+                state?.shouldLowerForBackgroundClick == true
             }
         )
         state.onDismiss = { [weak self] in self?.hide() }
