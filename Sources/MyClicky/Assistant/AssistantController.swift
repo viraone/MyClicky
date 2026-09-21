@@ -209,8 +209,7 @@ final class AssistantController {
         let desktop = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")
         let resumeFolder = desktop.appendingPathComponent("VIRADETH_RESUME")
         open.directoryURL = FileManager.default.fileExists(atPath: resumeFolder.path) ? resumeFolder : desktop
-        NSApp.activate(ignoringOtherApps: true)
-        open.begin { [weak self] response in
+        open.beginForPeeky { [weak self] response in
             guard response == .OK, let url = open.url, let self else { return }
             self.showAttachment(url: url)
         }
@@ -260,8 +259,7 @@ final class AssistantController {
         let desktop = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")
         let resumeFolder = desktop.appendingPathComponent("VIRADETH_RESUME")
         open.directoryURL = FileManager.default.fileExists(atPath: resumeFolder.path) ? resumeFolder : desktop
-        NSApp.activate(ignoringOtherApps: true)
-        open.begin { [weak self] response in
+        open.beginForPeeky { [weak self] response in
             guard response == .OK, let self else { return }
             self.addAskAttachments(urls: open.urls, via: "picker")
         }
@@ -462,8 +460,7 @@ final class AssistantController {
         open.level = .floating
         open.directoryURL = panel.state.codeProject?.root.deletingLastPathComponent()
             ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")
-        NSApp.activate(ignoringOtherApps: true)
-        open.begin { [weak self] response in
+        open.beginForPeeky { [weak self] response in
             guard response == .OK, let self else { return }
             self.loadCodeProject(urls: open.urls, via: "picker")
         }
@@ -889,8 +886,7 @@ final class AssistantController {
         open.allowsMultipleSelection = true
         open.allowedContentTypes = [.image]
         open.level = .floating
-        NSApp.activate(ignoringOtherApps: true)
-        open.begin { [weak self] response in
+        open.beginForPeeky { [weak self] response in
             guard response == .OK, let self else { return }
             self.addCodeImages(urls: open.urls, via: "picker")
         }

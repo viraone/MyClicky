@@ -225,8 +225,7 @@ final class VideoEditorModel: ObservableObject {
         panel.message = "Choose the takes and screen recordings for this video"
         panel.prompt = "Import"
         panel.level = .floating
-        NSApp.activate(ignoringOtherApps: true)
-        panel.begin { [weak self] response in
+        panel.beginForPeeky { [weak self] response in
             guard response == .OK, let self else { return }
             self.importClips(panel.urls)
         }

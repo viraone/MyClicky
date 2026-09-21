@@ -200,6 +200,26 @@ final class TerminalShortcutTests: XCTestCase {
         XCTAssertEqual(panel.level, .floating)
     }
 
+    func testNativeDialogClicksDoNotLowerPanelBehindBackgroundApp() {
+        let panel = panel()
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.level = .floating
+        panel.orderFrontRegardless()
+        defer { panel.close() }
+
+        panel.beginNativeDialog()
+        panel.handleBackgroundMouse(.leftMouseDown, at: NSPoint(x: 100, y: 100))
+        panel.handleBackgroundMouse(.leftMouseUp, at: NSPoint(x: 101, y: 101))
+        panel.lowerForBackgroundInteraction()
+        XCTAssertEqual(panel.level, .floating)
+
+        panel.endNativeDialog()
+        XCTAssertEqual(panel.level, .floating)
+        panel.handleBackgroundMouse(.leftMouseDown, at: NSPoint(x: 100, y: 100))
+        panel.handleBackgroundMouse(.leftMouseUp, at: NSPoint(x: 101, y: 101))
+        XCTAssertEqual(panel.level, .normal, "normal background clicks should lower Peeky after the picker closes")
+    }
+
     func testFocusOnMountDoesNotStealLaterFieldFocus() async {
         let panel = panel()
         panel.orderFrontRegardless()
