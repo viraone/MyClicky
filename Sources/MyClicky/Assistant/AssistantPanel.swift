@@ -1394,7 +1394,7 @@ final class AssistantPanelController {
         let hosting = NSHostingController(rootView: content)
         let panel = KeyablePanel(
             contentRect: NSRect(origin: .zero, size: Self.expandedSize),
-            styleMask: [.borderless, .nonactivatingPanel],
+            styleMask: KeyablePanel.initialStyleMask(),
             backing: .buffered,
             defer: false
         )
@@ -1549,7 +1549,40 @@ final class AssistantPanelController {
     }
 }
 
+struct PanelSelectionReclaim {
+    static let duration: TimeInterval = 0.6
+    private(set) var startedAt: TimeInterval?
+    private(set) var consumed = false
+    private(set) var cancellationReason: String?
+    private var lastArmingSuppressionAt: TimeInterval?
+
+    mutating func arm(at now: TimeInterval) {
+        // Key and application callbacks for one selection share one deadline.
+        if let startedAt, now < startedAt + Self.duration { return }
+        startedAt = now
+        consumed = false
+        if let lastArmingSuppressionAt, now < lastArmingSuppressionAt + Self.duration { return }
+        cancellationReason = nil
+    }
+
+    mutating func interrupt(_ reason: String, at now: TimeInterval, suppressArming: Bool = true) {
+        cancellationReason = reason
+        if suppressArming { lastArmingSuppressionAt = now }
+    }
+
+    mutating func consume(at now: TimeInterval) -> Bool {
+        guard let startedAt, now >= startedAt, now < startedAt + Self.duration,
+              !consumed, cancellationReason == nil else { return false }
+        consumed = true
+        return true
+    }
+}
+
 final class KeyablePanel: NSPanel {
+    static func initialStyleMask(defaults: UserDefaults = .standard) -> NSWindow.StyleMask {
+        defaults.bool(forKey: "peekySelectionActivatingStyle") ? [.borderless] : [.borderless, .nonactivatingPanel]
+    }
+
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool {
         isVisible && shouldLowerForBackgroundClick?() == true
@@ -1571,6 +1604,9 @@ final class KeyablePanel: NSPanel {
     private var mousePassthroughTimer: Timer?
     private let workspaceNotificationCenter = NSWorkspace.shared.notificationCenter
     private var handlingSystemSelection = false
+    private var reclaimingSelection = false
+    private var reclaimNeedsNewInteraction = false
+    private var selectionReclaim = PanelSelectionReclaim()
     private var selectionProbeSequence = 0
     /// Open/save panels are hosted by an AppKit service process. Their clicks
     /// therefore arrive through the global monitor and otherwise look like
@@ -1615,7 +1651,7 @@ final class KeyablePanel: NSPanel {
         self.shouldLowerForBackgroundClick = shouldLowerForBackgroundClick
         refreshWindowStacking()
         for name in [NSWorkspace.didActivateApplicationNotification, NSWorkspace.didDeactivateApplicationNotification] {
-            workspaceNotificationCenter.addObserver(self, selector: #selector(logWorkspaceActivation(_:)),
+            workspaceNotificationCenter.addObserver(self, selector: #selector(handleWorkspaceActivation(_:)),
                                                      name: name, object: nil)
         }
         NotificationCenter.default.addObserver(self, selector: #selector(logSelectionNotification(_:)),
@@ -1624,24 +1660,33 @@ final class KeyablePanel: NSPanel {
                                                name: NSWindow.didResignKeyNotification, object: self)
         acceptsMouseMovedEvents = true
         let localEvents: NSEvent.EventTypeMask = [
-            .mouseMoved, .leftMouseDown, .rightMouseDown, .otherMouseDown,
+            .mouseMoved, .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp,
+            .keyDown, .keyUp, .flagsChanged, .scrollWheel, .gesture, .swipe, .magnify, .rotate,
         ]
         localMouseMonitor = NSEvent.addLocalMonitorForEvents(matching: localEvents) { [weak self] event in
             if event.type == .mouseMoved {
                 self?.refreshMousePassthrough()
             } else {
-                self?.handleLocalMouseDown(in: event.window)
+                self?.observeSelectionInput(event.type)
+                if [.leftMouseDown, .rightMouseDown, .otherMouseDown].contains(event.type) {
+                    self?.handleLocalMouseDown(in: event.window)
+                }
             }
             return event
         }
         let globalEvents: NSEvent.EventTypeMask = [
-            .mouseMoved, .leftMouseDown, .leftMouseUp, .rightMouseDown, .otherMouseDown,
+            .mouseMoved, .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp,
+            .keyDown, .keyUp, .flagsChanged, .scrollWheel, .gesture, .swipe, .magnify, .rotate,
         ]
         globalMouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: globalEvents) { [weak self] event in
             if event.type == .mouseMoved {
                 self?.refreshMousePassthrough()
             } else {
-                self?.handleBackgroundMouse(event.type, at: NSEvent.mouseLocation)
+                if [.leftMouseDown, .leftMouseUp, .rightMouseDown, .otherMouseDown].contains(event.type) {
+                    self?.handleBackgroundMouse(event.type, at: NSEvent.mouseLocation)
+                } else {
+                    self?.observeSelectionInput(event.type)
+                }
             }
         }
         let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
@@ -1671,6 +1716,8 @@ final class KeyablePanel: NSPanel {
     /// project" open dialog, alerts — must not shove the panel on top of
     /// them, or the dialog vanishes behind it mid-use.
     func handleLocalMouseDown(in window: NSWindow?) {
+        reclaimNeedsNewInteraction = false
+        interruptSelectionReclaim("local-mouse-down")
         guard window === self else { return }
         raiseForPanelInteraction()
     }
@@ -1678,6 +1725,7 @@ final class KeyablePanel: NSPanel {
     /// A mouse press or release in another app. See `backgroundPressOrigin`.
     func handleBackgroundMouse(_ type: NSEvent.EventType, at location: NSPoint,
                                now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        observeSelectionInput(type, now: now)
         let event: String = switch type {
         case .leftMouseDown: "left-down"
         case .leftMouseUp: "left-up"
@@ -1719,6 +1767,7 @@ final class KeyablePanel: NSPanel {
     func refreshWindowStacking() {
         if isMainWindow && !canBecomeMain { resignMain() }
         let floating = nativeDialogDepth > 0 || shouldLowerForBackgroundClick?() == false
+        if floating { interruptSelectionReclaim("floating-mode-or-picker") }
         if isFloatingPanel != floating { isFloatingPanel = floating }
         let targetLevel: NSWindow.Level = floating ? .floating : .normal
         if level != targetLevel { level = targetLevel }
@@ -1729,6 +1778,8 @@ final class KeyablePanel: NSPanel {
     }
 
     func raiseForPanelInteraction() {
+        reclaimNeedsNewInteraction = false
+        interruptSelectionReclaim("explicit-show-or-interaction")
         // A picker must remain above Peeky, including service-hosted pickers
         // whose mouse events do not belong to this process.
         guard nativeDialogDepth == 0 else {
@@ -1743,7 +1794,8 @@ final class KeyablePanel: NSPanel {
     /// Mission Control/app selection need not deliver a local mouse-down.
     /// Cleanup windows make themselves key before activating the app; leave
     /// those windows, native pickers, and intentional floating modes alone.
-    func raiseForSystemSelection(_ source: String, now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+    func raiseForSystemSelection(_ source: String, now: TimeInterval = ProcessInfo.processInfo.systemUptime,
+                                modifiers: NSEvent.ModifierFlags = NSEvent.modifierFlags) {
         guard !handlingSystemSelection else {
             logWindowSelection("selection source=\(source) ignored=reentrant", now: now)
             return
@@ -1754,6 +1806,13 @@ final class KeyablePanel: NSPanel {
             && NSApp.modalWindow == nil && attachedSheet == nil && !anotherWindowIsKey
         logWindowSelection("selection source=\(source) raise=\(shouldRaise) blockingKey=\(anotherWindowIsKey)", now: now)
         guard shouldRaise else { return }
+        let reclaimFeedback = reclaimingSelection || reclaimNeedsNewInteraction
+        if modifiers.contains(.command) {
+            interruptSelectionReclaim("command-modifier", now: now)
+        } else if !reclaimFeedback && ["key-window", "application-activation"].contains(source)
+                    && styleMask.contains(.nonactivatingPanel) {
+            selectionReclaim.arm(at: now)
+        }
         handlingSystemSelection = true
         defer { handlingSystemSelection = false }
         // Dock mouse events can arrive on either side of the activation callback.
@@ -1769,10 +1828,75 @@ final class KeyablePanel: NSPanel {
         scheduleSelectionProbes(source)
     }
 
-    @objc private func logWorkspaceActivation(_ notification: Notification) {
-        guard UserDefaults.standard.bool(forKey: "peekyWindowSelectionDiagnostics") else { return }
+    @objc private func handleWorkspaceActivation(_ notification: Notification) {
         let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
         logWindowSelection("workspace event=\(notification.name.rawValue) app=\(Self.describeApplication(app))")
+        if notification.name == NSWorkspace.didActivateApplicationNotification, let app,
+           app.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+            let pid = app.processIdentifier
+            // Workspace activation can precede our resign-active callback.
+            // Recheck once on the next turn, after AppKit has applied that handoff.
+            DispatchQueue.main.async { [weak self] in
+                guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
+                    self?.logWindowSelection("reclaim skipped=frontmost-changed pid=\(pid)")
+                    return
+                }
+                self?.reclaimAfterUnexpectedActivation(of: pid)
+            }
+        }
+    }
+
+    func observeSelectionInput(_ type: NSEvent.EventType,
+                               now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        guard type != .mouseMoved else { return }
+        // Only event types are recorded; never key characters or typed text.
+        reclaimNeedsNewInteraction = false
+        // Input cancels an existing attempt, not the selection it initiates.
+        interruptSelectionReclaim("input-\(type.rawValue)", now: now, suppressArming: false)
+    }
+
+    private func interruptSelectionReclaim(_ reason: String,
+                                          now: TimeInterval = ProcessInfo.processInfo.systemUptime,
+                                          suppressArming: Bool = true) {
+        selectionReclaim.interrupt(reason, at: now, suppressArming: suppressArming)
+        logWindowSelection("reclaim cancelled reason=\(reason)", now: now)
+    }
+
+    @discardableResult
+    func reclaimAfterUnexpectedActivation(
+        of processIdentifier: pid_t,
+        now: TimeInterval = ProcessInfo.processInfo.systemUptime,
+        modifiers: NSEvent.ModifierFlags = NSEvent.modifierFlags,
+        pressedMouseButtons: Int = NSEvent.pressedMouseButtons,
+        canObserveKeyboard: Bool = AXIsProcessTrusted(),
+        activateApplication: () -> Void = { NSApp.activate(ignoringOtherApps: true) }
+    ) -> Bool {
+        guard processIdentifier != ProcessInfo.processInfo.processIdentifier, !reclaimingSelection else { return false }
+        let otherKeyWindow = NSApp.keyWindow.map { $0 !== self && Self.isVisibleInteractionWindow($0) } ?? false
+        guard isVisible, !isMiniaturized, alphaValue > 0, nativeDialogDepth == 0,
+              shouldLowerForBackgroundClick?() == true, level == .normal, !isFloatingPanel,
+              styleMask.contains(.nonactivatingPanel), NSApp.modalWindow == nil, attachedSheet == nil,
+              !otherKeyWindow, !modifiers.contains(.command), pressedMouseButtons == 0, globalMouseMonitor != nil else {
+            interruptSelectionReclaim("ineligible mouseButtons=\(pressedMouseButtons) command=\(modifiers.contains(.command))"
+                                      + " keyboardObservable=\(canObserveKeyboard) otherKey=\(otherKeyWindow)", now: now)
+            return false
+        }
+        guard selectionReclaim.consume(at: now) else {
+            logWindowSelection("reclaim skipped=unarmed-cancelled-expired-or-consumed", now: now)
+            return false
+        }
+        reclaimingSelection = true
+        reclaimNeedsNewInteraction = true
+        defer { reclaimingSelection = false }
+        logWindowSelection("reclaim reason=unexpected-activation pid=\(processIdentifier)"
+                           + " keyboardObservable=\(canObserveKeyboard)", now: now)
+        // Consume before activation, whose synchronous/asynchronous callbacks
+        // must not grant another attempt for this selection.
+        activateApplication()
+        makeKeyAndOrderFront(nil)
+        makeMain()
+        logWindowSelection("reclaim completed", now: now)
+        return true
     }
 
     @objc private func logSelectionNotification(_ notification: Notification) {
@@ -1814,17 +1938,23 @@ final class KeyablePanel: NSPanel {
         let timestamp = Self.selectionTimestampFormatter.string(from: Date())
         let graceMS = max(0, (backgroundLoweringSuppressedUntil - now) * 1000)
         let message = "\(timestamp) Peeky selection: \(event) panel=\(describe(self)) level=\(level.rawValue)"
+            + " floating=\(isFloatingPanel) styleMask=\(styleMask.rawValue) nonactivating=\(styleMask.contains(.nonactivatingPanel))"
+            + " globalMouseObserver=\(globalMouseMonitor != nil) localInputObserver=\(localMouseMonitor != nil)"
+            + " globalKeyboardObservable=\(AXIsProcessTrusted())"
             + " key=\(describe(NSApp.keyWindow)) main=\(describe(NSApp.mainWindow))"
             + " active=\(NSApp.isActive) modal=\(describe(NSApp.modalWindow)) sheet=\(attachedSheet != nil)"
             + " frontmost=\(Self.describeApplication(NSWorkspace.shared.frontmostApplication))"
             + " pickerDepth=\(nativeDialogDepth) lowerable=\(shouldLowerForBackgroundClick?() == true)"
             + " pendingPress=\(backgroundPressOrigin != nil) graceMS=\(String(format: "%.1f", graceMS))"
+            + " reclaimConsumed=\(selectionReclaim.consumed) reclaimCancelled=\(selectionReclaim.cancellationReason ?? "none")"
+            + " reclaimNeedsInput=\(reclaimNeedsNewInteraction)"
             + " topAtCenter=\(topWindow)"
         Self.selectionLogger.notice("\(message, privacy: .public)")
     }
 
     func lowerForBackgroundInteraction(reason: String = "background",
                                        now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        interruptSelectionReclaim("lower-\(reason)", now: now)
         let shouldLower = nativeDialogDepth == 0 && isVisible && shouldLowerForBackgroundClick?() == true
             && now >= backgroundLoweringSuppressedUntil
         logWindowSelection("lower reason=\(reason) allowed=\(shouldLower)", now: now)
@@ -1835,6 +1965,7 @@ final class KeyablePanel: NSPanel {
     }
 
     func beginNativeDialog() {
+        interruptSelectionReclaim("native-dialog")
         nativeDialogDepth += 1
         backgroundPressOrigin = nil
         refreshWindowStacking()

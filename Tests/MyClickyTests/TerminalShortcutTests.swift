@@ -373,6 +373,215 @@ final class TerminalShortcutTests: XCTestCase {
         XCTAssertEqual(panel.level, .normal)
     }
 
+    func testSelectionReclaimDeadlineIsNotExtendedAndAttemptIsConsumedOnce() {
+        var policy = PanelSelectionReclaim()
+        policy.arm(at: 10)
+        policy.arm(at: 10.5)
+        XCTAssertEqual(policy.startedAt, 10)
+        XCTAssertTrue(policy.consume(at: 10.599))
+        XCTAssertFalse(policy.consume(at: 10.599))
+        policy.arm(at: 10.599)
+        XCTAssertFalse(policy.consume(at: 10.599))
+
+        var expired = PanelSelectionReclaim()
+        expired.arm(at: 10)
+        XCTAssertFalse(expired.consume(at: 10.6))
+        XCTAssertFalse(expired.consume(at: 11))
+    }
+
+    func testSelectionReclaimCancellationSurvivesLaterCallbacksInSameSelection() {
+        var policy = PanelSelectionReclaim()
+        policy.arm(at: 10)
+        policy.interrupt("user-input", at: 10.1)
+        policy.arm(at: 10.2)
+        XCTAssertFalse(policy.consume(at: 10.3))
+
+        var recentInput = PanelSelectionReclaim()
+        recentInput.interrupt("explicit-show", at: 20)
+        recentInput.arm(at: 20.1)
+        XCTAssertFalse(recentInput.consume(at: 20.2))
+        recentInput.arm(at: 21)
+        XCTAssertTrue(recentInput.consume(at: 21.1))
+    }
+
+    func testUnexpectedActivationReclaimsOnceAndDoesNotRearmFromOwnActivation() {
+        let panel = panel()
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.raiseForPanelInteraction()
+        defer { panel.close() }
+        let now = ProcessInfo.processInfo.systemUptime + 1
+        panel.observeSelectionInput(.gesture, now: now - 0.1)
+        panel.raiseForSystemSelection("application-activation", now: now, modifiers: [])
+        var activations = 0
+        let activate = {
+            activations += 1
+            panel.raiseForSystemSelection("key-window", now: now + 0.21, modifiers: [])
+            panel.raiseForSystemSelection("application-activation", now: now + 0.22, modifiers: [])
+        }
+        XCTAssertTrue(panel.reclaimAfterUnexpectedActivation(
+            of: -1, now: now + 0.2, modifiers: [], pressedMouseButtons: 0,
+            canObserveKeyboard: false, activateApplication: activate))
+        XCTAssertFalse(panel.reclaimAfterUnexpectedActivation(
+            of: -1, now: now + 0.3, modifiers: [], pressedMouseButtons: 0, activateApplication: activate))
+        panel.raiseForSystemSelection("application-activation", now: now + 1, modifiers: [])
+        panel.raiseForSystemSelection("key-window", now: now + 1.1, modifiers: [])
+        XCTAssertFalse(panel.reclaimAfterUnexpectedActivation(
+            of: -1, now: now + 1.2, modifiers: [], pressedMouseButtons: 0, activateApplication: activate))
+        XCTAssertEqual(activations, 1, "missing global keyboard permission degrades, not disables, the one-shot attempt")
+        XCTAssertEqual(panel.level, .normal)
+        XCTAssertFalse(panel.isFloatingPanel)
+
+        panel.observeSelectionInput(.scrollWheel, now: now + 2)
+        panel.raiseForSystemSelection("application-activation", now: now + 2.1, modifiers: [])
+        XCTAssertTrue(panel.reclaimAfterUnexpectedActivation(
+            of: -1, now: now + 2.3, modifiers: [], pressedMouseButtons: 0,
+            activateApplication: { activations += 1 }))
+        XCTAssertEqual(activations, 2, "a later user selection can get its own one-shot attempt")
+    }
+
+    func testMouseKeyboardAndGestureInputCancelReclaim() {
+        let events: [NSEvent.EventType] = [
+            .leftMouseDown, .leftMouseUp, .rightMouseDown, .otherMouseDown,
+            .keyDown, .keyUp, .flagsChanged, .scrollWheel, .gesture, .swipe, .magnify, .rotate,
+        ]
+        for event in events {
+            let panel = panel()
+            panel.enableTransparentMarginPassthrough { _, _ in true }
+            panel.raiseForPanelInteraction()
+            defer { panel.close() }
+            let now = ProcessInfo.processInfo.systemUptime + 1
+            panel.raiseForSystemSelection("application-activation", now: now, modifiers: [])
+            if [.leftMouseDown, .leftMouseUp, .rightMouseDown, .otherMouseDown].contains(event) {
+                panel.handleBackgroundMouse(event, at: .zero, now: now + 0.1)
+            } else {
+                panel.observeSelectionInput(event, now: now + 0.1)
+            }
+            panel.raiseForSystemSelection("key-window", now: now + 0.2, modifiers: [])
+            XCTAssertFalse(panel.reclaimAfterUnexpectedActivation(
+                of: -1, now: now + 0.3, modifiers: [], pressedMouseButtons: 0,
+                activateApplication: { XCTFail("must not activate after \(event)") }))
+        }
+    }
+
+    func testCommandMouseButtonsExpiryAndOwnAppPreventReclaim() {
+        for (delay, modifiers, buttons, pid) in [
+            (0.2, NSEvent.ModifierFlags.command, 0, pid_t(-1)),
+            (0.2, [], 1, -1),
+            (0.6, [], 0, -1),
+            (1.0, [], 0, -1),
+            (0.2, [], 0, ProcessInfo.processInfo.processIdentifier),
+        ] {
+            let panel = panel()
+            panel.enableTransparentMarginPassthrough { _, _ in true }
+            panel.raiseForPanelInteraction()
+            defer { panel.close() }
+            let now = ProcessInfo.processInfo.systemUptime + 1
+            panel.raiseForSystemSelection("application-activation", now: now, modifiers: [])
+            XCTAssertFalse(panel.reclaimAfterUnexpectedActivation(
+                of: pid, now: now + delay, modifiers: modifiers, pressedMouseButtons: buttons,
+                activateApplication: { XCTFail("must not activate") }))
+        }
+    }
+
+    func testExplicitShowNeverArmsReclaimAndCancelsPendingSelection() {
+        let panel = panel()
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.raiseForPanelInteraction()
+        defer { panel.close() }
+        let now = ProcessInfo.processInfo.systemUptime + 1
+        XCTAssertFalse(panel.reclaimAfterUnexpectedActivation(
+            of: -1, now: now, modifiers: [], pressedMouseButtons: 0,
+            activateApplication: { XCTFail("explicit show must not arm reclaim") }))
+        panel.raiseForSystemSelection("application-activation", now: now + 1, modifiers: [])
+        panel.raiseForPanelInteraction()
+        XCTAssertFalse(panel.reclaimAfterUnexpectedActivation(
+            of: -1, now: now + 1.1, modifiers: [], pressedMouseButtons: 0,
+            activateApplication: { XCTFail("explicit show cancels reclaim") }))
+    }
+
+    func testCommandAtSelectionPreventsReclaimAfterModifierRelease() {
+        let panel = panel()
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.raiseForPanelInteraction()
+        defer { panel.close() }
+        let now = ProcessInfo.processInfo.systemUptime + 1
+        panel.raiseForSystemSelection("key-window", now: now, modifiers: .command)
+        panel.raiseForSystemSelection("application-activation", now: now + 0.1, modifiers: [])
+        XCTAssertFalse(panel.reclaimAfterUnexpectedActivation(
+            of: -1, now: now + 0.2, modifiers: [], pressedMouseButtons: 0,
+            activateApplication: { XCTFail("Cmd-Tab must never arm a reclaim") }))
+    }
+
+    func testFloatingModeAndCleanupWindowPreventPendingReclaim() throws {
+        for floating in [true, false] {
+            let panel = panel()
+            var ordinaryCard = true
+            panel.enableTransparentMarginPassthrough(interactiveRegion: { _, _ in true },
+                                                    shouldLowerForBackgroundClick: { ordinaryCard })
+            panel.raiseForPanelInteraction()
+            let cleanup = try transparentOnscreenPanel()
+            defer { panel.close(); cleanup.close() }
+            let now = ProcessInfo.processInfo.systemUptime + 1
+            panel.raiseForSystemSelection("application-activation", now: now, modifiers: [])
+            if floating {
+                ordinaryCard = false
+                panel.refreshWindowStacking()
+            } else {
+                cleanup.makeKeyAndOrderFront(nil)
+                XCTAssertTrue(NSApp.keyWindow === cleanup)
+            }
+            XCTAssertFalse(panel.reclaimAfterUnexpectedActivation(
+                of: -1, now: now + 0.2, modifiers: [], pressedMouseButtons: 0,
+                activateApplication: { XCTFail("must not reclaim over floating modes or cleanup") }))
+        }
+    }
+
+    func testPickerLoweringAndHiddenPanelPreventReclaim() {
+        for action in 0..<3 {
+            let panel = panel()
+            panel.enableTransparentMarginPassthrough { _, _ in true }
+            panel.raiseForPanelInteraction()
+            defer { panel.close() }
+            let now = ProcessInfo.processInfo.systemUptime + 1
+            panel.raiseForSystemSelection("application-activation", now: now, modifiers: [])
+            switch action {
+            case 0: panel.beginNativeDialog()
+            case 1: panel.lowerForBackgroundInteraction(now: now + 0.1)
+            default: panel.orderOut(nil)
+            }
+            XCTAssertFalse(panel.reclaimAfterUnexpectedActivation(
+                of: -1, now: now + 0.2, modifiers: [], pressedMouseButtons: 0,
+                activateApplication: { XCTFail("must not activate for blocked panel") }))
+        }
+    }
+
+    func testActivatingStyleExperimentIsConstructionTimeAndSkipsReclaim() throws {
+        let key = "peekySelectionActivatingStyle"
+        let saved = UserDefaults.standard.object(forKey: key)
+        defer {
+            if let saved { UserDefaults.standard.set(saved, forKey: key) }
+            else { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        UserDefaults.standard.set(false, forKey: key)
+        XCTAssertTrue(KeyablePanel.initialStyleMask().contains(.nonactivatingPanel))
+        UserDefaults.standard.set(true, forKey: key)
+        let controller = AssistantPanelController()
+        let panel = controller.ensurePanel()
+        panel.contentViewController = nil
+        panel.setFrameOrigin(NSPoint(x: -20000, y: -20000))
+        defer { panel.close() }
+        XCTAssertFalse(panel.styleMask.contains(.nonactivatingPanel))
+        UserDefaults.standard.set(false, forKey: key)
+        panel.refreshWindowStacking()
+        XCTAssertFalse(panel.styleMask.contains(.nonactivatingPanel), "do not mutate WindowServer activation tags live")
+        panel.raiseForPanelInteraction()
+        let now = ProcessInfo.processInfo.systemUptime + 1
+        panel.raiseForSystemSelection("application-activation", now: now, modifiers: [])
+        XCTAssertFalse(panel.reclaimAfterUnexpectedActivation(
+            of: -1, now: now + 0.2, modifiers: [], pressedMouseButtons: 0,
+            activateApplication: { XCTFail("experiment must test activating style without reclaim") }))
+    }
+
     func testLateMissionControlClickDoesNotUndoSystemSelection() throws {
         let panel = panel()
         panel.enableTransparentMarginPassthrough { _, _ in true }

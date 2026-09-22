@@ -30,6 +30,17 @@ or sending an explicit show command from the phone brings it forward without
 pinning it above subsequent selections. Selecting Peeky itself in Mission
 Control makes the visible card key and main at normal level; it remains
 non-activating for hotkey/phone-driven display while you type in another app.
+If macOS immediately activates another app after that selection, Peeky makes
+at most one activation attempt within 600ms to honor the selection. Observed
+mouse, key, modifier, scroll, or gesture input cancels that attempt, as do
+Command being held, a pressed mouse button, explicit show/lower requests,
+pickers, and other active Peeky windows. This does not retry after the
+deadline or keep Peeky above subsequent selections. Reclaim-generated
+activation callbacks cannot arm another attempt without new observed input
+or explicit interaction. Without Accessibility
+permission, global key events cannot be observed; local keyboard events,
+global mouse events, current modifiers, and pressed mouse buttons are still
+checked. The attempt is disabled if the global mouse observer is unavailable.
 The corner dot and Video tab
 intentionally stay above other apps. Open/save pickers keep Peeky visible
 during selection, then restore the current tab's normal stacking behavior.
@@ -48,6 +59,14 @@ are public in Console under subsystem `com.local.MyClicky`, category
 `WindowSelection`; they contain window classes, IDs, geometry, and guard state,
 plus app names, bundle IDs, and PIDs, not window titles or document content.
 It is off by default.
+
+The experimental `peekySelectionActivatingStyle` Boolean default is **off**.
+Set it before relaunching to construct the panel without `.nonactivatingPanel`
+and test activating-window behavior without the one-shot reclaim. The style
+is fixed for that panel's lifetime; changing it live can leave AppKit and
+WindowServer activation state inconsistent. During this experiment the dot
+and Video also use activating style, so do not evaluate their normal behavior.
+Turn the flag off and relaunch to restore the normal nonactivating workflow.
 
 The assistant isn't limited to what's on screen — depending on the question
 and context, it swaps the screenshot for a more accurate source:
