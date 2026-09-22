@@ -261,6 +261,118 @@ final class TerminalShortcutTests: XCTestCase {
         try assertInFront(selectedWindow, of: panel)
     }
 
+    func testSystemSelectionMakesNormalCardKeyAndMainWithoutActivatingAnotherApp() {
+        let panel = panel()
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.raiseForPanelInteraction()
+        defer { panel.close() }
+        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+
+        XCTAssertTrue(panel.canBecomeMain)
+        withAppDelegate { _ in
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+            XCTAssertTrue(panel.isKeyWindow)
+            XCTAssertTrue(panel.isMainWindow)
+            XCTAssertTrue(NSApp.mainWindow === panel)
+            XCTAssertEqual(panel.level, .normal)
+            XCTAssertTrue(panel.styleMask.contains(.nonactivatingPanel))
+            XCTAssertEqual(NSWorkspace.shared.frontmostApplication?.processIdentifier, frontmostPID)
+        }
+    }
+
+    func testDirectKeySelectionMakesNormalCardMainWithKeyOnlyIfNeeded() {
+        let panel = panel()
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.raiseForPanelInteraction()
+        defer { panel.close() }
+
+        panel.makeKey()
+        XCTAssertTrue(panel.isKeyWindow)
+        XCTAssertTrue(panel.isMainWindow)
+        XCTAssertTrue(NSApp.mainWindow === panel)
+    }
+
+    func testExplicitPresentationDoesNotTakeKeyOrMainAndFloatingModesCannotBecomeMain() {
+        let panel = panel()
+        var ordinaryCard = true
+        panel.enableTransparentMarginPassthrough(interactiveRegion: { _, _ in true },
+                                                shouldLowerForBackgroundClick: { ordinaryCard })
+        defer { panel.close() }
+        let keyWindow = NSApp.keyWindow
+        let mainWindow = NSApp.mainWindow
+        panel.raiseForPanelInteraction()
+        XCTAssertTrue(panel.canBecomeMain)
+        XCTAssertFalse(panel.isMainWindow)
+        XCTAssertFalse(panel.isKeyWindow)
+        XCTAssertTrue(NSApp.keyWindow === keyWindow)
+        XCTAssertTrue(NSApp.mainWindow === mainWindow)
+
+        panel.raiseForSystemSelection("test-main-role")
+        XCTAssertTrue(panel.isMainWindow)
+        ordinaryCard = false
+        panel.refreshWindowStacking()
+        XCTAssertFalse(panel.canBecomeMain)
+        XCTAssertFalse(panel.isMainWindow)
+        XCTAssertEqual(panel.level, .floating)
+
+        ordinaryCard = true
+        panel.refreshWindowStacking()
+        XCTAssertTrue(panel.canBecomeMain)
+        XCTAssertFalse(panel.isMainWindow, "returning to Capture alone must not claim focus")
+        XCTAssertEqual(panel.level, .normal)
+        panel.orderOut(nil)
+        XCTAssertFalse(panel.canBecomeMain)
+    }
+
+    func testPassthroughChangesDoNotResignSelectedPanelKeyOrMain() {
+        let panel = panel()
+        var interactive = true
+        panel.enableTransparentMarginPassthrough { _, _ in interactive }
+        panel.raiseForPanelInteraction()
+        panel.raiseForSystemSelection("test-passthrough")
+        defer { panel.close() }
+        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        for next in [false, true, false, true] {
+            interactive = next
+            panel.refreshMousePassthrough(at: NSPoint(x: panel.frame.midX, y: panel.frame.midY))
+            XCTAssertEqual(panel.ignoresMouseEvents, !next)
+            XCTAssertTrue(panel.isKeyWindow)
+            XCTAssertTrue(panel.isMainWindow)
+            XCTAssertEqual(NSWorkspace.shared.frontmostApplication?.processIdentifier, frontmostPID)
+        }
+    }
+
+    func testActivationDiagnosticsAndDelayedProbesNeverReclaimWindowOrder() async throws {
+        let key = "peekyWindowSelectionDiagnostics"
+        let saved = UserDefaults.standard.object(forKey: key)
+        UserDefaults.standard.set(true, forKey: key)
+        defer {
+            if let saved { UserDefaults.standard.set(saved, forKey: key) }
+            else { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        let panel = panel()
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.raiseForPanelInteraction()
+        let otherWindow = self.panel()
+        defer { panel.close(); otherWindow.close() }
+        panel.raiseForSystemSelection("diagnostic-handoff-test")
+        panel.resignKey()
+        panel.resignMain()
+        otherWindow.orderFrontRegardless()
+        NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp)
+        for name in [NSWorkspace.didDeactivateApplicationNotification, NSWorkspace.didActivateApplicationNotification] {
+            NSWorkspace.shared.notificationCenter.post(name: name, object: NSWorkspace.shared,
+                                                       userInfo: [NSWorkspace.applicationUserInfoKey: NSRunningApplication.current])
+        }
+        try await Task.sleep(for: .milliseconds(2200))
+        try assertInFront(otherWindow, of: panel)
+        XCTAssertFalse(panel.isKeyWindow)
+        XCTAssertFalse(panel.isMainWindow)
+        XCTAssertEqual(panel.level, .normal)
+    }
+
     func testLateMissionControlClickDoesNotUndoSystemSelection() throws {
         let panel = panel()
         panel.enableTransparentMarginPassthrough { _, _ in true }

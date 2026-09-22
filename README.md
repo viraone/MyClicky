@@ -28,7 +28,7 @@ another window in Mission Control or switching apps can cover Peeky, even if
 that app was already active underneath it. Clicking Peeky, using its shortcut,
 or sending an explicit show command from the phone brings it forward without
 pinning it above subsequent selections. Selecting Peeky itself in Mission
-Control also brings the visible card forward at normal level; it remains
+Control makes the visible card key and main at normal level; it remains
 non-activating for hotkey/phone-driven display while you type in another app.
 The corner dot and Video tab
 intentionally stay above other apps. Open/save pickers keep Peeky visible
@@ -39,10 +39,15 @@ part of Peeky remains visible before dragging.
 
 For troubleshooting selection, the optional `peekyWindowSelectionDiagnostics`
 Boolean default logs app activation, reopen, key-window callbacks, background
-mouse events, and raise/lower decisions with millisecond timestamps. Messages
+mouse events, and raise/lower decisions with millisecond timestamps. It also
+logs workspace activation/deactivation, loss of app/key-window focus,
+mouse-passthrough changes, and read-only window-order probes at 100, 300, 600,
+1000, and 2000ms after system selection. The probes never raise or activate
+anything. Messages
 are public in Console under subsystem `com.local.MyClicky`, category
 `WindowSelection`; they contain window classes, IDs, geometry, and guard state,
-not window titles or document content. It is off by default.
+plus app names, bundle IDs, and PIDs, not window titles or document content.
+It is off by default.
 
 The assistant isn't limited to what's on screen — depending on the question
 and context, it swaps the screenshot for a more accurate source:
