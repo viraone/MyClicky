@@ -93,7 +93,7 @@ final class AssistantHotkeyMonitor {
         return true
     }
 
-    nonisolated private func handleTap(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+    nonisolated func handleTap(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         switch type {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
@@ -163,7 +163,7 @@ final class AssistantHotkeyMonitor {
         }
     }
 
-    private func handleFallback(_ event: NSEvent) {
+    func handleFallback(_ event: NSEvent) {
         let modifiers = event.modifierFlags
             .intersection(.deviceIndependentFlagsMask)
             .subtracting(.capsLock)

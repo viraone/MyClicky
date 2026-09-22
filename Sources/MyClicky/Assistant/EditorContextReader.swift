@@ -26,7 +26,7 @@ enum EditorContextReader {
     /// Returns the focused editor's text if the frontmost app is a known IDE.
     @MainActor
     static func current() -> EditorContext? {
-        guard let app = NSWorkspace.shared.frontmostApplication,
+        guard let app = FrontmostTracker.shared.targetApplication,
               let bundleID = app.bundleIdentifier,
               editorBundlePrefixes.contains(where: { bundleID.hasPrefix($0) })
         else { return nil }

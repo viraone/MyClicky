@@ -119,7 +119,7 @@ enum ChatSiteActions {
     /// any. The person is looking at it — that's what makes their words a
     /// prompt rather than a command.
     static func frontSite() -> Site? {
-        guard let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+        guard let front = FrontmostTracker.shared.targetApplication?.bundleIdentifier,
               BrowserTabReader.supportedBundleIDs.contains(front),
               let url = BrowserTabReader.activeTabURL() else { return nil }
         return site(for: url)

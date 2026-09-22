@@ -12,14 +12,19 @@ final class TerminalShortcutTests: XCTestCase {
         }
     }
 
-    private func panel() -> KeyablePanel {
+    // Key-role tests use legacy style so the test runner need not activate
+    // itself over the user's desktop. Ordering/shortcut tests use the default.
+    private func panel(nonactivating: Bool = false) -> KeyablePanel {
         _ = NSApplication.shared
-        return KeyablePanel(contentRect: NSRect(x: -20000, y: -20000, width: 600, height: 300),
-                            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        let panel = KeyablePanel(contentRect: NSRect(x: -20000, y: -20000, width: 600, height: 300),
+                                 styleMask: nonactivating ? [.borderless, .nonactivatingPanel] : [.borderless],
+                                 backing: .buffered, defer: false)
+        panel.hidesOnDeactivate = false
+        return panel
     }
 
     private func transparentOnscreenPanel() throws -> KeyablePanel {
-        let panel = panel()
+        let panel = panel(nonactivating: true)
         let screen = try XCTUnwrap(NSScreen.screens.first)
         panel.backgroundColor = .clear
         panel.isOpaque = false
@@ -235,7 +240,7 @@ final class TerminalShortcutTests: XCTestCase {
             try assertInFront(panel, of: selectedWindow)
             XCTAssertEqual(panel.level, .normal)
             XCTAssertTrue(panel.collectionBehavior.contains(.managed))
-            XCTAssertTrue(panel.styleMask.contains(.nonactivatingPanel))
+            XCTAssertFalse(panel.styleMask.contains(.nonactivatingPanel))
 
             selectedWindow.orderFrontRegardless()
             NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp)
@@ -243,8 +248,8 @@ final class TerminalShortcutTests: XCTestCase {
         }
     }
 
-    func testSelectingPeekyAsKeyWindowRaisesWithoutApplicationActivation() throws {
-        let panel = panel()
+    func testLegacyKeyWindowSelectionRaisesWithoutApplicationActivation() throws {
+        let panel = panel(nonactivating: true)
         panel.enableTransparentMarginPassthrough { _, _ in true }
         panel.raiseForPanelInteraction()
         let selectedWindow = self.panel()
@@ -261,8 +266,8 @@ final class TerminalShortcutTests: XCTestCase {
         try assertInFront(selectedWindow, of: panel)
     }
 
-    func testSystemSelectionMakesNormalCardKeyAndMainWithoutActivatingAnotherApp() {
-        let panel = panel()
+    func testLegacySystemSelectionMakesNormalCardKeyAndMainWithoutActivatingAnotherApp() {
+        let panel = panel(nonactivating: true)
         panel.becomesKeyOnlyIfNeeded = true
         panel.enableTransparentMarginPassthrough { _, _ in true }
         panel.raiseForPanelInteraction()
@@ -281,8 +286,8 @@ final class TerminalShortcutTests: XCTestCase {
         }
     }
 
-    func testDirectKeySelectionMakesNormalCardMainWithKeyOnlyIfNeeded() {
-        let panel = panel()
+    func testLegacyDirectKeySelectionMakesNormalCardMainWithKeyOnlyIfNeeded() {
+        let panel = panel(nonactivating: true)
         panel.becomesKeyOnlyIfNeeded = true
         panel.enableTransparentMarginPassthrough { _, _ in true }
         panel.raiseForPanelInteraction()
@@ -295,7 +300,7 @@ final class TerminalShortcutTests: XCTestCase {
     }
 
     func testExplicitPresentationDoesNotTakeKeyOrMainAndFloatingModesCannotBecomeMain() {
-        let panel = panel()
+        let panel = panel(nonactivating: true)
         var ordinaryCard = true
         panel.enableTransparentMarginPassthrough(interactiveRegion: { _, _ in true },
                                                 shouldLowerForBackgroundClick: { ordinaryCard })
@@ -327,7 +332,7 @@ final class TerminalShortcutTests: XCTestCase {
     }
 
     func testPassthroughChangesDoNotResignSelectedPanelKeyOrMain() {
-        let panel = panel()
+        let panel = panel(nonactivating: true)
         var interactive = true
         panel.enableTransparentMarginPassthrough { _, _ in interactive }
         panel.raiseForPanelInteraction()
@@ -405,13 +410,14 @@ final class TerminalShortcutTests: XCTestCase {
     }
 
     func testUnexpectedActivationReclaimsOnceAndDoesNotRearmFromOwnActivation() {
-        let panel = panel()
+        let panel = panel(nonactivating: true)
         panel.enableTransparentMarginPassthrough { _, _ in true }
         panel.raiseForPanelInteraction()
         defer { panel.close() }
         let now = ProcessInfo.processInfo.systemUptime + 1
         panel.observeSelectionInput(.gesture, now: now - 0.1)
         panel.raiseForSystemSelection("application-activation", now: now, modifiers: [])
+        panel.observeSelectionInput(.mouseMoved, now: now + 0.1)
         var activations = 0
         let activate = {
             activations += 1
@@ -445,7 +451,7 @@ final class TerminalShortcutTests: XCTestCase {
             .keyDown, .keyUp, .flagsChanged, .scrollWheel, .gesture, .swipe, .magnify, .rotate,
         ]
         for event in events {
-            let panel = panel()
+            let panel = panel(nonactivating: true)
             panel.enableTransparentMarginPassthrough { _, _ in true }
             panel.raiseForPanelInteraction()
             defer { panel.close() }
@@ -471,7 +477,7 @@ final class TerminalShortcutTests: XCTestCase {
             (1.0, [], 0, -1),
             (0.2, [], 0, ProcessInfo.processInfo.processIdentifier),
         ] {
-            let panel = panel()
+            let panel = panel(nonactivating: true)
             panel.enableTransparentMarginPassthrough { _, _ in true }
             panel.raiseForPanelInteraction()
             defer { panel.close() }
@@ -484,7 +490,7 @@ final class TerminalShortcutTests: XCTestCase {
     }
 
     func testExplicitShowNeverArmsReclaimAndCancelsPendingSelection() {
-        let panel = panel()
+        let panel = panel(nonactivating: true)
         panel.enableTransparentMarginPassthrough { _, _ in true }
         panel.raiseForPanelInteraction()
         defer { panel.close() }
@@ -500,7 +506,7 @@ final class TerminalShortcutTests: XCTestCase {
     }
 
     func testCommandAtSelectionPreventsReclaimAfterModifierRelease() {
-        let panel = panel()
+        let panel = panel(nonactivating: true)
         panel.enableTransparentMarginPassthrough { _, _ in true }
         panel.raiseForPanelInteraction()
         defer { panel.close() }
@@ -514,7 +520,7 @@ final class TerminalShortcutTests: XCTestCase {
 
     func testFloatingModeAndCleanupWindowPreventPendingReclaim() throws {
         for floating in [true, false] {
-            let panel = panel()
+            let panel = panel(nonactivating: true)
             var ordinaryCard = true
             panel.enableTransparentMarginPassthrough(interactiveRegion: { _, _ in true },
                                                     shouldLowerForBackgroundClick: { ordinaryCard })
@@ -538,7 +544,7 @@ final class TerminalShortcutTests: XCTestCase {
 
     func testPickerLoweringAndHiddenPanelPreventReclaim() {
         for action in 0..<3 {
-            let panel = panel()
+            let panel = panel(nonactivating: true)
             panel.enableTransparentMarginPassthrough { _, _ in true }
             panel.raiseForPanelInteraction()
             defer { panel.close() }
@@ -555,23 +561,23 @@ final class TerminalShortcutTests: XCTestCase {
         }
     }
 
-    func testActivatingStyleExperimentIsConstructionTimeAndSkipsReclaim() throws {
-        let key = "peekySelectionActivatingStyle"
+    func testDefaultActivatingStyleSkipsReclaimAndLegacyOptOutRequiresReconstruction() {
+        let key = "peekyLegacyNonactivatingPanel"
         let saved = UserDefaults.standard.object(forKey: key)
         defer {
             if let saved { UserDefaults.standard.set(saved, forKey: key) }
             else { UserDefaults.standard.removeObject(forKey: key) }
         }
-        UserDefaults.standard.set(false, forKey: key)
-        XCTAssertTrue(KeyablePanel.initialStyleMask().contains(.nonactivatingPanel))
-        UserDefaults.standard.set(true, forKey: key)
+        UserDefaults.standard.removeObject(forKey: key)
+        XCTAssertFalse(KeyablePanel.initialStyleMask().contains(.nonactivatingPanel))
         let controller = AssistantPanelController()
         let panel = controller.ensurePanel()
         panel.contentViewController = nil
         panel.setFrameOrigin(NSPoint(x: -20000, y: -20000))
         defer { panel.close() }
         XCTAssertFalse(panel.styleMask.contains(.nonactivatingPanel))
-        UserDefaults.standard.set(false, forKey: key)
+        UserDefaults.standard.set(true, forKey: key)
+        XCTAssertTrue(KeyablePanel.initialStyleMask().contains(.nonactivatingPanel))
         panel.refreshWindowStacking()
         XCTAssertFalse(panel.styleMask.contains(.nonactivatingPanel), "do not mutate WindowServer activation tags live")
         panel.raiseForPanelInteraction()
@@ -579,7 +585,25 @@ final class TerminalShortcutTests: XCTestCase {
         panel.raiseForSystemSelection("application-activation", now: now, modifiers: [])
         XCTAssertFalse(panel.reclaimAfterUnexpectedActivation(
             of: -1, now: now + 0.2, modifiers: [], pressedMouseButtons: 0,
-            activateApplication: { XCTFail("experiment must test activating style without reclaim") }))
+            activateApplication: { XCTFail("default activating panels must never reclaim") }))
+    }
+
+    func testQuestionTypingAndEscapeKeepWorkingWithActivatingPanel() {
+        let panel = panel()
+        let editor = NSTextView(frame: panel.contentView!.bounds)
+        panel.contentView!.addSubview(editor)
+        panel.orderFrontRegardless()
+        panel.makeKey()
+        XCTAssertTrue(panel.makeFirstResponder(editor))
+        defer { panel.close() }
+        editor.insertText("Explain this code", replacementRange: NSRange(location: 0, length: 0))
+        XCTAssertEqual(editor.string, "Explain this code")
+        panel.onCancel = { true }
+        panel.cancelOperation(nil)
+        XCTAssertTrue(panel.isVisible, "a busy operation can consume Escape")
+        panel.onCancel = { false }
+        panel.cancelOperation(nil)
+        XCTAssertFalse(panel.isVisible, "otherwise Escape dismisses the card")
     }
 
     func testLateMissionControlClickDoesNotUndoSystemSelection() throws {
@@ -603,7 +627,7 @@ final class TerminalShortcutTests: XCTestCase {
         let panel = panel()
         panel.enableTransparentMarginPassthrough { _, _ in true }
         panel.raiseForPanelInteraction()
-        let offscreenWindow = self.panel()
+        let offscreenWindow = self.panel(nonactivating: true)
         offscreenWindow.makeKeyAndOrderFront(nil)
         defer { panel.close(); offscreenWindow.close() }
 
@@ -919,7 +943,7 @@ final class TerminalShortcutTests: XCTestCase {
     }
 
     func testFocusOnMountDoesNotStealLaterFieldFocus() async {
-        let panel = panel()
+        let panel = panel(nonactivating: true)
         panel.orderFrontRegardless()
         panel.makeKey()
         defer { panel.close() }

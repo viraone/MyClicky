@@ -1580,7 +1580,7 @@ struct PanelSelectionReclaim {
 
 final class KeyablePanel: NSPanel {
     static func initialStyleMask(defaults: UserDefaults = .standard) -> NSWindow.StyleMask {
-        defaults.bool(forKey: "peekySelectionActivatingStyle") ? [.borderless] : [.borderless, .nonactivatingPanel]
+        defaults.bool(forKey: "peekyLegacyNonactivatingPanel") ? [.borderless, .nonactivatingPanel] : [.borderless]
     }
 
     override var canBecomeKey: Bool { true }
@@ -1852,14 +1852,16 @@ final class KeyablePanel: NSPanel {
         // Only event types are recorded; never key characters or typed text.
         reclaimNeedsNewInteraction = false
         // Input cancels an existing attempt, not the selection it initiates.
-        interruptSelectionReclaim("input-\(type.rawValue)", now: now, suppressArming: false)
+        let reason = type == .scrollWheel ? "input-scroll" : "input-\(type.rawValue)"
+        interruptSelectionReclaim(reason, now: now, suppressArming: false)
     }
 
     private func interruptSelectionReclaim(_ reason: String,
                                           now: TimeInterval = ProcessInfo.processInfo.systemUptime,
                                           suppressArming: Bool = true) {
+        let changed = selectionReclaim.cancellationReason != reason
         selectionReclaim.interrupt(reason, at: now, suppressArming: suppressArming)
-        logWindowSelection("reclaim cancelled reason=\(reason)", now: now)
+        if changed { logWindowSelection("reclaim cancelled reason=\(reason)", now: now) }
     }
 
     @discardableResult
@@ -2012,7 +2014,7 @@ final class KeyablePanel: NSPanel {
             return true
         }
         if super.performKeyEquivalent(with: event) { return true }
-        // Peeky is a non-activating panel with no menu bar of its own, so
+        // Peeky is an accessory app with no menu bar of its own, so
         // the Edit-menu shortcuts never arrive on their own. Send the
         // standard actions to whatever text field has focus.
         let action: Selector? = switch (key, flags) {
@@ -2063,7 +2065,7 @@ struct AssistantPanelView: View {
     @ObservedObject var state: AssistantState
     @State private var draft = QuestionDraft()
     /// What the hovered header button does, shown in the header itself —
-    /// system tooltips never appear over a non-activating panel.
+    /// also works when legacy nonactivating mode prevents system tooltips.
     @State private var headerHint: String?
     /// The gear menu's tab on/off switches, open over the header.
     @State private var showingTabSettings = false
@@ -4804,7 +4806,7 @@ struct AssistantPanelView: View {
     /// one entry, "Files and folders", opens the macOS picker. Whatever is
     /// chosen lands in the capture preview exactly as a region grab would.
     /// A native NSMenu rather than SwiftUI's `Menu`, which renders empty in
-    /// this non-activating panel.
+    /// legacy nonactivating mode.
     private var addMenu: some View {
         Button {
             showAddMenu()

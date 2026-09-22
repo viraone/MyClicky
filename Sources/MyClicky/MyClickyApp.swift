@@ -17,6 +17,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var controller: CaptureController?
     private var assistant: AssistantController?
 
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        _ = FrontmostTracker.shared
+    }
+
     func applicationDidBecomeActive(_ notification: Notification) {
         raiseAssistantPanels(in: NSApp, source: "application-activation")
     }

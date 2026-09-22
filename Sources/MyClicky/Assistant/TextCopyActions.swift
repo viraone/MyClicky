@@ -32,7 +32,7 @@ enum TextCopyActions {
     /// Only when the frontmost app yields nothing readable does it fall back
     /// to a browser that happens to be open.
     static func readVisibleText() -> Source? {
-        let frontmost = NSWorkspace.shared.frontmostApplication
+        let frontmost = FrontmostTracker.shared.targetApplication
         let frontmostIsBrowser = frontmost?.bundleIdentifier
             .map(BrowserTabReader.supportedBundleIDs.contains) ?? false
 

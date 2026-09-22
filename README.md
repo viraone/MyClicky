@@ -28,20 +28,21 @@ another window in Mission Control or switching apps can cover Peeky, even if
 that app was already active underneath it. Clicking Peeky, using its shortcut,
 or sending an explicit show command from the phone brings it forward without
 pinning it above subsequent selections. Selecting Peeky itself in Mission
-Control makes the visible card key and main at normal level; it remains
-non-activating for hotkey/phone-driven display while you type in another app.
-If macOS immediately activates another app after that selection, Peeky makes
-at most one activation attempt within 600ms to honor the selection. Observed
-mouse, key, modifier, scroll, or gesture input cancels that attempt, as do
-Command being held, a pressed mouse button, explicit show/lower requests,
-pickers, and other active Peeky windows. This does not retry after the
-deadline or keep Peeky above subsequent selections. Reclaim-generated
-activation callbacks cannot arm another attempt without new observed input
-or explicit interaction. Without Accessibility
-permission, global key events cannot be observed; local keyboard events,
-global mouse events, current modifiers, and pressed mouse buttons are still
-checked. The attempt is disabled if the global mouse observer is unavailable.
-The corner dot and Video tab
+Control makes the visible card key and main at normal level. The panel now activates Peeky when clicked,
+so Mission Control can select it without returning to the previous app and
+flashing. Hotkey/phone-driven display alone still orders it forward without
+taking keyboard focus. Peeky remains an accessory app: there is no new Dock
+icon or Cmd-Tab entry, and the previous app's menu bar can remain visible
+while Peeky owns keyboard focus. Its question field, Code and Terminal
+shortcuts, and Escape handling work within Peeky.
+
+Questions and commands started from Peeky use the current external app, or
+the last external app when Peeky itself is active. This preserves editor and
+browser context, Talk/mic targets, and scripted actions after a panel click.
+No external app is invented if none has been observed or it has quit.
+Actual focus-restoration checks and usage/break timers still use the real
+foreground app, so time spent working in Peeky is counted as Peeky.
+The corner dot and Video tab activate on click too, but
 intentionally stay above other apps. Open/save pickers keep Peeky visible
 during selection, then restore the current tab's normal stacking behavior.
 Finder folder drags still work on a visible Peeky drop target and do not
@@ -54,19 +55,27 @@ mouse events, and raise/lower decisions with millisecond timestamps. It also
 logs workspace activation/deactivation, loss of app/key-window focus,
 mouse-passthrough changes, and read-only window-order probes at 100, 300, 600,
 1000, and 2000ms after system selection. The probes never raise or activate
-anything. Messages
+anything. Repeated identical input-cancellation messages are coalesced;
+plain pointer movement never cancels reclaim. Messages
 are public in Console under subsystem `com.local.MyClicky`, category
 `WindowSelection`; they contain window classes, IDs, geometry, and guard state,
 plus app names, bundle IDs, and PIDs, not window titles or document content.
 It is off by default.
 
-The experimental `peekySelectionActivatingStyle` Boolean default is **off**.
-Set it before relaunching to construct the panel without `.nonactivatingPanel`
-and test activating-window behavior without the one-shot reclaim. The style
-is fixed for that panel's lifetime; changing it live can leave AppKit and
-WindowServer activation state inconsistent. During this experiment the dot
-and Video also use activating style, so do not evaluate their normal behavior.
-Turn the flag off and relaunch to restore the normal nonactivating workflow.
+For rollback only, set `peekyLegacyNonactivatingPanel` to `true` before
+relaunching to restore `.nonactivatingPanel`. It defaults to `false`; the old
+`peekySelectionActivatingStyle` experiment key is no longer used. Style is
+fixed at construction because live mutation can leave AppKit and WindowServer
+activation state inconsistent.
+
+The legacy mode retains a defensive one-shot reclaim within 600ms if macOS
+immediately reactivates another app after selecting Peeky. Subsequent input,
+Command, pressed mouse buttons, explicit show/lower, pickers, and competing
+Peeky windows cancel it. No retry loop is used; it can visibly flash.
+Without Accessibility, global key observation is unavailable, but local
+keys, global mouse events and current modifier/button state remain checked.
+Missing global mouse observation disables reclaim. **Default activating
+panels never use this workaround.**
 
 The assistant isn't limited to what's on screen — depending on the question
 and context, it swaps the screenshot for a more accurate source:

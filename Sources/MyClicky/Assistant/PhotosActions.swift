@@ -11,7 +11,7 @@ enum PhotosActions {
     private static let bundleID = "com.apple.Photos"
 
     static func isFrontmost() -> Bool {
-        NSWorkspace.shared.frontmostApplication?.bundleIdentifier == bundleID
+        FrontmostTracker.shared.targetApplication?.bundleIdentifier == bundleID
     }
 
     /// How many media items are selected right now. Nil when Photos reports
