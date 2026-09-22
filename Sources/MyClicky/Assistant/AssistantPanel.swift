@@ -762,7 +762,9 @@ final class AssistantState: ObservableObject {
     /// is meaning rather than decoration.
     @Published var copiedPreview: String?
     @Published var errorText: String?
-    @Published var collapsed = false
+    @Published var collapsed = false {
+        didSet { onWindowStackingChanged?() }
+    }
     /// Shrunk in place to a thin bar — mic, phase, nothing else. Distinct
     /// from `collapsed`, which tucks a dot into the screen corner.
     @Published var strip = false
@@ -771,6 +773,7 @@ final class AssistantState: ObservableObject {
     /// stays put, so hidden really means gone from view.
     @Published var tab: AssistantTab = .ask {
         didSet {
+            defer { onWindowStackingChanged?() }
             if hiddenTabs.contains(tab) {
                 tab = hiddenTabs.contains(oldValue) ? (visibleTabs.first ?? oldValue) : oldValue
                 return
@@ -785,6 +788,7 @@ final class AssistantState: ObservableObject {
     var shouldLowerForBackgroundClick: Bool {
         !collapsed && tab != .video
     }
+    var onWindowStackingChanged: (() -> Void)?
     /// Tabs the user has switched off in the gear menu. They drop out of the
     /// tab bar; everything else about them stays put so turning one back on
     /// is instant. Persisted so the choice sticks between launches.
@@ -1026,12 +1030,12 @@ final class AssistantState: ObservableObject {
     var onResize: ((PanelResizeCorner, CGSize?) -> Void)?
 }
 
-/// Floating, non-activating panel styled after a Rode Wireless Pro transmitter:
+/// Non-activating panel styled after a Rode Wireless Pro transmitter:
 /// a dark, rounded square with a status readout.
 @MainActor
 final class AssistantPanelController {
     let state = AssistantState()
-    private var panel: NSPanel?
+    private var panel: KeyablePanel?
     /// Called just before the panel closes so in-flight work can be stopped.
     var onHide: (() -> Void)?
 
@@ -1058,7 +1062,7 @@ final class AssistantPanelController {
                 y: visible.minY + 120
             ))
         }
-        panel.orderFrontRegardless()
+        panel.raiseForPanelInteraction()
     }
 
     /// The display whose visible area overlaps `frame` the most, or nil when
@@ -1112,7 +1116,7 @@ final class AssistantPanelController {
         // Snap, don't glide — the preview should be in the corner the instant
         // the mouse is released.
         panel.setFrame(NSRect(origin: origin, size: size), display: true, animate: false)
-        panel.orderFrontRegardless()
+        panel.raiseForPanelInteraction()
     }
 
     /// Opens the panel already shrunk to the one-line strip, parked at the
@@ -1136,7 +1140,7 @@ final class AssistantPanelController {
             y: visible.minY + 16
         )
         panel.setFrame(NSRect(origin: origin, size: Self.stripSize), display: true, animate: panel.isVisible)
-        panel.orderFrontRegardless()
+        panel.raiseForPanelInteraction()
     }
 
     // Card is 960x220 by default (960x520 when stretched tall via the header
@@ -1210,6 +1214,7 @@ final class AssistantPanelController {
             let origin = NSPoint(x: panel.frame.maxX - Self.stripSize.width, y: panel.frame.maxY - Self.stripSize.height)
             panel.setFrame(NSRect(origin: origin, size: Self.stripSize), display: true, animate: true)
         }
+        panel.raiseForPanelInteraction()
     }
 
     func minimize() {
@@ -1238,6 +1243,7 @@ final class AssistantPanelController {
         )
         origin = Self.origin(origin, of: size, keptWithin: visible)
         panel.setFrame(NSRect(origin: origin, size: size), display: true, animate: true)
+        panel.raiseForPanelInteraction()
     }
 
     /// Brings the panel to its full card: out of the corner dot, out of the
@@ -1381,7 +1387,7 @@ final class AssistantPanelController {
         return panel.screen ?? NSScreen.screens.first { $0.frame.intersects(panel.frame) }
     }
 
-    private func ensurePanel() -> NSPanel {
+    func ensurePanel() -> KeyablePanel {
         if let panel { return panel }
         let content = AssistantPanelView(state: state)
         let hosting = NSHostingController(rootView: content)
@@ -1392,8 +1398,6 @@ final class AssistantPanelController {
             defer: false
         )
         panel.contentViewController = hosting
-        panel.isFloatingPanel = true
-        panel.level = .floating
         panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.hasShadow = false
@@ -1416,6 +1420,9 @@ final class AssistantPanelController {
                 state?.shouldLowerForBackgroundClick == true
             }
         )
+        state.onWindowStackingChanged = { [weak panel] in
+            panel?.refreshWindowStacking()
+        }
         state.onCaptureEditingChanged = { [weak panel] editing in
             panel?.isMovableByWindowBackground = !editing
         }
@@ -1535,7 +1542,7 @@ final class AssistantPanelController {
         }
         origin = Self.origin(origin, of: size, keptWithin: visible)
         panel.setFrame(NSRect(origin: origin, size: size), display: true, animate: panel.isVisible)
-        panel.orderFrontRegardless()
+        panel.raiseForPanelInteraction()
         noteScreenChange()
         return target
     }
@@ -1560,7 +1567,7 @@ final class KeyablePanel: NSPanel {
     /// judged on the release: a press-and-release in place is a click on a
     /// background window (lower the panel so that app comes forward); a
     /// press that travels is a drag — usually a Finder folder heading for
-    /// the Code tab — and the panel must stay in front to catch the drop.
+    /// the Code tab — and must not explicitly send the drop target back.
     private var backgroundPressOrigin: NSPoint?
     /// Pointer travel, in points, past which a background press counts as a drag.
     static let backgroundDragSlop: CGFloat = 4
@@ -1585,6 +1592,7 @@ final class KeyablePanel: NSPanel {
     ) {
         mouseInteractionRegion = interactiveRegion
         self.shouldLowerForBackgroundClick = shouldLowerForBackgroundClick
+        refreshWindowStacking()
         acceptsMouseMovedEvents = true
         let localEvents: NSEvent.EventTypeMask = [
             .mouseMoved, .leftMouseDown, .rightMouseDown, .otherMouseDown,
@@ -1657,26 +1665,45 @@ final class KeyablePanel: NSPanel {
         }
     }
 
+    /// Normal cards participate in native window ordering, even when Mission
+    /// Control selects the app already active beneath this nonactivating panel.
+    /// Floating would override that selection without any focus change.
+    func refreshWindowStacking() {
+        let floating = nativeDialogDepth > 0 || shouldLowerForBackgroundClick?() == false
+        if isFloatingPanel != floating { isFloatingPanel = floating }
+        let targetLevel: NSWindow.Level = floating ? .floating : .normal
+        if level != targetLevel { level = targetLevel }
+        var behavior = collectionBehavior
+        behavior.subtract([.managed, .transient])
+        behavior.insert(floating ? .transient : .managed)
+        if collectionBehavior != behavior { collectionBehavior = behavior }
+    }
+
     func raiseForPanelInteraction() {
-        level = .floating
+        // A picker must remain above Peeky, including service-hosted pickers
+        // whose mouse events do not belong to this process.
+        guard nativeDialogDepth == 0 else { return }
+        refreshWindowStacking()
         orderFrontRegardless()
     }
 
     func lowerForBackgroundInteraction() {
         guard nativeDialogDepth == 0, isVisible, shouldLowerForBackgroundClick?() == true else { return }
-        level = .normal
+        refreshWindowStacking()
         orderBack(nil)
     }
 
     func beginNativeDialog() {
         nativeDialogDepth += 1
         backgroundPressOrigin = nil
+        refreshWindowStacking()
     }
 
     func endNativeDialog() {
         nativeDialogDepth = max(0, nativeDialogDepth - 1)
         backgroundPressOrigin = nil
-        if nativeDialogDepth == 0 { raiseForPanelInteraction() }
+        refreshWindowStacking()
+        if nativeDialogDepth == 0, isVisible { raiseForPanelInteraction() }
     }
 
     deinit {

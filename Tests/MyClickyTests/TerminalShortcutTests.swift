@@ -14,8 +14,16 @@ final class TerminalShortcutTests: XCTestCase {
 
     private func panel() -> KeyablePanel {
         _ = NSApplication.shared
-        return KeyablePanel(contentRect: NSRect(x: 0, y: 0, width: 600, height: 300),
+        return KeyablePanel(contentRect: NSRect(x: -20000, y: -20000, width: 600, height: 300),
                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+    }
+
+    private func assertInFront(_ front: NSWindow, of back: NSWindow,
+                               file: StaticString = #filePath, line: UInt = #line) throws {
+        let windows = try XCTUnwrap(NSWindow.windowNumbers(), file: file, line: line).map(\.intValue)
+        let frontIndex = try XCTUnwrap(windows.firstIndex(of: front.windowNumber), file: file, line: line)
+        let backIndex = try XCTUnwrap(windows.firstIndex(of: back.windowNumber), file: file, line: line)
+        XCTAssertLessThan(frontIndex, backIndex, file: file, line: line)
     }
 
     private func command(_ key: String, modifiers: NSEvent.ModifierFlags = .command) -> NSEvent {
@@ -143,81 +151,216 @@ final class TerminalShortcutTests: XCTestCase {
         XCTAssertTrue(panel.ignoresMouseEvents, "Rounded transparent corners should not intercept clicks")
     }
 
-    func testPanelLowersForBackgroundAppAndRaisesWhenClickedAgain() {
+    func testPanelLowersForBackgroundAppAndRaisesWhenClickedAgain() throws {
         let panel = panel()
         panel.enableTransparentMarginPassthrough { _, _ in true }
-        panel.orderFrontRegardless()
-        defer { panel.close() }
+        let backgroundWindow = self.panel()
+        backgroundWindow.orderFrontRegardless()
+        panel.raiseForPanelInteraction()
+        defer { panel.close(); backgroundWindow.close() }
 
         panel.lowerForBackgroundInteraction()
         XCTAssertEqual(panel.level, .normal)
+        try assertInFront(backgroundWindow, of: panel)
 
         panel.raiseForPanelInteraction()
-        XCTAssertEqual(panel.level, .floating)
+        XCTAssertEqual(panel.level, .normal)
+        try assertInFront(panel, of: backgroundWindow)
     }
 
-    func testDraggingAFolderFromFinderKeepsPanelInFront() {
+    func testMissionControlSelectionCanCoverPanelWithoutActivationOrMouseEvents() throws {
         let panel = panel()
         panel.enableTransparentMarginPassthrough { _, _ in true }
-        panel.orderFrontRegardless()
-        defer { panel.close() }
+        let selectedWindow = self.panel()
+        selectedWindow.level = .normal
+        selectedWindow.orderFrontRegardless()
+        defer { panel.close(); selectedWindow.close() }
+        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let keyWindow = NSApp.keyWindow
+
         panel.raiseForPanelInteraction()
+        try assertInFront(panel, of: selectedWindow)
+        XCTAssertEqual(panel.level, .normal)
+        XCTAssertFalse(panel.isFloatingPanel)
+        XCTAssertTrue(panel.collectionBehavior.contains(.managed))
+
+        // Model Mission Control's resulting order, including reselecting the
+        // app already beneath Peeky: no activation notification or mouse click.
+        selectedWindow.orderFrontRegardless()
+        panel.refreshMousePassthrough(at: NSPoint(x: panel.frame.midX, y: panel.frame.midY))
+        try assertInFront(selectedWindow, of: panel)
+
+        panel.handleLocalMouseDown(in: panel)
+        try assertInFront(panel, of: selectedWindow)
+        selectedWindow.orderFrontRegardless()
+        try assertInFront(selectedWindow, of: panel)
+        XCTAssertTrue(NSApp.keyWindow === keyWindow)
+        XCTAssertEqual(NSWorkspace.shared.frontmostApplication?.processIdentifier, frontmostPID)
+    }
+
+    func testDraggingAFolderDoesNotExplicitlyLowerVisibleDropTarget() throws {
+        let panel = panel()
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        let backgroundWindow = self.panel()
+        backgroundWindow.orderFrontRegardless()
+        panel.raiseForPanelInteraction()
+        defer { panel.close(); backgroundWindow.close() }
 
         // Grab a folder in Finder and drag it over: press, travel, release.
         panel.handleBackgroundMouse(.leftMouseDown, at: NSPoint(x: 100, y: 100))
-        XCTAssertEqual(panel.level, .floating, "the press alone must not hide the drop target")
+        try assertInFront(panel, of: backgroundWindow)
         panel.handleBackgroundMouse(.leftMouseUp, at: NSPoint(x: 400, y: 300))
-        XCTAssertEqual(panel.level, .floating, "a drag is not a click on a background window")
+        try assertInFront(panel, of: backgroundWindow)
 
         // A plain click in another app still sends the panel back.
         panel.handleBackgroundMouse(.leftMouseDown, at: NSPoint(x: 100, y: 100))
         panel.handleBackgroundMouse(.leftMouseUp, at: NSPoint(x: 101, y: 102))
-        XCTAssertEqual(panel.level, .normal)
+        try assertInFront(backgroundWindow, of: panel)
 
         // A stray release with no press recorded is ignored.
         panel.raiseForPanelInteraction()
         panel.handleBackgroundMouse(.leftMouseUp, at: NSPoint(x: 100, y: 100))
-        XCTAssertEqual(panel.level, .floating)
+        try assertInFront(panel, of: backgroundWindow)
+        XCTAssertEqual(panel.level, .normal)
     }
 
-    func testClickingTheOpenDialogDoesNotRaisePanelOverIt() {
+    func testClickingTheOpenDialogDoesNotRaisePanelOverIt() throws {
         let panel = panel()
         panel.enableTransparentMarginPassthrough { _, _ in true }
         panel.orderFrontRegardless()
         defer { panel.close() }
         panel.lowerForBackgroundInteraction()
-        XCTAssertEqual(panel.level, .normal)
 
-        let dialog = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 300, height: 200),
-                             styleMask: [.titled], backing: .buffered, defer: false)
+        let dialog = self.panel()
+        dialog.orderFrontRegardless()
         defer { dialog.close() }
         panel.handleLocalMouseDown(in: dialog)
-        XCTAssertEqual(panel.level, .normal, "a click in another window of the app leaves the panel where it is")
+        try assertInFront(dialog, of: panel)
         panel.handleLocalMouseDown(in: nil)
-        XCTAssertEqual(panel.level, .normal)
+        try assertInFront(dialog, of: panel)
 
         panel.handleLocalMouseDown(in: panel)
-        XCTAssertEqual(panel.level, .floating)
+        try assertInFront(panel, of: dialog)
+        XCTAssertEqual(panel.level, .normal)
     }
 
-    func testNativeDialogClicksDoNotLowerPanelBehindBackgroundApp() {
+    func testNativeDialogClicksDoNotLowerPanelBehindBackgroundApp() throws {
         let panel = panel()
         panel.enableTransparentMarginPassthrough { _, _ in true }
-        panel.level = .floating
-        panel.orderFrontRegardless()
-        defer { panel.close() }
+        let backgroundWindow = self.panel()
+        backgroundWindow.orderFrontRegardless()
+        panel.raiseForPanelInteraction()
+        defer { panel.close(); backgroundWindow.close() }
 
         panel.beginNativeDialog()
+        let dialog = self.panel()
+        dialog.level = .floating
+        dialog.orderFrontRegardless()
+        defer { dialog.close() }
         panel.handleBackgroundMouse(.leftMouseDown, at: NSPoint(x: 100, y: 100))
         panel.handleBackgroundMouse(.leftMouseUp, at: NSPoint(x: 101, y: 101))
         panel.lowerForBackgroundInteraction()
         XCTAssertEqual(panel.level, .floating)
+        try assertInFront(panel, of: backgroundWindow)
+        panel.handleLocalMouseDown(in: dialog)
+        panel.handleLocalMouseDown(in: panel)
+        panel.raiseForPanelInteraction()
+        try assertInFront(dialog, of: panel)
 
+        dialog.orderOut(nil)
         panel.endNativeDialog()
-        XCTAssertEqual(panel.level, .floating)
+        XCTAssertEqual(panel.level, .normal)
+        XCTAssertTrue(panel.collectionBehavior.contains(.managed))
+        try assertInFront(panel, of: backgroundWindow)
         panel.handleBackgroundMouse(.leftMouseDown, at: NSPoint(x: 100, y: 100))
         panel.handleBackgroundMouse(.leftMouseUp, at: NSPoint(x: 101, y: 101))
-        XCTAssertEqual(panel.level, .normal, "normal background clicks should lower Peeky after the picker closes")
+        try assertInFront(backgroundWindow, of: panel)
+    }
+
+    func testNestedNativeDialogsRestorePolicyOnlyAfterLastDialogAndDoNotReopenHiddenPanel() {
+        let panel = panel()
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.raiseForPanelInteraction()
+        defer { panel.close() }
+        panel.beginNativeDialog()
+        panel.beginNativeDialog()
+        panel.endNativeDialog()
+        XCTAssertEqual(panel.level, .floating)
+        panel.orderOut(nil)
+        panel.endNativeDialog()
+        XCTAssertFalse(panel.isVisible)
+        XCTAssertEqual(panel.level, .normal)
+        XCTAssertFalse(panel.isFloatingPanel)
+        XCTAssertTrue(panel.collectionBehavior.contains(.managed))
+    }
+
+    func testControllerShowAndPolicyTransitionsDoNotRepinCapture() throws {
+        let controller = AssistantPanelController()
+        let panel = controller.ensurePanel()
+        // Exercise the real controller without rendering a card on the user's desktop.
+        panel.contentViewController = nil
+        panel.alphaValue = 0
+        let hiddenTabs = UserDefaults.standard.object(forKey: AssistantState.hiddenTabsKey)
+        controller.state.hiddenTabs = []
+        defer {
+            controller.hide()
+            panel.close()
+            if let hiddenTabs {
+                UserDefaults.standard.set(hiddenTabs, forKey: AssistantState.hiddenTabsKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: AssistantState.hiddenTabsKey)
+            }
+        }
+        let screen = try XCTUnwrap(NSScreen.screens.first)
+        let backgroundWindow = self.panel()
+        backgroundWindow.orderFrontRegardless()
+        defer { backgroundWindow.close() }
+        let presentations: [(String, () -> Void)] = [
+            ("show", { controller.show(near: .zero, on: screen) }),
+            ("capture", { controller.showInCorner(on: screen) }),
+            ("remote strip", { controller.showAsStrip(on: screen) }),
+            ("remote full", { controller.presentFull(near: .zero, on: screen) }),
+            ("remote screen", { controller.move(toScreenIndex: 1) }),
+            ("restore dot", { controller.expand() }),
+        ]
+        for (name, present) in presentations {
+            controller.state.tab = .captureDictate
+            controller.minimize()
+            XCTAssertEqual(panel.level, .floating, name)
+            XCTAssertTrue(panel.isFloatingPanel, name)
+            XCTAssertTrue(panel.collectionBehavior.contains(.transient), name)
+            panel.lowerForBackgroundInteraction()
+            XCTAssertEqual(panel.level, .floating, name)
+            present()
+            XCTAssertFalse(controller.state.collapsed, name)
+            XCTAssertEqual(panel.level, .normal, name)
+            XCTAssertFalse(panel.isFloatingPanel, name)
+            XCTAssertTrue(panel.collectionBehavior.contains(.managed), name)
+            XCTAssertFalse(panel.collectionBehavior.contains(.transient), name)
+            try assertInFront(panel, of: backgroundWindow)
+            backgroundWindow.orderFrontRegardless()
+            try assertInFront(backgroundWindow, of: panel)
+        }
+
+        controller.toggleStrip()
+        try assertInFront(panel, of: backgroundWindow)
+        XCTAssertEqual(panel.level, .normal)
+        controller.state.tab = .video
+        panel.lowerForBackgroundInteraction()
+        XCTAssertEqual(panel.level, .floating)
+        controller.state.tab = .captureDictate
+        XCTAssertEqual(panel.level, .normal)
+        XCTAssertTrue(panel.collectionBehavior.contains(.managed))
+
+        panel.beginNativeDialog()
+        controller.state.tab = .video
+        controller.state.tab = .captureDictate
+        XCTAssertEqual(panel.level, .floating, "tab changes must not bypass an open picker's guard")
+        panel.endNativeDialog()
+        XCTAssertEqual(panel.level, .normal)
+        XCTAssertTrue(panel.collectionBehavior.contains(.managed))
+        XCTAssertTrue(panel.collectionBehavior.contains(.canJoinAllSpaces))
+        XCTAssertTrue(panel.collectionBehavior.contains(.fullScreenAuxiliary))
     }
 
     func testFocusOnMountDoesNotStealLaterFieldFocus() async {

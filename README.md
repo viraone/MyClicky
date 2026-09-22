@@ -15,13 +15,24 @@ Press **Escape**, or release without dragging, to cancel a capture.
 
 ## Assistant (hold Option–Command–C)
 
-**Hold** Option–Command–C, speak your question, release to submit. A floating
+**Hold** Option–Command–C, speak your question, release to submit. A non-activating
 panel appears with a status dot (cyan idle → red listening → yellow thinking →
 green answering). Your voice is transcribed on-device (Apple Speech), the
 screen under your cursor is captured, and both are sent to Claude in one
 request. The answer is spoken aloud and shown in the panel. You can also type
 a question in the panel's text field instead of speaking. Press Escape to
 dismiss the panel.
+
+Expanded cards and the strip follow normal macOS window stacking: selecting
+another window in Mission Control or switching apps can cover Peeky, even if
+that app was already active underneath it. Clicking Peeky, using its shortcut,
+or sending an explicit show command from the phone brings it forward without
+pinning it above subsequent selections. The corner dot and Video tab
+intentionally stay above other apps. Open/save pickers keep Peeky visible
+during selection, then restore the current tab's normal stacking behavior.
+Finder folder drags still work on a visible Peeky drop target and do not
+explicitly send it to the back; if Finder overlaps it, arrange the windows so
+part of Peeky remains visible before dragging.
 
 The assistant isn't limited to what's on screen — depending on the question
 and context, it swaps the screenshot for a more accurate source:
@@ -367,7 +378,7 @@ only ever shows the trailing 7 days).
   → Claude → speak/show)
 - `Assistant/AssistantHotkeyMonitor`: press-and-hold Option–Command–C chord
   tracking
-- `Assistant/AssistantPanel`: floating non-activating status/answer panel with
+- `Assistant/AssistantPanel`: non-activating status/answer panel with
   text input
 - `Assistant/SpeechService`: on-device speech-to-text (Apple Speech framework)
 - `Assistant/AnthropicService`: Anthropic Messages REST client (vision + text)
