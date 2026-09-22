@@ -26,6 +26,14 @@ final class TerminalShortcutTests: XCTestCase {
         XCTAssertLessThan(frontIndex, backIndex, file: file, line: line)
     }
 
+    private func withAppDelegate(_ body: (AppDelegate) throws -> Void) rethrows {
+        let previous = NSApp.delegate
+        let delegate = AppDelegate()
+        NSApp.delegate = delegate
+        defer { NSApp.delegate = previous }
+        try body(delegate)
+    }
+
     private func command(_ key: String, modifiers: NSEvent.ModifierFlags = .command) -> NSEvent {
         NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers,
                         timestamp: 0, windowNumber: 0, context: nil, characters: key,
@@ -196,6 +204,122 @@ final class TerminalShortcutTests: XCTestCase {
         try assertInFront(selectedWindow, of: panel)
         XCTAssertTrue(NSApp.keyWindow === keyWindow)
         XCTAssertEqual(NSWorkspace.shared.frontmostApplication?.processIdentifier, frontmostPID)
+    }
+
+    func testSelectingPeekyThroughApplicationActivationRaisesWithoutRepinning() throws {
+        let panel = panel()
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.raiseForPanelInteraction()
+        let selectedWindow = self.panel()
+        selectedWindow.orderFrontRegardless()
+        defer { panel.close(); selectedWindow.close() }
+
+        try withAppDelegate { _ in
+            // A Mission Control selection may begin as a click delivered to
+            // Dock rather than to Peeky's local mouse monitor.
+            panel.handleBackgroundMouse(.leftMouseDown, at: NSPoint(x: 100, y: 100))
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+            try assertInFront(panel, of: selectedWindow)
+            panel.handleBackgroundMouse(.leftMouseUp, at: NSPoint(x: 100, y: 100))
+            try assertInFront(panel, of: selectedWindow)
+            XCTAssertEqual(panel.level, .normal)
+            XCTAssertTrue(panel.collectionBehavior.contains(.managed))
+            XCTAssertTrue(panel.styleMask.contains(.nonactivatingPanel))
+
+            selectedWindow.orderFrontRegardless()
+            NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp)
+            try assertInFront(selectedWindow, of: panel)
+        }
+    }
+
+    func testSelectingPeekyAsKeyWindowRaisesWithoutApplicationActivation() throws {
+        let panel = panel()
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.raiseForPanelInteraction()
+        let selectedWindow = self.panel()
+        selectedWindow.orderFrontRegardless()
+        defer { panel.close(); selectedWindow.close() }
+        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+
+        panel.makeKey()
+        XCTAssertTrue(panel.isKeyWindow)
+        try assertInFront(panel, of: selectedWindow)
+        XCTAssertEqual(panel.level, .normal)
+        XCTAssertEqual(NSWorkspace.shared.frontmostApplication?.processIdentifier, frontmostPID)
+        selectedWindow.orderFrontRegardless()
+        try assertInFront(selectedWindow, of: panel)
+    }
+
+    func testReopeningPeekyRaisesVisibleCardAtNormalLevel() throws {
+        let panel = panel()
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.raiseForPanelInteraction()
+        let selectedWindow = self.panel()
+        selectedWindow.orderFrontRegardless()
+        defer { panel.close(); selectedWindow.close() }
+
+        try withAppDelegate { delegate in
+            XCTAssertTrue(delegate.applicationShouldHandleReopen(NSApp, hasVisibleWindows: true))
+            try assertInFront(panel, of: selectedWindow)
+            XCTAssertEqual(panel.level, .normal)
+            selectedWindow.orderFrontRegardless()
+            try assertInFront(selectedWindow, of: panel)
+        }
+    }
+
+    func testSystemSelectionDoesNotRaiseOverNativePickerOrCleanupWindow() throws {
+        let panel = panel()
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.raiseForPanelInteraction()
+        let otherWindow = self.panel()
+        defer { panel.close(); otherWindow.close() }
+
+        try withAppDelegate { delegate in
+            panel.beginNativeDialog()
+            otherWindow.level = .floating
+            otherWindow.orderFrontRegardless()
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+            try assertInFront(otherWindow, of: panel)
+            panel.makeKey()
+            try assertInFront(otherWindow, of: panel)
+            XCTAssertEqual(panel.level, .floating)
+            panel.endNativeDialog()
+            panel.resignKey()
+
+            // Drive/Gmail cleanup makes its own window key before NSApp.activate.
+            otherWindow.level = .normal
+            otherWindow.makeKeyAndOrderFront(nil)
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+            XCTAssertTrue(delegate.applicationShouldHandleReopen(NSApp, hasVisibleWindows: true))
+            try assertInFront(otherWindow, of: panel)
+            XCTAssertTrue(NSApp.keyWindow === otherWindow)
+            XCTAssertEqual(panel.level, .normal)
+        }
+    }
+
+    func testSystemSelectionDoesNotShowHiddenPanelOrReorderFloatingModes() throws {
+        let panel = panel()
+        var lowerForBackgroundClick = true
+        panel.enableTransparentMarginPassthrough(interactiveRegion: { _, _ in true },
+                                                shouldLowerForBackgroundClick: { lowerForBackgroundClick })
+        let otherWindow = self.panel()
+        defer { panel.close(); otherWindow.close() }
+
+        try withAppDelegate { delegate in
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+            XCTAssertTrue(delegate.applicationShouldHandleReopen(NSApp, hasVisibleWindows: false))
+            XCTAssertFalse(panel.isVisible)
+
+            lowerForBackgroundClick = false
+            panel.raiseForPanelInteraction()
+            otherWindow.level = .floating
+            otherWindow.orderFrontRegardless()
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+            panel.makeKey()
+            try assertInFront(otherWindow, of: panel)
+            XCTAssertEqual(panel.level, .floating)
+            XCTAssertTrue(panel.collectionBehavior.contains(.transient))
+        }
     }
 
     func testDraggingAFolderDoesNotExplicitlyLowerVisibleDropTarget() throws {

@@ -1550,6 +1550,12 @@ final class AssistantPanelController {
 
 final class KeyablePanel: NSPanel {
     override var canBecomeKey: Bool { true }
+
+    override func becomeKey() {
+        super.becomeKey()
+        raiseForSystemSelection("key-window")
+    }
+
     /// AppKit would push a window that pokes past the screen edge back
     /// inside. At Full only the transparent glow margin pokes out, and it
     /// must stay there or the card creeps in from the edges.
@@ -1685,6 +1691,24 @@ final class KeyablePanel: NSPanel {
         guard nativeDialogDepth == 0 else { return }
         refreshWindowStacking()
         orderFrontRegardless()
+    }
+
+    /// Mission Control/app selection need not deliver a local mouse-down.
+    /// Cleanup windows make themselves key before activating the app; leave
+    /// those windows, native pickers, and intentional floating modes alone.
+    func raiseForSystemSelection(_ source: String) {
+        let anotherWindowIsKey = NSApp.keyWindow.map { $0 !== self } ?? false
+        let shouldRaise = isVisible && nativeDialogDepth == 0
+            && shouldLowerForBackgroundClick?() == true
+            && NSApp.modalWindow == nil && attachedSheet == nil && !anotherWindowIsKey
+        if UserDefaults.standard.bool(forKey: "peekyWindowSelectionDiagnostics") {
+            NSLog("Peeky selection [%@]: raise=%d visible=%d pickerDepth=%ld otherKey=%d",
+                  source, shouldRaise, isVisible, nativeDialogDepth, anotherWindowIsKey)
+        }
+        guard shouldRaise else { return }
+        // Discard a pending Dock click so its release cannot undo selection.
+        backgroundPressOrigin = nil
+        raiseForPanelInteraction()
     }
 
     func lowerForBackgroundInteraction() {

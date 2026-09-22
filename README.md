@@ -27,12 +27,19 @@ Expanded cards and the strip follow normal macOS window stacking: selecting
 another window in Mission Control or switching apps can cover Peeky, even if
 that app was already active underneath it. Clicking Peeky, using its shortcut,
 or sending an explicit show command from the phone brings it forward without
-pinning it above subsequent selections. The corner dot and Video tab
+pinning it above subsequent selections. Selecting Peeky itself in Mission
+Control also brings the visible card forward at normal level; it remains
+non-activating for hotkey/phone-driven display while you type in another app.
+The corner dot and Video tab
 intentionally stay above other apps. Open/save pickers keep Peeky visible
 during selection, then restore the current tab's normal stacking behavior.
 Finder folder drags still work on a visible Peeky drop target and do not
 explicitly send it to the back; if Finder overlaps it, arrange the windows so
 part of Peeky remains visible before dragging.
+
+For troubleshooting selection, the optional `peekyWindowSelectionDiagnostics`
+Boolean default logs app activation, reopen, and panel key-window callbacks
+and whether they raised the card. It is off by default.
 
 The assistant isn't limited to what's on screen — depending on the question
 and context, it swaps the screenshot for a more accurate source:
