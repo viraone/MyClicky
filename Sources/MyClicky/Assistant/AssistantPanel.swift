@@ -1,4 +1,5 @@
 import AppKit
+import OSLog
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -1575,6 +1576,14 @@ final class KeyablePanel: NSPanel {
     /// press that travels is a drag — usually a Finder folder heading for
     /// the Code tab — and must not explicitly send the drop target back.
     private var backgroundPressOrigin: NSPoint?
+    private var backgroundLoweringSuppressedUntil: TimeInterval = 0
+    static let systemSelectionGrace: TimeInterval = 0.4
+    private static let selectionLogger = Logger(subsystem: "com.local.MyClicky", category: "WindowSelection")
+    private static let selectionTimestampFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
     /// Pointer travel, in points, past which a background press counts as a drag.
     static let backgroundDragSlop: CGFloat = 4
     /// Return true to consume Esc (e.g. to stop an in-flight answer) instead of closing.
@@ -1649,9 +1658,24 @@ final class KeyablePanel: NSPanel {
     }
 
     /// A mouse press or release in another app. See `backgroundPressOrigin`.
-    func handleBackgroundMouse(_ type: NSEvent.EventType, at location: NSPoint) {
+    func handleBackgroundMouse(_ type: NSEvent.EventType, at location: NSPoint,
+                               now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        let event: String = switch type {
+        case .leftMouseDown: "left-down"
+        case .leftMouseUp: "left-up"
+        case .rightMouseDown: "right-down"
+        case .otherMouseDown: "other-down"
+        default: "event-\(type.rawValue)"
+        }
+        logWindowSelection("mouse \(event)", now: now)
         guard nativeDialogDepth == 0 else {
             backgroundPressOrigin = nil
+            logWindowSelection("mouse \(event) ignored=picker", now: now)
+            return
+        }
+        guard now >= backgroundLoweringSuppressedUntil else {
+            backgroundPressOrigin = nil
+            logWindowSelection("mouse \(event) ignored=selection-grace", now: now)
             return
         }
         switch type {
@@ -1661,11 +1685,11 @@ final class KeyablePanel: NSPanel {
             guard let origin = backgroundPressOrigin else { return }
             backgroundPressOrigin = nil
             if hypot(location.x - origin.x, location.y - origin.y) < Self.backgroundDragSlop {
-                lowerForBackgroundInteraction()
+                lowerForBackgroundInteraction(reason: "left-click", now: now)
             }
         case .rightMouseDown, .otherMouseDown:
             backgroundPressOrigin = nil
-            lowerForBackgroundInteraction()
+            lowerForBackgroundInteraction(reason: event, now: now)
         default:
             break
         }
@@ -1688,33 +1712,67 @@ final class KeyablePanel: NSPanel {
     func raiseForPanelInteraction() {
         // A picker must remain above Peeky, including service-hosted pickers
         // whose mouse events do not belong to this process.
-        guard nativeDialogDepth == 0 else { return }
+        guard nativeDialogDepth == 0 else {
+            logWindowSelection("raise ignored=picker")
+            return
+        }
         refreshWindowStacking()
         orderFrontRegardless()
+        logWindowSelection("raise ordered-front")
     }
 
     /// Mission Control/app selection need not deliver a local mouse-down.
     /// Cleanup windows make themselves key before activating the app; leave
     /// those windows, native pickers, and intentional floating modes alone.
-    func raiseForSystemSelection(_ source: String) {
-        let anotherWindowIsKey = NSApp.keyWindow.map { $0 !== self } ?? false
+    func raiseForSystemSelection(_ source: String, now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        let anotherWindowIsKey = NSApp.keyWindow.map { $0 !== self && Self.isVisibleInteractionWindow($0) } ?? false
         let shouldRaise = isVisible && nativeDialogDepth == 0
             && shouldLowerForBackgroundClick?() == true
             && NSApp.modalWindow == nil && attachedSheet == nil && !anotherWindowIsKey
-        if UserDefaults.standard.bool(forKey: "peekyWindowSelectionDiagnostics") {
-            NSLog("Peeky selection [%@]: raise=%d visible=%d pickerDepth=%ld otherKey=%d",
-                  source, shouldRaise, isVisible, nativeDialogDepth, anotherWindowIsKey)
-        }
+        logWindowSelection("selection source=\(source) raise=\(shouldRaise) blockingKey=\(anotherWindowIsKey)", now: now)
         guard shouldRaise else { return }
-        // Discard a pending Dock click so its release cannot undo selection.
+        // Dock mouse events can arrive on either side of the activation callback.
+        // This only defers our orderBack; normal native window ordering still wins.
         backgroundPressOrigin = nil
+        backgroundLoweringSuppressedUntil = now + Self.systemSelectionGrace
         raiseForPanelInteraction()
     }
 
-    func lowerForBackgroundInteraction() {
-        guard nativeDialogDepth == 0, isVisible, shouldLowerForBackgroundClick?() == true else { return }
+    private static func isVisibleInteractionWindow(_ window: NSWindow) -> Bool {
+        window.isVisible && !window.isMiniaturized && window.alphaValue > 0
+            && !window.ignoresMouseEvents && NSScreen.screens.contains { $0.frame.intersects(window.frame) }
+    }
+
+    private func logWindowSelection(_ event: String, now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        guard UserDefaults.standard.bool(forKey: "peekyWindowSelectionDiagnostics") else { return }
+        func describe(_ window: NSWindow?) -> String {
+            guard let window else { return "none" }
+            return "\(type(of: window))#\(window.windowNumber){visible=\(window.isVisible),"
+                + "interactive=\(Self.isVisibleInteractionWindow(window)),alpha=\(window.alphaValue),"
+                + "ignoresMouse=\(window.ignoresMouseEvents),frame=\(NSStringFromRect(window.frame))}"
+        }
+        let center = NSPoint(x: frame.midX, y: frame.midY)
+        let topWindow = NSWindow.windowNumber(at: center, belowWindowWithWindowNumber: 0)
+        let timestamp = Self.selectionTimestampFormatter.string(from: Date())
+        let graceMS = max(0, (backgroundLoweringSuppressedUntil - now) * 1000)
+        let message = "\(timestamp) Peeky selection: \(event) panel=\(describe(self)) level=\(level.rawValue)"
+            + " key=\(describe(NSApp.keyWindow)) main=\(describe(NSApp.mainWindow))"
+            + " active=\(NSApp.isActive) modal=\(describe(NSApp.modalWindow)) sheet=\(attachedSheet != nil)"
+            + " pickerDepth=\(nativeDialogDepth) lowerable=\(shouldLowerForBackgroundClick?() == true)"
+            + " pendingPress=\(backgroundPressOrigin != nil) graceMS=\(String(format: "%.1f", graceMS))"
+            + " topAtCenter=\(topWindow)"
+        Self.selectionLogger.notice("\(message, privacy: .public)")
+    }
+
+    func lowerForBackgroundInteraction(reason: String = "background",
+                                       now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        let shouldLower = nativeDialogDepth == 0 && isVisible && shouldLowerForBackgroundClick?() == true
+            && now >= backgroundLoweringSuppressedUntil
+        logWindowSelection("lower reason=\(reason) allowed=\(shouldLower)", now: now)
+        guard shouldLower else { return }
         refreshWindowStacking()
         orderBack(nil)
+        logWindowSelection("lower ordered-back reason=\(reason)", now: now)
     }
 
     func beginNativeDialog() {

@@ -38,8 +38,11 @@ explicitly send it to the back; if Finder overlaps it, arrange the windows so
 part of Peeky remains visible before dragging.
 
 For troubleshooting selection, the optional `peekyWindowSelectionDiagnostics`
-Boolean default logs app activation, reopen, and panel key-window callbacks
-and whether they raised the card. It is off by default.
+Boolean default logs app activation, reopen, key-window callbacks, background
+mouse events, and raise/lower decisions with millisecond timestamps. Messages
+are public in Console under subsystem `com.local.MyClicky`, category
+`WindowSelection`; they contain window classes, IDs, geometry, and guard state,
+not window titles or document content. It is off by default.
 
 The assistant isn't limited to what's on screen — depending on the question
 and context, it swaps the screenshot for a more accurate source:

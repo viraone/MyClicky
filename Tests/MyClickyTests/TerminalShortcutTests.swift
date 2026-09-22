@@ -18,6 +18,17 @@ final class TerminalShortcutTests: XCTestCase {
                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
     }
 
+    private func transparentOnscreenPanel() throws -> KeyablePanel {
+        let panel = panel()
+        let screen = try XCTUnwrap(NSScreen.screens.first)
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = false
+        panel.setFrame(NSRect(x: screen.frame.minX + 1, y: screen.frame.minY + 1, width: 1, height: 1),
+                       display: false)
+        return panel
+    }
+
     private func assertInFront(_ front: NSWindow, of back: NSWindow,
                                file: StaticString = #filePath, line: UInt = #line) throws {
         let windows = try XCTUnwrap(NSWindow.windowNumbers(), file: file, line: line).map(\.intValue)
@@ -250,6 +261,105 @@ final class TerminalShortcutTests: XCTestCase {
         try assertInFront(selectedWindow, of: panel)
     }
 
+    func testLateMissionControlClickDoesNotUndoSystemSelection() throws {
+        let panel = panel()
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.raiseForPanelInteraction()
+        let otherWindow = self.panel()
+        otherWindow.orderFrontRegardless()
+        defer { panel.close(); otherWindow.close() }
+
+        try withAppDelegate { _ in
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+            panel.handleBackgroundMouse(.leftMouseDown, at: NSPoint(x: 100, y: 100))
+            panel.handleBackgroundMouse(.leftMouseUp, at: NSPoint(x: 100, y: 100))
+            try assertInFront(panel, of: otherWindow)
+            XCTAssertEqual(panel.level, .normal)
+        }
+    }
+
+    func testOffscreenKeyWindowDoesNotBlockPeekySelection() throws {
+        let panel = panel()
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.raiseForPanelInteraction()
+        let offscreenWindow = self.panel()
+        offscreenWindow.makeKeyAndOrderFront(nil)
+        defer { panel.close(); offscreenWindow.close() }
+
+        try withAppDelegate { _ in
+            XCTAssertTrue(NSApp.keyWindow === offscreenWindow)
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+            try assertInFront(panel, of: offscreenWindow)
+        }
+    }
+
+    func testSelectionGraceExpiresAndDoesNotPreventNativeWindowOrdering() throws {
+        let panel = panel()
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.raiseForPanelInteraction()
+        let otherWindow = self.panel()
+        otherWindow.orderFrontRegardless()
+        defer { panel.close(); otherWindow.close() }
+        let now = ProcessInfo.processInfo.systemUptime
+        let deadline = now + KeyablePanel.systemSelectionGrace
+        let point = NSPoint(x: 100, y: 100)
+
+        panel.raiseForSystemSelection("test-selection", now: now)
+        panel.handleBackgroundMouse(.leftMouseDown, at: point, now: now + 0.1)
+        panel.handleBackgroundMouse(.leftMouseUp, at: point, now: deadline + 0.1)
+        try assertInFront(panel, of: otherWindow)
+        panel.handleBackgroundMouse(.rightMouseDown, at: point, now: deadline - 0.001)
+        panel.handleBackgroundMouse(.otherMouseDown, at: point, now: deadline - 0.001)
+        panel.lowerForBackgroundInteraction(now: deadline - 0.001)
+        try assertInFront(panel, of: otherWindow)
+
+        otherWindow.orderFrontRegardless()
+        try assertInFront(otherWindow, of: panel)
+        panel.raiseForPanelInteraction()
+        panel.handleBackgroundMouse(.leftMouseDown, at: point, now: deadline)
+        panel.handleBackgroundMouse(.leftMouseUp, at: point, now: deadline)
+        try assertInFront(otherWindow, of: panel)
+        XCTAssertEqual(panel.level, .normal)
+    }
+
+    func testTransparentOrClickThroughKeyWindowDoesNotBlockSelection() throws {
+        let panel = panel()
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.raiseForPanelInteraction()
+        let otherWindow = try transparentOnscreenPanel()
+        defer { panel.close(); otherWindow.close() }
+
+        try withAppDelegate { _ in
+            otherWindow.alphaValue = 0
+            otherWindow.makeKeyAndOrderFront(nil)
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+            try assertInFront(panel, of: otherWindow)
+
+            otherWindow.alphaValue = 1
+            otherWindow.ignoresMouseEvents = true
+            otherWindow.makeKeyAndOrderFront(nil)
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+            try assertInFront(panel, of: otherWindow)
+        }
+    }
+
+    func testWindowSelectionDiagnosticsPreserveNormalStacking() {
+        let key = "peekyWindowSelectionDiagnostics"
+        let saved = UserDefaults.standard.object(forKey: key)
+        UserDefaults.standard.set(true, forKey: key)
+        defer {
+            if let saved { UserDefaults.standard.set(saved, forKey: key) }
+            else { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        let panel = panel()
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.raiseForPanelInteraction()
+        defer { panel.close() }
+        panel.raiseForSystemSelection("diagnostic-public-test")
+        XCTAssertEqual(panel.level, .normal)
+        XCTAssertTrue(panel.collectionBehavior.contains(.managed))
+    }
+
     func testReopeningPeekyRaisesVisibleCardAtNormalLevel() throws {
         let panel = panel()
         panel.enableTransparentMarginPassthrough { _, _ in true }
@@ -271,7 +381,7 @@ final class TerminalShortcutTests: XCTestCase {
         let panel = panel()
         panel.enableTransparentMarginPassthrough { _, _ in true }
         panel.raiseForPanelInteraction()
-        let otherWindow = self.panel()
+        let otherWindow = try transparentOnscreenPanel()
         defer { panel.close(); otherWindow.close() }
 
         try withAppDelegate { delegate in
