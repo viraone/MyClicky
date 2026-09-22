@@ -4,20 +4,6 @@ import XCTest
 
 @MainActor
 final class AssistantStateTests: XCTestCase {
-    func testVideoTabStaysAboveOtherAppsAfterBackgroundClick() {
-        let state = AssistantState()
-        state.collapsed = false
-
-        state.tab = .video
-        XCTAssertFalse(state.shouldLowerForBackgroundClick)
-
-        state.tab = .ask
-        XCTAssertTrue(state.shouldLowerForBackgroundClick)
-
-        state.collapsed = true
-        XCTAssertFalse(state.shouldLowerForBackgroundClick)
-    }
-
     func testFastQwenMigrationReplacesThePreviouslySelected80BModelOnce() throws {
         let suiteName = "AssistantStateTests.\(UUID().uuidString)"
         let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
@@ -250,7 +236,7 @@ final class HiddenTabsTests: XCTestCase {
         state.setTab(.terminal, visible: false)
         state.setTab(.extensions, visible: false)
         XCTAssertFalse(state.isTabVisible(.terminal))
-        XCTAssertEqual(state.visibleTabs, [.ask, .captureDictate, .talk, .code, .documentary, .video])
+        XCTAssertEqual(state.visibleTabs, [.ask, .captureDictate, .talk, .code, .documentary])
         XCTAssertEqual(UserDefaults.standard.stringArray(forKey: AssistantState.hiddenTabsKey),
                        ["Extensions", "Terminal"])
         XCTAssertEqual(AssistantState().hiddenTabs, [.terminal, .extensions], "a fresh state remembers the choice")
