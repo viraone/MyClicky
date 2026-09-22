@@ -1885,6 +1885,96 @@ struct AssistantPanelView: View {
     }
 
     private var expandedPanel: some View {
+        // The card is exactly the window's card area, whatever the tab
+        // content wants. Content taller than the card — a break check-in
+        // over a strip of captures at Normal height, or the video editor in
+        // a panel dragged short — used to push the card past the window,
+        // which then sliced through it: sharp window edges, no glow, the
+        // header and bottom bar gone off the top and bottom. GeometryReader
+        // takes the size it is given without passing its child's minimum
+        // up, and the overflow is clipped inside the rounded card.
+        GeometryReader { geometry in
+            expandedContent
+                .frame(width: geometry.size.width, height: geometry.size.height, alignment: .top)
+                .clipped()
+        }
+        .animation(.easeInOut(duration: 0.2), value: state.size)
+        .background(
+            ZStack {
+                // Flat, near-black terminal background.
+                RoundedRectangle(cornerRadius: AssistantPanelController.cardRadius, style: .continuous)
+                    .fill(Color(red: 0.094, green: 0.094, blue: 0.098))
+                // A wash of the phase colour from the top, strong enough while
+                // recording that the whole panel reads as "live" at a glance.
+                RoundedRectangle(cornerRadius: AssistantPanelController.cardRadius, style: .continuous)
+                    .fill(
+                        RadialGradient(
+                            colors: [state.accent.opacity(state.phase == .recording ? 0.22 : 0.10), .clear],
+                            center: .top,
+                            startRadius: 0,
+                            endRadius: 320
+                        )
+                    )
+            }
+        )
+        // Crisp rim in the phase colour, heavier while recording.
+        .overlay(
+            RoundedRectangle(cornerRadius: AssistantPanelController.cardRadius, style: .continuous)
+                .strokeBorder(
+                    LinearGradient(
+                        colors: [
+                            state.accent.opacity(0.9),
+                            state.accent.opacity(0.4),
+                            state.accent.opacity(0.9),
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: state.phase == .recording || state.phase == .paused ? 2 : 1
+                )
+        )
+        .clipShape(RoundedRectangle(cornerRadius: AssistantPanelController.cardRadius, style: .continuous))
+        .overlay(alignment: .trailing) {
+            edgeChevron(expanded: true)
+                .padding(.trailing, 14)
+        }
+        .overlay(alignment: .top) { topEdgeHandle }
+        .overlay(alignment: .bottom) { bottomEdgeHandle }
+        .overlay(alignment: .leading) { leadingEdgeHandle }
+        .overlay(alignment: .topLeading) { resizeHandle(.topLeading) }
+        .overlay(alignment: .topTrailing) { resizeHandle(.topTrailing) }
+        .overlay(alignment: .bottomLeading) { resizeHandle(.bottomLeading) }
+        .overlay(alignment: .bottomTrailing) { resizeHandle(.bottomTrailing) }
+        .clipShape(RoundedRectangle(cornerRadius: AssistantPanelController.cardRadius, style: .continuous))
+        .compositingGroup()
+        // Soft outer halo (Spotlight-style) drawn as a blurred rounded rect so
+        // the corners stay round, plus a grounding drop shadow. Strong enough
+        // to read as a soft edge on a light desktop, not just a black cut-out.
+        .background(
+            RoundedRectangle(cornerRadius: AssistantPanelController.cardRadius, style: .continuous)
+                .fill(state.accent.opacity(breathing ? (state.phase == .recording ? 0.85 : 0.65) : 0.4))
+                .padding(-6)
+                .blur(radius: breathing ? 26 : 16)
+                // The halo breathes slowly at rest and quickly while recording,
+                // so a live mic is visible even from across the room.
+                .animation(.easeInOut(duration: state.phase == .recording ? 0.9 : 2.2)
+                    .repeatForever(autoreverses: true), value: breathing)
+        )
+        .background(
+            RoundedRectangle(cornerRadius: AssistantPanelController.cardRadius, style: .continuous)
+                .fill(Color.black.opacity(0.45))
+                .blur(radius: 16)
+                .offset(y: 8)
+        )
+        .padding(AssistantPanelController.glowMargin)
+        .onAppear { breathing = true }
+        .onDisappear { breathing = false }
+        .animation(.easeInOut(duration: 0.35), value: state.phase)
+    }
+
+    /// Everything inside the card: header, phase strip, the current tab,
+    /// bottom bar.
+    private var expandedContent: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .center) {
                 tabBar
@@ -1993,79 +2083,6 @@ struct AssistantPanelView: View {
         .padding(.leading, 18)
         .padding(.trailing, 36)
         .padding(.vertical, 14)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .animation(.easeInOut(duration: 0.2), value: state.size)
-        .background(
-            ZStack {
-                // Flat, near-black terminal background.
-                RoundedRectangle(cornerRadius: AssistantPanelController.cardRadius, style: .continuous)
-                    .fill(Color(red: 0.094, green: 0.094, blue: 0.098))
-                // A wash of the phase colour from the top, strong enough while
-                // recording that the whole panel reads as "live" at a glance.
-                RoundedRectangle(cornerRadius: AssistantPanelController.cardRadius, style: .continuous)
-                    .fill(
-                        RadialGradient(
-                            colors: [state.accent.opacity(state.phase == .recording ? 0.22 : 0.10), .clear],
-                            center: .top,
-                            startRadius: 0,
-                            endRadius: 320
-                        )
-                    )
-            }
-        )
-        // Crisp rim in the phase colour, heavier while recording.
-        .overlay(
-            RoundedRectangle(cornerRadius: AssistantPanelController.cardRadius, style: .continuous)
-                .strokeBorder(
-                    LinearGradient(
-                        colors: [
-                            state.accent.opacity(0.9),
-                            state.accent.opacity(0.4),
-                            state.accent.opacity(0.9),
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: state.phase == .recording || state.phase == .paused ? 2 : 1
-                )
-        )
-        .clipShape(RoundedRectangle(cornerRadius: AssistantPanelController.cardRadius, style: .continuous))
-        .overlay(alignment: .trailing) {
-            edgeChevron(expanded: true)
-                .padding(.trailing, 14)
-        }
-        .overlay(alignment: .top) { topEdgeHandle }
-        .overlay(alignment: .bottom) { bottomEdgeHandle }
-        .overlay(alignment: .leading) { leadingEdgeHandle }
-        .overlay(alignment: .topLeading) { resizeHandle(.topLeading) }
-        .overlay(alignment: .topTrailing) { resizeHandle(.topTrailing) }
-        .overlay(alignment: .bottomLeading) { resizeHandle(.bottomLeading) }
-        .overlay(alignment: .bottomTrailing) { resizeHandle(.bottomTrailing) }
-        .clipShape(RoundedRectangle(cornerRadius: AssistantPanelController.cardRadius, style: .continuous))
-        .compositingGroup()
-        // Soft outer halo (Spotlight-style) drawn as a blurred rounded rect so
-        // the corners stay round, plus a grounding drop shadow. Strong enough
-        // to read as a soft edge on a light desktop, not just a black cut-out.
-        .background(
-            RoundedRectangle(cornerRadius: AssistantPanelController.cardRadius, style: .continuous)
-                .fill(state.accent.opacity(breathing ? (state.phase == .recording ? 0.85 : 0.65) : 0.4))
-                .padding(-6)
-                .blur(radius: breathing ? 26 : 16)
-                // The halo breathes slowly at rest and quickly while recording,
-                // so a live mic is visible even from across the room.
-                .animation(.easeInOut(duration: state.phase == .recording ? 0.9 : 2.2)
-                    .repeatForever(autoreverses: true), value: breathing)
-        )
-        .background(
-            RoundedRectangle(cornerRadius: AssistantPanelController.cardRadius, style: .continuous)
-                .fill(Color.black.opacity(0.45))
-                .blur(radius: 16)
-                .offset(y: 8)
-        )
-        .padding(AssistantPanelController.glowMargin)
-        .onAppear { breathing = true }
-        .onDisappear { breathing = false }
-        .animation(.easeInOut(duration: 0.35), value: state.phase)
     }
 
     // Tab row along the top edge, drawn the way a code editor draws its
