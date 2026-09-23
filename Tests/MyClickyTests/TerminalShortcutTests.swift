@@ -12,10 +12,42 @@ final class TerminalShortcutTests: XCTestCase {
         }
     }
 
-    private func panel() -> KeyablePanel {
+    // Key-role tests use legacy style so the test runner need not activate
+    // itself over the user's desktop. Ordering/shortcut tests use the default.
+    private func panel(nonactivating: Bool = false) -> KeyablePanel {
         _ = NSApplication.shared
-        return KeyablePanel(contentRect: NSRect(x: 0, y: 0, width: 600, height: 300),
-                            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        let panel = KeyablePanel(contentRect: NSRect(x: -20000, y: -20000, width: 600, height: 300),
+                                 styleMask: nonactivating ? [.borderless, .nonactivatingPanel] : [.borderless],
+                                 backing: .buffered, defer: false)
+        panel.hidesOnDeactivate = false
+        return panel
+    }
+
+    private func transparentOnscreenPanel() throws -> KeyablePanel {
+        let panel = panel(nonactivating: true)
+        let screen = try XCTUnwrap(NSScreen.screens.first)
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = false
+        panel.setFrame(NSRect(x: screen.frame.minX + 1, y: screen.frame.minY + 1, width: 1, height: 1),
+                       display: false)
+        return panel
+    }
+
+    private func assertInFront(_ front: NSWindow, of back: NSWindow,
+                               file: StaticString = #filePath, line: UInt = #line) throws {
+        let windows = try XCTUnwrap(NSWindow.windowNumbers(), file: file, line: line).map(\.intValue)
+        let frontIndex = try XCTUnwrap(windows.firstIndex(of: front.windowNumber), file: file, line: line)
+        let backIndex = try XCTUnwrap(windows.firstIndex(of: back.windowNumber), file: file, line: line)
+        XCTAssertLessThan(frontIndex, backIndex, file: file, line: line)
+    }
+
+    private func withAppDelegate(_ body: (AppDelegate) throws -> Void) rethrows {
+        let previous = NSApp.delegate
+        let delegate = AppDelegate()
+        NSApp.delegate = delegate
+        defer { NSApp.delegate = previous }
+        try body(delegate)
     }
 
     private func command(_ key: String, modifiers: NSEvent.ModifierFlags = .command) -> NSEvent {
@@ -143,85 +175,775 @@ final class TerminalShortcutTests: XCTestCase {
         XCTAssertTrue(panel.ignoresMouseEvents, "Rounded transparent corners should not intercept clicks")
     }
 
-    func testPanelLowersForBackgroundAppAndRaisesWhenClickedAgain() {
+    func testPanelLowersForBackgroundAppAndRaisesWhenClickedAgain() throws {
         let panel = panel()
         panel.enableTransparentMarginPassthrough { _, _ in true }
-        panel.orderFrontRegardless()
-        defer { panel.close() }
+        let backgroundWindow = self.panel()
+        backgroundWindow.orderFrontRegardless()
+        panel.raiseForPanelInteraction()
+        defer { panel.close(); backgroundWindow.close() }
 
         panel.lowerForBackgroundInteraction()
         XCTAssertEqual(panel.level, .normal)
+        try assertInFront(backgroundWindow, of: panel)
 
         panel.raiseForPanelInteraction()
-        XCTAssertEqual(panel.level, .floating)
+        XCTAssertEqual(panel.level, .normal)
+        try assertInFront(panel, of: backgroundWindow)
     }
 
-    func testDraggingAFolderFromFinderKeepsPanelInFront() {
+    func testMissionControlSelectionCanCoverPanelWithoutActivationOrMouseEvents() throws {
         let panel = panel()
         panel.enableTransparentMarginPassthrough { _, _ in true }
-        panel.orderFrontRegardless()
-        defer { panel.close() }
+        let selectedWindow = self.panel()
+        selectedWindow.level = .normal
+        selectedWindow.orderFrontRegardless()
+        defer { panel.close(); selectedWindow.close() }
+        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let keyWindow = NSApp.keyWindow
+
         panel.raiseForPanelInteraction()
+        try assertInFront(panel, of: selectedWindow)
+        XCTAssertEqual(panel.level, .normal)
+        XCTAssertFalse(panel.isFloatingPanel)
+        XCTAssertTrue(panel.collectionBehavior.contains(.managed))
+
+        // Model Mission Control's resulting order, including reselecting the
+        // app already beneath Peeky: no activation notification or mouse click.
+        selectedWindow.orderFrontRegardless()
+        panel.refreshMousePassthrough(at: NSPoint(x: panel.frame.midX, y: panel.frame.midY))
+        try assertInFront(selectedWindow, of: panel)
+
+        panel.handleLocalMouseDown(in: panel)
+        try assertInFront(panel, of: selectedWindow)
+        selectedWindow.orderFrontRegardless()
+        try assertInFront(selectedWindow, of: panel)
+        XCTAssertTrue(NSApp.keyWindow === keyWindow)
+        XCTAssertEqual(NSWorkspace.shared.frontmostApplication?.processIdentifier, frontmostPID)
+    }
+
+    func testSelectingPeekyThroughApplicationActivationRaisesWithoutRepinning() throws {
+        let panel = panel()
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.raiseForPanelInteraction()
+        let selectedWindow = self.panel()
+        selectedWindow.orderFrontRegardless()
+        defer { panel.close(); selectedWindow.close() }
+
+        try withAppDelegate { _ in
+            // A Mission Control selection may begin as a click delivered to
+            // Dock rather than to Peeky's local mouse monitor.
+            panel.handleBackgroundMouse(.leftMouseDown, at: NSPoint(x: 100, y: 100))
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+            try assertInFront(panel, of: selectedWindow)
+            panel.handleBackgroundMouse(.leftMouseUp, at: NSPoint(x: 100, y: 100))
+            try assertInFront(panel, of: selectedWindow)
+            XCTAssertEqual(panel.level, .normal)
+            XCTAssertTrue(panel.collectionBehavior.contains(.managed))
+            XCTAssertFalse(panel.styleMask.contains(.nonactivatingPanel))
+
+            selectedWindow.orderFrontRegardless()
+            NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp)
+            try assertInFront(selectedWindow, of: panel)
+        }
+    }
+
+    func testLegacyKeyWindowSelectionRaisesWithoutApplicationActivation() throws {
+        let panel = panel(nonactivating: true)
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.raiseForPanelInteraction()
+        let selectedWindow = self.panel()
+        selectedWindow.orderFrontRegardless()
+        defer { panel.close(); selectedWindow.close() }
+        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+
+        panel.makeKey()
+        XCTAssertTrue(panel.isKeyWindow)
+        try assertInFront(panel, of: selectedWindow)
+        XCTAssertEqual(panel.level, .normal)
+        XCTAssertEqual(NSWorkspace.shared.frontmostApplication?.processIdentifier, frontmostPID)
+        selectedWindow.orderFrontRegardless()
+        try assertInFront(selectedWindow, of: panel)
+    }
+
+    func testLegacySystemSelectionMakesNormalCardKeyAndMainWithoutActivatingAnotherApp() {
+        let panel = panel(nonactivating: true)
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.raiseForPanelInteraction()
+        defer { panel.close() }
+        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+
+        XCTAssertTrue(panel.canBecomeMain)
+        withAppDelegate { _ in
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+            XCTAssertTrue(panel.isKeyWindow)
+            XCTAssertTrue(panel.isMainWindow)
+            XCTAssertTrue(NSApp.mainWindow === panel)
+            XCTAssertEqual(panel.level, .normal)
+            XCTAssertTrue(panel.styleMask.contains(.nonactivatingPanel))
+            XCTAssertEqual(NSWorkspace.shared.frontmostApplication?.processIdentifier, frontmostPID)
+        }
+    }
+
+    func testLegacyDirectKeySelectionMakesNormalCardMainWithKeyOnlyIfNeeded() {
+        let panel = panel(nonactivating: true)
+        panel.becomesKeyOnlyIfNeeded = true
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.raiseForPanelInteraction()
+        defer { panel.close() }
+
+        panel.makeKey()
+        XCTAssertTrue(panel.isKeyWindow)
+        XCTAssertTrue(panel.isMainWindow)
+        XCTAssertTrue(NSApp.mainWindow === panel)
+    }
+
+    func testExplicitPresentationDoesNotTakeKeyOrMainAndFloatingModesCannotBecomeMain() {
+        let panel = panel(nonactivating: true)
+        var ordinaryCard = true
+        panel.enableTransparentMarginPassthrough(interactiveRegion: { _, _ in true },
+                                                shouldLowerForBackgroundClick: { ordinaryCard })
+        defer { panel.close() }
+        let keyWindow = NSApp.keyWindow
+        let mainWindow = NSApp.mainWindow
+        panel.raiseForPanelInteraction()
+        XCTAssertTrue(panel.canBecomeMain)
+        XCTAssertFalse(panel.isMainWindow)
+        XCTAssertFalse(panel.isKeyWindow)
+        XCTAssertTrue(NSApp.keyWindow === keyWindow)
+        XCTAssertTrue(NSApp.mainWindow === mainWindow)
+
+        panel.raiseForSystemSelection("test-main-role")
+        XCTAssertTrue(panel.isMainWindow)
+        ordinaryCard = false
+        panel.refreshWindowStacking()
+        XCTAssertFalse(panel.canBecomeMain)
+        XCTAssertFalse(panel.isMainWindow)
+        XCTAssertEqual(panel.level, .floating)
+
+        ordinaryCard = true
+        panel.refreshWindowStacking()
+        XCTAssertTrue(panel.canBecomeMain)
+        XCTAssertFalse(panel.isMainWindow, "returning to Capture alone must not claim focus")
+        XCTAssertEqual(panel.level, .normal)
+        panel.orderOut(nil)
+        XCTAssertFalse(panel.canBecomeMain)
+    }
+
+    func testPassthroughChangesDoNotResignSelectedPanelKeyOrMain() {
+        let panel = panel(nonactivating: true)
+        var interactive = true
+        panel.enableTransparentMarginPassthrough { _, _ in interactive }
+        panel.raiseForPanelInteraction()
+        panel.raiseForSystemSelection("test-passthrough")
+        defer { panel.close() }
+        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        for next in [false, true, false, true] {
+            interactive = next
+            panel.refreshMousePassthrough(at: NSPoint(x: panel.frame.midX, y: panel.frame.midY))
+            XCTAssertEqual(panel.ignoresMouseEvents, !next)
+            XCTAssertTrue(panel.isKeyWindow)
+            XCTAssertTrue(panel.isMainWindow)
+            XCTAssertEqual(NSWorkspace.shared.frontmostApplication?.processIdentifier, frontmostPID)
+        }
+    }
+
+    func testActivationDiagnosticsAndDelayedProbesNeverReclaimWindowOrder() async throws {
+        let key = "peekyWindowSelectionDiagnostics"
+        let saved = UserDefaults.standard.object(forKey: key)
+        UserDefaults.standard.set(true, forKey: key)
+        defer {
+            if let saved { UserDefaults.standard.set(saved, forKey: key) }
+            else { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        let panel = panel()
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.raiseForPanelInteraction()
+        let otherWindow = self.panel()
+        defer { panel.close(); otherWindow.close() }
+        panel.raiseForSystemSelection("diagnostic-handoff-test")
+        panel.resignKey()
+        panel.resignMain()
+        otherWindow.orderFrontRegardless()
+        NotificationCenter.default.post(name: NSApplication.didResignActiveNotification, object: NSApp)
+        for name in [NSWorkspace.didDeactivateApplicationNotification, NSWorkspace.didActivateApplicationNotification] {
+            NSWorkspace.shared.notificationCenter.post(name: name, object: NSWorkspace.shared,
+                                                       userInfo: [NSWorkspace.applicationUserInfoKey: NSRunningApplication.current])
+        }
+        try await Task.sleep(for: .milliseconds(2200))
+        try assertInFront(otherWindow, of: panel)
+        XCTAssertFalse(panel.isKeyWindow)
+        XCTAssertFalse(panel.isMainWindow)
+        XCTAssertEqual(panel.level, .normal)
+    }
+
+    func testSelectionReclaimDeadlineIsNotExtendedAndAttemptIsConsumedOnce() {
+        var policy = PanelSelectionReclaim()
+        policy.arm(at: 10)
+        policy.arm(at: 10.5)
+        XCTAssertEqual(policy.startedAt, 10)
+        XCTAssertTrue(policy.consume(at: 10.599))
+        XCTAssertFalse(policy.consume(at: 10.599))
+        policy.arm(at: 10.599)
+        XCTAssertFalse(policy.consume(at: 10.599))
+
+        var expired = PanelSelectionReclaim()
+        expired.arm(at: 10)
+        XCTAssertFalse(expired.consume(at: 10.6))
+        XCTAssertFalse(expired.consume(at: 11))
+    }
+
+    func testSelectionReclaimCancellationSurvivesLaterCallbacksInSameSelection() {
+        var policy = PanelSelectionReclaim()
+        policy.arm(at: 10)
+        policy.interrupt("user-input", at: 10.1)
+        policy.arm(at: 10.2)
+        XCTAssertFalse(policy.consume(at: 10.3))
+
+        var recentInput = PanelSelectionReclaim()
+        recentInput.interrupt("explicit-show", at: 20)
+        recentInput.arm(at: 20.1)
+        XCTAssertFalse(recentInput.consume(at: 20.2))
+        recentInput.arm(at: 21)
+        XCTAssertTrue(recentInput.consume(at: 21.1))
+    }
+
+    func testUnexpectedActivationReclaimsOnceAndDoesNotRearmFromOwnActivation() {
+        let panel = panel(nonactivating: true)
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.raiseForPanelInteraction()
+        defer { panel.close() }
+        let now = ProcessInfo.processInfo.systemUptime + 1
+        panel.observeSelectionInput(.gesture, now: now - 0.1)
+        panel.raiseForSystemSelection("application-activation", now: now, modifiers: [])
+        panel.observeSelectionInput(.mouseMoved, now: now + 0.1)
+        var activations = 0
+        let activate = {
+            activations += 1
+            panel.raiseForSystemSelection("key-window", now: now + 0.21, modifiers: [])
+            panel.raiseForSystemSelection("application-activation", now: now + 0.22, modifiers: [])
+        }
+        XCTAssertTrue(panel.reclaimAfterUnexpectedActivation(
+            of: -1, now: now + 0.2, modifiers: [], pressedMouseButtons: 0,
+            canObserveKeyboard: false, activateApplication: activate))
+        XCTAssertFalse(panel.reclaimAfterUnexpectedActivation(
+            of: -1, now: now + 0.3, modifiers: [], pressedMouseButtons: 0, activateApplication: activate))
+        panel.raiseForSystemSelection("application-activation", now: now + 1, modifiers: [])
+        panel.raiseForSystemSelection("key-window", now: now + 1.1, modifiers: [])
+        XCTAssertFalse(panel.reclaimAfterUnexpectedActivation(
+            of: -1, now: now + 1.2, modifiers: [], pressedMouseButtons: 0, activateApplication: activate))
+        XCTAssertEqual(activations, 1, "missing global keyboard permission degrades, not disables, the one-shot attempt")
+        XCTAssertEqual(panel.level, .normal)
+        XCTAssertFalse(panel.isFloatingPanel)
+
+        panel.observeSelectionInput(.scrollWheel, now: now + 2)
+        panel.raiseForSystemSelection("application-activation", now: now + 2.1, modifiers: [])
+        XCTAssertTrue(panel.reclaimAfterUnexpectedActivation(
+            of: -1, now: now + 2.3, modifiers: [], pressedMouseButtons: 0,
+            activateApplication: { activations += 1 }))
+        XCTAssertEqual(activations, 2, "a later user selection can get its own one-shot attempt")
+    }
+
+    func testMouseKeyboardAndGestureInputCancelReclaim() {
+        let events: [NSEvent.EventType] = [
+            .leftMouseDown, .leftMouseUp, .rightMouseDown, .otherMouseDown,
+            .keyDown, .keyUp, .flagsChanged, .scrollWheel, .gesture, .swipe, .magnify, .rotate,
+        ]
+        for event in events {
+            let panel = panel(nonactivating: true)
+            panel.enableTransparentMarginPassthrough { _, _ in true }
+            panel.raiseForPanelInteraction()
+            defer { panel.close() }
+            let now = ProcessInfo.processInfo.systemUptime + 1
+            panel.raiseForSystemSelection("application-activation", now: now, modifiers: [])
+            if [.leftMouseDown, .leftMouseUp, .rightMouseDown, .otherMouseDown].contains(event) {
+                panel.handleBackgroundMouse(event, at: .zero, now: now + 0.1)
+            } else {
+                panel.observeSelectionInput(event, now: now + 0.1)
+            }
+            panel.raiseForSystemSelection("key-window", now: now + 0.2, modifiers: [])
+            XCTAssertFalse(panel.reclaimAfterUnexpectedActivation(
+                of: -1, now: now + 0.3, modifiers: [], pressedMouseButtons: 0,
+                activateApplication: { XCTFail("must not activate after \(event)") }))
+        }
+    }
+
+    func testCommandMouseButtonsExpiryAndOwnAppPreventReclaim() {
+        for (delay, modifiers, buttons, pid) in [
+            (0.2, NSEvent.ModifierFlags.command, 0, pid_t(-1)),
+            (0.2, [], 1, -1),
+            (0.6, [], 0, -1),
+            (1.0, [], 0, -1),
+            (0.2, [], 0, ProcessInfo.processInfo.processIdentifier),
+        ] {
+            let panel = panel(nonactivating: true)
+            panel.enableTransparentMarginPassthrough { _, _ in true }
+            panel.raiseForPanelInteraction()
+            defer { panel.close() }
+            let now = ProcessInfo.processInfo.systemUptime + 1
+            panel.raiseForSystemSelection("application-activation", now: now, modifiers: [])
+            XCTAssertFalse(panel.reclaimAfterUnexpectedActivation(
+                of: pid, now: now + delay, modifiers: modifiers, pressedMouseButtons: buttons,
+                activateApplication: { XCTFail("must not activate") }))
+        }
+    }
+
+    func testExplicitShowNeverArmsReclaimAndCancelsPendingSelection() {
+        let panel = panel(nonactivating: true)
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.raiseForPanelInteraction()
+        defer { panel.close() }
+        let now = ProcessInfo.processInfo.systemUptime + 1
+        XCTAssertFalse(panel.reclaimAfterUnexpectedActivation(
+            of: -1, now: now, modifiers: [], pressedMouseButtons: 0,
+            activateApplication: { XCTFail("explicit show must not arm reclaim") }))
+        panel.raiseForSystemSelection("application-activation", now: now + 1, modifiers: [])
+        panel.raiseForPanelInteraction()
+        XCTAssertFalse(panel.reclaimAfterUnexpectedActivation(
+            of: -1, now: now + 1.1, modifiers: [], pressedMouseButtons: 0,
+            activateApplication: { XCTFail("explicit show cancels reclaim") }))
+    }
+
+    func testCommandAtSelectionPreventsReclaimAfterModifierRelease() {
+        let panel = panel(nonactivating: true)
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.raiseForPanelInteraction()
+        defer { panel.close() }
+        let now = ProcessInfo.processInfo.systemUptime + 1
+        panel.raiseForSystemSelection("key-window", now: now, modifiers: .command)
+        panel.raiseForSystemSelection("application-activation", now: now + 0.1, modifiers: [])
+        XCTAssertFalse(panel.reclaimAfterUnexpectedActivation(
+            of: -1, now: now + 0.2, modifiers: [], pressedMouseButtons: 0,
+            activateApplication: { XCTFail("Cmd-Tab must never arm a reclaim") }))
+    }
+
+    func testFloatingModeAndCleanupWindowPreventPendingReclaim() throws {
+        for floating in [true, false] {
+            let panel = panel(nonactivating: true)
+            var ordinaryCard = true
+            panel.enableTransparentMarginPassthrough(interactiveRegion: { _, _ in true },
+                                                    shouldLowerForBackgroundClick: { ordinaryCard })
+            panel.raiseForPanelInteraction()
+            let cleanup = try transparentOnscreenPanel()
+            defer { panel.close(); cleanup.close() }
+            let now = ProcessInfo.processInfo.systemUptime + 1
+            panel.raiseForSystemSelection("application-activation", now: now, modifiers: [])
+            if floating {
+                ordinaryCard = false
+                panel.refreshWindowStacking()
+            } else {
+                cleanup.makeKeyAndOrderFront(nil)
+                XCTAssertTrue(NSApp.keyWindow === cleanup)
+            }
+            XCTAssertFalse(panel.reclaimAfterUnexpectedActivation(
+                of: -1, now: now + 0.2, modifiers: [], pressedMouseButtons: 0,
+                activateApplication: { XCTFail("must not reclaim over floating modes or cleanup") }))
+        }
+    }
+
+    func testPickerLoweringAndHiddenPanelPreventReclaim() {
+        for action in 0..<3 {
+            let panel = panel(nonactivating: true)
+            panel.enableTransparentMarginPassthrough { _, _ in true }
+            panel.raiseForPanelInteraction()
+            defer { panel.close() }
+            let now = ProcessInfo.processInfo.systemUptime + 1
+            panel.raiseForSystemSelection("application-activation", now: now, modifiers: [])
+            switch action {
+            case 0: panel.beginNativeDialog()
+            case 1: panel.lowerForBackgroundInteraction(now: now + 0.1)
+            default: panel.orderOut(nil)
+            }
+            XCTAssertFalse(panel.reclaimAfterUnexpectedActivation(
+                of: -1, now: now + 0.2, modifiers: [], pressedMouseButtons: 0,
+                activateApplication: { XCTFail("must not activate for blocked panel") }))
+        }
+    }
+
+    func testDefaultActivatingStyleSkipsReclaimAndLegacyOptOutRequiresReconstruction() {
+        let key = "peekyLegacyNonactivatingPanel"
+        let saved = UserDefaults.standard.object(forKey: key)
+        defer {
+            if let saved { UserDefaults.standard.set(saved, forKey: key) }
+            else { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        UserDefaults.standard.removeObject(forKey: key)
+        XCTAssertFalse(KeyablePanel.initialStyleMask().contains(.nonactivatingPanel))
+        let controller = AssistantPanelController()
+        let panel = controller.ensurePanel()
+        panel.contentViewController = nil
+        panel.setFrameOrigin(NSPoint(x: -20000, y: -20000))
+        defer { panel.close() }
+        XCTAssertFalse(panel.styleMask.contains(.nonactivatingPanel))
+        UserDefaults.standard.set(true, forKey: key)
+        XCTAssertTrue(KeyablePanel.initialStyleMask().contains(.nonactivatingPanel))
+        panel.refreshWindowStacking()
+        XCTAssertFalse(panel.styleMask.contains(.nonactivatingPanel), "do not mutate WindowServer activation tags live")
+        panel.raiseForPanelInteraction()
+        let now = ProcessInfo.processInfo.systemUptime + 1
+        panel.raiseForSystemSelection("application-activation", now: now, modifiers: [])
+        XCTAssertFalse(panel.reclaimAfterUnexpectedActivation(
+            of: -1, now: now + 0.2, modifiers: [], pressedMouseButtons: 0,
+            activateApplication: { XCTFail("default activating panels must never reclaim") }))
+    }
+
+    func testQuestionTypingAndEscapeKeepWorkingWithActivatingPanel() {
+        let panel = panel()
+        let editor = NSTextView(frame: panel.contentView!.bounds)
+        panel.contentView!.addSubview(editor)
+        panel.orderFrontRegardless()
+        panel.makeKey()
+        XCTAssertTrue(panel.makeFirstResponder(editor))
+        defer { panel.close() }
+        editor.insertText("Explain this code", replacementRange: NSRange(location: 0, length: 0))
+        XCTAssertEqual(editor.string, "Explain this code")
+        panel.onCancel = { true }
+        panel.cancelOperation(nil)
+        XCTAssertTrue(panel.isVisible, "a busy operation can consume Escape")
+        panel.onCancel = { false }
+        panel.cancelOperation(nil)
+        XCTAssertFalse(panel.isVisible, "otherwise Escape dismisses the card")
+    }
+
+    func testLateMissionControlClickDoesNotUndoSystemSelection() throws {
+        let panel = panel()
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.raiseForPanelInteraction()
+        let otherWindow = self.panel()
+        otherWindow.orderFrontRegardless()
+        defer { panel.close(); otherWindow.close() }
+
+        try withAppDelegate { _ in
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+            panel.handleBackgroundMouse(.leftMouseDown, at: NSPoint(x: 100, y: 100))
+            panel.handleBackgroundMouse(.leftMouseUp, at: NSPoint(x: 100, y: 100))
+            try assertInFront(panel, of: otherWindow)
+            XCTAssertEqual(panel.level, .normal)
+        }
+    }
+
+    func testOffscreenKeyWindowDoesNotBlockPeekySelection() throws {
+        let panel = panel()
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.raiseForPanelInteraction()
+        let offscreenWindow = self.panel(nonactivating: true)
+        offscreenWindow.makeKeyAndOrderFront(nil)
+        defer { panel.close(); offscreenWindow.close() }
+
+        try withAppDelegate { _ in
+            XCTAssertTrue(NSApp.keyWindow === offscreenWindow)
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+            try assertInFront(panel, of: offscreenWindow)
+        }
+    }
+
+    func testSelectionGraceExpiresAndDoesNotPreventNativeWindowOrdering() throws {
+        let panel = panel()
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.raiseForPanelInteraction()
+        let otherWindow = self.panel()
+        otherWindow.orderFrontRegardless()
+        defer { panel.close(); otherWindow.close() }
+        let now = ProcessInfo.processInfo.systemUptime
+        let deadline = now + KeyablePanel.systemSelectionGrace
+        let point = NSPoint(x: 100, y: 100)
+
+        panel.raiseForSystemSelection("test-selection", now: now)
+        panel.handleBackgroundMouse(.leftMouseDown, at: point, now: now + 0.1)
+        panel.handleBackgroundMouse(.leftMouseUp, at: point, now: deadline + 0.1)
+        try assertInFront(panel, of: otherWindow)
+        panel.handleBackgroundMouse(.rightMouseDown, at: point, now: deadline - 0.001)
+        panel.handleBackgroundMouse(.otherMouseDown, at: point, now: deadline - 0.001)
+        panel.lowerForBackgroundInteraction(now: deadline - 0.001)
+        try assertInFront(panel, of: otherWindow)
+
+        otherWindow.orderFrontRegardless()
+        try assertInFront(otherWindow, of: panel)
+        panel.raiseForPanelInteraction()
+        panel.handleBackgroundMouse(.leftMouseDown, at: point, now: deadline)
+        panel.handleBackgroundMouse(.leftMouseUp, at: point, now: deadline)
+        try assertInFront(otherWindow, of: panel)
+        XCTAssertEqual(panel.level, .normal)
+    }
+
+    func testTransparentOrClickThroughKeyWindowDoesNotBlockSelection() throws {
+        let panel = panel()
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.raiseForPanelInteraction()
+        let otherWindow = try transparentOnscreenPanel()
+        defer { panel.close(); otherWindow.close() }
+
+        try withAppDelegate { _ in
+            otherWindow.alphaValue = 0
+            otherWindow.makeKeyAndOrderFront(nil)
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+            try assertInFront(panel, of: otherWindow)
+
+            otherWindow.alphaValue = 1
+            otherWindow.ignoresMouseEvents = true
+            otherWindow.makeKeyAndOrderFront(nil)
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+            try assertInFront(panel, of: otherWindow)
+        }
+    }
+
+    func testWindowSelectionDiagnosticsPreserveNormalStacking() {
+        let key = "peekyWindowSelectionDiagnostics"
+        let saved = UserDefaults.standard.object(forKey: key)
+        UserDefaults.standard.set(true, forKey: key)
+        defer {
+            if let saved { UserDefaults.standard.set(saved, forKey: key) }
+            else { UserDefaults.standard.removeObject(forKey: key) }
+        }
+        let panel = panel()
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.raiseForPanelInteraction()
+        defer { panel.close() }
+        panel.raiseForSystemSelection("diagnostic-public-test")
+        XCTAssertEqual(panel.level, .normal)
+        XCTAssertTrue(panel.collectionBehavior.contains(.managed))
+    }
+
+    func testReopeningPeekyRaisesVisibleCardAtNormalLevel() throws {
+        let panel = panel()
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.raiseForPanelInteraction()
+        let selectedWindow = self.panel()
+        selectedWindow.orderFrontRegardless()
+        defer { panel.close(); selectedWindow.close() }
+
+        try withAppDelegate { delegate in
+            XCTAssertTrue(delegate.applicationShouldHandleReopen(NSApp, hasVisibleWindows: true))
+            try assertInFront(panel, of: selectedWindow)
+            XCTAssertEqual(panel.level, .normal)
+            selectedWindow.orderFrontRegardless()
+            try assertInFront(selectedWindow, of: panel)
+        }
+    }
+
+    func testSystemSelectionDoesNotRaiseOverNativePickerOrCleanupWindow() throws {
+        let panel = panel()
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.raiseForPanelInteraction()
+        let otherWindow = try transparentOnscreenPanel()
+        defer { panel.close(); otherWindow.close() }
+
+        try withAppDelegate { delegate in
+            panel.beginNativeDialog()
+            otherWindow.level = .floating
+            otherWindow.orderFrontRegardless()
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+            try assertInFront(otherWindow, of: panel)
+            panel.makeKey()
+            try assertInFront(otherWindow, of: panel)
+            XCTAssertEqual(panel.level, .floating)
+            panel.endNativeDialog()
+            panel.resignKey()
+
+            // Drive/Gmail cleanup makes its own window key before NSApp.activate.
+            otherWindow.level = .normal
+            otherWindow.makeKeyAndOrderFront(nil)
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+            XCTAssertTrue(delegate.applicationShouldHandleReopen(NSApp, hasVisibleWindows: true))
+            try assertInFront(otherWindow, of: panel)
+            XCTAssertTrue(NSApp.keyWindow === otherWindow)
+            XCTAssertEqual(panel.level, .normal)
+        }
+    }
+
+    func testSystemSelectionDoesNotShowHiddenPanelOrReorderFloatingModes() throws {
+        let panel = panel()
+        var lowerForBackgroundClick = true
+        panel.enableTransparentMarginPassthrough(interactiveRegion: { _, _ in true },
+                                                shouldLowerForBackgroundClick: { lowerForBackgroundClick })
+        let otherWindow = self.panel()
+        defer { panel.close(); otherWindow.close() }
+
+        try withAppDelegate { delegate in
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+            XCTAssertTrue(delegate.applicationShouldHandleReopen(NSApp, hasVisibleWindows: false))
+            XCTAssertFalse(panel.isVisible)
+
+            lowerForBackgroundClick = false
+            panel.raiseForPanelInteraction()
+            otherWindow.level = .floating
+            otherWindow.orderFrontRegardless()
+            NotificationCenter.default.post(name: NSApplication.didBecomeActiveNotification, object: NSApp)
+            panel.makeKey()
+            try assertInFront(otherWindow, of: panel)
+            XCTAssertEqual(panel.level, .floating)
+            XCTAssertTrue(panel.collectionBehavior.contains(.transient))
+        }
+    }
+
+    func testDraggingAFolderDoesNotExplicitlyLowerVisibleDropTarget() throws {
+        let panel = panel()
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        let backgroundWindow = self.panel()
+        backgroundWindow.orderFrontRegardless()
+        panel.raiseForPanelInteraction()
+        defer { panel.close(); backgroundWindow.close() }
 
         // Grab a folder in Finder and drag it over: press, travel, release.
         panel.handleBackgroundMouse(.leftMouseDown, at: NSPoint(x: 100, y: 100))
-        XCTAssertEqual(panel.level, .floating, "the press alone must not hide the drop target")
+        try assertInFront(panel, of: backgroundWindow)
         panel.handleBackgroundMouse(.leftMouseUp, at: NSPoint(x: 400, y: 300))
-        XCTAssertEqual(panel.level, .floating, "a drag is not a click on a background window")
+        try assertInFront(panel, of: backgroundWindow)
 
         // A plain click in another app still sends the panel back.
         panel.handleBackgroundMouse(.leftMouseDown, at: NSPoint(x: 100, y: 100))
         panel.handleBackgroundMouse(.leftMouseUp, at: NSPoint(x: 101, y: 102))
-        XCTAssertEqual(panel.level, .normal)
+        try assertInFront(backgroundWindow, of: panel)
 
         // A stray release with no press recorded is ignored.
         panel.raiseForPanelInteraction()
         panel.handleBackgroundMouse(.leftMouseUp, at: NSPoint(x: 100, y: 100))
-        XCTAssertEqual(panel.level, .floating)
+        try assertInFront(panel, of: backgroundWindow)
+        XCTAssertEqual(panel.level, .normal)
     }
 
-    func testClickingTheOpenDialogDoesNotRaisePanelOverIt() {
+    func testClickingTheOpenDialogDoesNotRaisePanelOverIt() throws {
         let panel = panel()
         panel.enableTransparentMarginPassthrough { _, _ in true }
         panel.orderFrontRegardless()
         defer { panel.close() }
         panel.lowerForBackgroundInteraction()
-        XCTAssertEqual(panel.level, .normal)
 
-        let dialog = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 300, height: 200),
-                             styleMask: [.titled], backing: .buffered, defer: false)
+        let dialog = self.panel()
+        dialog.orderFrontRegardless()
         defer { dialog.close() }
         panel.handleLocalMouseDown(in: dialog)
-        XCTAssertEqual(panel.level, .normal, "a click in another window of the app leaves the panel where it is")
+        try assertInFront(dialog, of: panel)
         panel.handleLocalMouseDown(in: nil)
-        XCTAssertEqual(panel.level, .normal)
+        try assertInFront(dialog, of: panel)
 
         panel.handleLocalMouseDown(in: panel)
-        XCTAssertEqual(panel.level, .floating)
+        try assertInFront(panel, of: dialog)
+        XCTAssertEqual(panel.level, .normal)
     }
 
-    func testNativeDialogClicksDoNotLowerPanelBehindBackgroundApp() {
+    func testNativeDialogClicksDoNotLowerPanelBehindBackgroundApp() throws {
         let panel = panel()
         panel.enableTransparentMarginPassthrough { _, _ in true }
-        panel.level = .floating
-        panel.orderFrontRegardless()
-        defer { panel.close() }
+        let backgroundWindow = self.panel()
+        backgroundWindow.orderFrontRegardless()
+        panel.raiseForPanelInteraction()
+        defer { panel.close(); backgroundWindow.close() }
 
         panel.beginNativeDialog()
+        let dialog = self.panel()
+        dialog.level = .floating
+        dialog.orderFrontRegardless()
+        defer { dialog.close() }
         panel.handleBackgroundMouse(.leftMouseDown, at: NSPoint(x: 100, y: 100))
         panel.handleBackgroundMouse(.leftMouseUp, at: NSPoint(x: 101, y: 101))
         panel.lowerForBackgroundInteraction()
         XCTAssertEqual(panel.level, .floating)
+        try assertInFront(panel, of: backgroundWindow)
+        panel.handleLocalMouseDown(in: dialog)
+        panel.handleLocalMouseDown(in: panel)
+        panel.raiseForPanelInteraction()
+        try assertInFront(dialog, of: panel)
 
+        dialog.orderOut(nil)
         panel.endNativeDialog()
-        XCTAssertEqual(panel.level, .floating)
+        XCTAssertEqual(panel.level, .normal)
+        XCTAssertTrue(panel.collectionBehavior.contains(.managed))
+        try assertInFront(panel, of: backgroundWindow)
         panel.handleBackgroundMouse(.leftMouseDown, at: NSPoint(x: 100, y: 100))
         panel.handleBackgroundMouse(.leftMouseUp, at: NSPoint(x: 101, y: 101))
-        XCTAssertEqual(panel.level, .normal, "normal background clicks should lower Peeky after the picker closes")
+        try assertInFront(backgroundWindow, of: panel)
+    }
+
+    func testNestedNativeDialogsRestorePolicyOnlyAfterLastDialogAndDoNotReopenHiddenPanel() {
+        let panel = panel()
+        panel.enableTransparentMarginPassthrough { _, _ in true }
+        panel.raiseForPanelInteraction()
+        defer { panel.close() }
+        panel.beginNativeDialog()
+        panel.beginNativeDialog()
+        panel.endNativeDialog()
+        XCTAssertEqual(panel.level, .floating)
+        panel.orderOut(nil)
+        panel.endNativeDialog()
+        XCTAssertFalse(panel.isVisible)
+        XCTAssertEqual(panel.level, .normal)
+        XCTAssertFalse(panel.isFloatingPanel)
+        XCTAssertTrue(panel.collectionBehavior.contains(.managed))
+    }
+
+    func testControllerShowAndPolicyTransitionsDoNotRepinCapture() throws {
+        let controller = AssistantPanelController()
+        let panel = controller.ensurePanel()
+        // Exercise the real controller without rendering a card on the user's desktop.
+        panel.contentViewController = nil
+        panel.alphaValue = 0
+        let hiddenTabs = UserDefaults.standard.object(forKey: AssistantState.hiddenTabsKey)
+        controller.state.hiddenTabs = []
+        defer {
+            controller.hide()
+            panel.close()
+            if let hiddenTabs {
+                UserDefaults.standard.set(hiddenTabs, forKey: AssistantState.hiddenTabsKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: AssistantState.hiddenTabsKey)
+            }
+        }
+        let screen = try XCTUnwrap(NSScreen.screens.first)
+        let backgroundWindow = self.panel()
+        backgroundWindow.orderFrontRegardless()
+        defer { backgroundWindow.close() }
+        let presentations: [(String, () -> Void)] = [
+            ("show", { controller.show(near: .zero, on: screen) }),
+            ("capture", { controller.showInCorner(on: screen) }),
+            ("remote strip", { controller.showAsStrip(on: screen) }),
+            ("remote full", { controller.presentFull(near: .zero, on: screen) }),
+            ("remote screen", { controller.move(toScreenIndex: 1) }),
+            ("restore dot", { controller.expand() }),
+        ]
+        for (name, present) in presentations {
+            controller.state.tab = .captureDictate
+            controller.minimize()
+            XCTAssertEqual(panel.level, .floating, name)
+            XCTAssertTrue(panel.isFloatingPanel, name)
+            XCTAssertTrue(panel.collectionBehavior.contains(.transient), name)
+            panel.lowerForBackgroundInteraction()
+            XCTAssertEqual(panel.level, .floating, name)
+            present()
+            XCTAssertFalse(controller.state.collapsed, name)
+            XCTAssertEqual(panel.level, .normal, name)
+            XCTAssertFalse(panel.isFloatingPanel, name)
+            XCTAssertTrue(panel.collectionBehavior.contains(.managed), name)
+            XCTAssertFalse(panel.collectionBehavior.contains(.transient), name)
+            try assertInFront(panel, of: backgroundWindow)
+            backgroundWindow.orderFrontRegardless()
+            try assertInFront(backgroundWindow, of: panel)
+        }
+
+        controller.toggleStrip()
+        try assertInFront(panel, of: backgroundWindow)
+        XCTAssertEqual(panel.level, .normal)
+        controller.state.tab = .video
+        panel.lowerForBackgroundInteraction()
+        XCTAssertEqual(panel.level, .floating)
+        controller.state.tab = .captureDictate
+        XCTAssertEqual(panel.level, .normal)
+        XCTAssertTrue(panel.collectionBehavior.contains(.managed))
+
+        panel.beginNativeDialog()
+        controller.state.tab = .video
+        controller.state.tab = .captureDictate
+        XCTAssertEqual(panel.level, .floating, "tab changes must not bypass an open picker's guard")
+        panel.endNativeDialog()
+        XCTAssertEqual(panel.level, .normal)
+        XCTAssertTrue(panel.collectionBehavior.contains(.managed))
+        XCTAssertTrue(panel.collectionBehavior.contains(.canJoinAllSpaces))
+        XCTAssertTrue(panel.collectionBehavior.contains(.fullScreenAuxiliary))
     }
 
     func testFocusOnMountDoesNotStealLaterFieldFocus() async {
-        let panel = panel()
+        let panel = panel(nonactivating: true)
         panel.orderFrontRegardless()
         panel.makeKey()
         defer { panel.close() }

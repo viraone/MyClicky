@@ -252,7 +252,7 @@ enum ActionPlanner {
     static func run(utterance: String, apiKey: String, targetApp: NSRunningApplication? = nil, screen: NSScreen,
                     callbacks: Callbacks, screenshot: @escaping () async throws -> Data) async {
         let claude = AnthropicService(apiKey: apiKey)
-        var app = targetApp ?? NSWorkspace.shared.frontmostApplication
+        var app = targetApp ?? FrontmostTracker.shared.targetApplication
         let elements = AXActions.read(in: app)
 
         let hasCopied = callbacks.lastCopied().map { !$0.isEmpty } ?? false
@@ -399,7 +399,13 @@ enum ActionPlanner {
         // confirm the intended app is actually in front first.
         // Messages verbs drive Messages, not the app the recording started in.
         let isExtensionVerb = !builtinVerbs.contains(step.verb)
-        if !isExtensionVerb, !["open", "send_copied", "compose_email", "open_conversation"].contains(step.verb) { await ensureFrontmost(app) }
+        if !isExtensionVerb, !["open", "send_copied", "compose_email", "open_conversation"].contains(step.verb) {
+            let ready = await ensureFrontmost(app)
+            if ["click", "focus", "type", "press", "scroll"].contains(step.verb), !ready {
+                outcome = "Select the target app and try again. No input was sent."
+                return false
+            }
+        }
         switch step.verb {
         case "open":
             guard let name = step.app, let resolved = AppDriver.ensureRunning(appNamed: name) else { return false }
@@ -545,11 +551,23 @@ enum ActionPlanner {
     /// Brings the app this plan is driving back to the front if focus drifted
     /// away, so input can't land in a bystander app.
     @MainActor
-    private static func ensureFrontmost(_ app: NSRunningApplication?) async {
-        guard let app, !app.isActive else { return }
+    static func ensureFrontmost(_ app: NSRunningApplication?) async -> Bool {
+        guard let app, !app.isTerminated else {
+            log.notice("no running target app — not sending input")
+            return false
+        }
+        if app.isActive { return true }
         log.notice("target app not frontmost — reactivating \(app.localizedName ?? "?", privacy: .public)")
-        app.activate(options: [.activateAllWindows])
+        guard app.activate(options: [.activateAllWindows]) else {
+            log.error("target app activation failed — not sending input")
+            return false
+        }
         try? await Task.sleep(nanoseconds: 350_000_000)
+        guard !Task.isCancelled, app.isActive else {
+            log.notice("target app did not stay frontmost — not sending input")
+            return false
+        }
+        return true
     }
 
     /// Tries `visionClick` up to twice — a single vision call can miss even

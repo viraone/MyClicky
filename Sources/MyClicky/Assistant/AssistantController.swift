@@ -193,8 +193,8 @@ final class AssistantController {
 
     /// The + menu's "Files and folders": a native picker, then the choice
     /// goes through `showCapture` so it previews, copies, and opens on click
-    /// like any capture. The panel is non-activating, so the app has to be
-    /// brought forward for the picker to take keyboard focus.
+    /// like any capture. Hotkey/remote presentation need not activate Peeky,
+    /// so bring the app forward for the picker to take keyboard focus.
     private func attachFileFromMac() {
         let open = NSOpenPanel()
         open.title = "Add to Peeky"
@@ -708,7 +708,7 @@ final class AssistantController {
     /// params: the frontmost app and the Peeky Code project, if any.
     private func extensionContext() -> [String: String] {
         var env: [String: String] = [:]
-        if let app = NSWorkspace.shared.frontmostApplication {
+        if let app = FrontmostTracker.shared.targetApplication {
             env["PEEKY_FRONT_APP"] = app.localizedName ?? ""
             env["PEEKY_FRONT_BUNDLE"] = app.bundleIdentifier ?? ""
         }
@@ -1105,8 +1105,7 @@ final class AssistantController {
     private var documentaryShowing: Bool {
         panel.state.tab == .documentary && panel.state.documentary.isShowingFilm
     }
-    /// The app a Talk command should act on, captured when recording starts —
-    /// Peeky's own panel is non-activating, so this stays the real target.
+    /// The external app a Talk command should act on, captured when recording starts.
     private var talkTargetApp: NSRunningApplication?
     /// Talk streaming: while a Talk recording is still running, every pause
     /// hands the words said since the last pause to the planner, so "copy
@@ -1177,7 +1176,7 @@ final class AssistantController {
             self?.handleQuestion(text)
         }
         panel.state.onDo = { [weak self] text in
-            self?.handleDo(text, targetApp: NSWorkspace.shared.frontmostApplication)
+            self?.handleDo(text, targetApp: FrontmostTracker.shared.targetApplication)
         }
         panel.state.onStop = { [weak self] in self?.stop() }
         panel.state.onCopyAgain = { [weak self] in self?.copyPairToClipboard() }
@@ -1363,7 +1362,7 @@ final class AssistantController {
         }
         remote.onListenTalk = { [weak self] in
             guard let self else { return }
-            self.talkTargetApp = NSWorkspace.shared.frontmostApplication
+            self.talkTargetApp = FrontmostTracker.shared.targetApplication
             // Phone-driven: if the panel was closed, it comes back as the thin
             // strip at the bottom of the work screen — a status readout, out
             // of the way. If it's already up, it stays exactly as the user
@@ -1672,7 +1671,7 @@ final class AssistantController {
             } else {
                 self.talkRanWords = []
             }
-            let targetApp = NSWorkspace.shared.frontmostApplication
+            let targetApp = FrontmostTracker.shared.targetApplication
             self.showPanel()
             // DO always answers on the Talk tab; force it so the result is
             // actually visible even if the panel was left on another tab.
@@ -1896,7 +1895,7 @@ final class AssistantController {
     private func beginListening(kind: RecordKind = .ask) {
         guard !busy else { return }
         recordKind = kind
-        if kind == .talk { talkTargetApp = NSWorkspace.shared.frontmostApplication }
+        if kind == .talk { talkTargetApp = FrontmostTracker.shared.targetApplication }
         let cursor = NSEvent.mouseLocation
         let screen = NSScreen.screens.first(where: { NSMouseInRect(cursor, $0.frame, false) }) ?? NSScreen.main
         guard let screen else { return }
@@ -2239,10 +2238,7 @@ final class AssistantController {
         // read Safari — not the app that was in front minutes ago (observed
         // live: it read Peeky's own transcript back). Follow focus, unless
         // focus is on Peeky's panel, in which case the last real app stands.
-        if let front = NSWorkspace.shared.frontmostApplication,
-           front.bundleIdentifier != Bundle.main.bundleIdentifier {
-            talkTargetApp = front
-        }
+        talkTargetApp = FrontmostTracker.shared.targetApplication
         if streamQuestionsOnly {
             if codeTabPinned { handleCodeQuestion(segment) } else { handleQuestion(segment) }
         } else {
@@ -2591,7 +2587,7 @@ final class AssistantController {
             sendOpenDraft()
             return
         }
-        let messagesInFront = [targetApp?.bundleIdentifier, NSWorkspace.shared.frontmostApplication?.bundleIdentifier]
+        let messagesInFront = [targetApp?.bundleIdentifier, FrontmostTracker.shared.targetApplication?.bundleIdentifier]
             .contains(MessagesActions.bundleID)
         let messagesRecentlyOpened = messagesDraftOpenedAt.map { Date().timeIntervalSince($0) < 10 * 60 } ?? false
         if (messagesInFront || messagesRecentlyOpened),
@@ -3074,12 +3070,16 @@ final class AssistantController {
     }
 
     private func handleClickCommand(_ question: String) {
+        guard let targetApp = FrontmostTracker.shared.targetApplication else {
+            fail("Select the app you want to click in, then ask Peeky again.")
+            return
+        }
         let screen = workingScreen
 
         // "Click it" → reuse the element we just highlighted.
         if Self.refersToLastHighlight(question), let rect = lastHighlightRect {
             ring.show(over: rect, duration: 30)
-            confirmClick(on: rect, label: "the highlighted element", screen: screen)
+            confirmClick(on: rect, label: "the highlighted element", screen: screen, targetApp: targetApp)
             return
         }
 
@@ -3098,7 +3098,8 @@ final class AssistantController {
         currentTask = Task {
             defer { if id == requestID { busy = false; currentTask = nil } }
             do {
-                let image = try await capture.captureDisplayJPEG(screen: screen, maxDimension: 1600)
+                let image = try await capture.captureDisplayJPEG(screen: screen, maxDimension: 1600,
+                                                                 excludingOwnWindows: true)
                 try Task.checkCancellation()
                 let claude = AnthropicService(apiKey: apiKey)
                 let locate = "The user wants to click something on screen. Their request: “\(question)”. Identify the exact single on-screen element they mean and return its bounding box in box_2d. In the answer, name the element briefly (e.g. “the blue Save button”)."
@@ -3117,7 +3118,7 @@ final class AssistantController {
                 ring.show(over: rect, duration: 30)
                 panel.state.status = .answering
                 panel.state.answer = answer.text
-                confirmClick(on: rect, label: answer.text, screen: screen)
+                confirmClick(on: rect, label: answer.text, screen: screen, targetApp: targetApp)
             } catch {
                 guard id == requestID, !Task.isCancelled else { return }
                 fail(error.localizedDescription)
@@ -3125,7 +3126,7 @@ final class AssistantController {
         }
     }
 
-    private func confirmClick(on rect: CGRect, label: String, screen: NSScreen) {
+    private func confirmClick(on rect: CGRect, label: String, screen: NSScreen, targetApp: NSRunningApplication) {
         panel.state.status = .answering
         let cursor = NSEvent.mouseLocation
         confirmPanel.show(
@@ -3140,10 +3141,15 @@ final class AssistantController {
             guard let self else { return }
             self.ring.hide()
             if confirmed {
-                let target = NSPoint(x: rect.midX, y: rect.midY)
-                MouseClicker.click(at: target)
-                self.panel.state.status = .idle
-                self.panel.state.answer = "Clicked!"
+                Task { @MainActor in
+                    guard await ActionPlanner.ensureFrontmost(targetApp) else {
+                        self.fail("Couldn't keep the target app in front. Nothing was clicked.")
+                        return
+                    }
+                    MouseClicker.click(at: NSPoint(x: rect.midX, y: rect.midY))
+                    self.panel.state.status = .idle
+                    self.panel.state.answer = "Clicked!"
+                }
             } else {
                 self.panel.state.status = .idle
                 self.panel.state.answer = "Cancelled — nothing was clicked."
@@ -4383,7 +4389,7 @@ final class AssistantController {
         let text = dictation.text, append = dictation.append, agent = dictation.agent
         // The display you're working on: where Peeky's panel is, else the
         // frontmost app's window, else the cursor.
-        let working = panel.screen ?? Self.screenShowing(NSWorkspace.shared.frontmostApplication) ?? activeScreen
+        let working = panel.screen ?? Self.screenShowing(FrontmostTracker.shared.targetApplication) ?? activeScreen
         var request = TerminalActions.Request(agent: dictation.agentName, anyAgent: agent && dictation.agentName == nil)
         let byX = NSScreen.screens.sorted { $0.frame.minX < $1.frame.minX }
         switch dictation.screen {

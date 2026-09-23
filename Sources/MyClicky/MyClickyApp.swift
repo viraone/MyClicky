@@ -17,6 +17,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var controller: CaptureController?
     private var assistant: AssistantController?
 
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        _ = FrontmostTracker.shared
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        raiseAssistantPanels(in: NSApp, source: "application-activation")
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        raiseAssistantPanels(in: sender, source: "application-reopen")
+        return true
+    }
+
+    private func raiseAssistantPanels(in application: NSApplication, source: String) {
+        for case let panel as KeyablePanel in application.windows {
+            panel.raiseForSystemSelection(source)
+        }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         controller = CaptureController()

@@ -70,7 +70,7 @@ enum BrowserTabReader {
 
     static func activeTabURL() -> String? {
         let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
-        let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        let frontmost = FrontmostTracker.shared.targetApplication?.bundleIdentifier
 
         // Prefer the frontmost browser, then any running one.
         let ordered = browsers.sorted { a, _ in a.bundleID == frontmost }
@@ -85,7 +85,7 @@ enum BrowserTabReader {
     /// URL and page title of the active tab in the frontmost supported browser.
     static func activeTab() -> (url: String, title: String)? {
         let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
-        let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        let frontmost = FrontmostTracker.shared.targetApplication?.bundleIdentifier
         let ordered = browsers.sorted { a, _ in a.bundleID == frontmost }
         for browser in ordered where running.contains(browser.bundleID) {
             if let url = run(script: browser.script), !url.isEmpty {
@@ -100,7 +100,7 @@ enum BrowserTabReader {
     /// like pressing ⌘R. Returns false if no supported browser is running.
     static func reloadActiveTab() -> Bool {
         let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
-        let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        let frontmost = FrontmostTracker.shared.targetApplication?.bundleIdentifier
         let ordered = browsers.sorted { a, _ in a.bundleID == frontmost }
         for browser in ordered where running.contains(browser.bundleID) {
             guard let reloadScript = browser.reloadScript else { continue }
@@ -115,7 +115,7 @@ enum BrowserTabReader {
     /// current URL matches `predicate`. Returns true if a tab was retargeted.
     static func navigateActiveTab(matching predicate: (String) -> Bool, to url: String) -> Bool {
         let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
-        let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        let frontmost = FrontmostTracker.shared.targetApplication?.bundleIdentifier
         let ordered = browsers.sorted { a, _ in a.bundleID == frontmost }
         for browser in ordered where running.contains(browser.bundleID) {
             guard let setScript = browser.setScript,
@@ -136,7 +136,7 @@ enum BrowserTabReader {
     /// Safari needs Develop ▸ "Allow JavaScript from Apple Events").
     static func runJavaScript(_ js: String, inTabMatching predicate: (String) -> Bool) -> String? {
         let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
-        let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        let frontmost = FrontmostTracker.shared.targetApplication?.bundleIdentifier
         let ordered = browsers.sorted { a, _ in a.bundleID == frontmost }
         let escaped = js
             .replacingOccurrences(of: "\\", with: "\\\\")
@@ -153,7 +153,7 @@ enum BrowserTabReader {
     /// matches `predicate`.
     static func runningBrowser(withTabMatching predicate: (String) -> Bool) -> NSRunningApplication? {
         let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
-        let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        let frontmost = FrontmostTracker.shared.targetApplication?.bundleIdentifier
         let ordered = browsers.sorted { a, _ in a.bundleID == frontmost }
         for browser in ordered where running.contains(browser.bundleID) {
             guard let current = run(script: browser.script), predicate(current) else { continue }
@@ -186,7 +186,7 @@ enum BrowserTabReader {
     @discardableResult
     static func selectTab(urlContains needle: String, in bundleID: String? = nil) -> NSRunningApplication? {
         let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
-        let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        let frontmost = FrontmostTracker.shared.targetApplication?.bundleIdentifier
         let scripts = tabSelectScripts(urlContains: needle)
             .filter { bundleID == nil || $0.bundleID == bundleID }
             .sorted { a, _ in a.bundleID == frontmost }

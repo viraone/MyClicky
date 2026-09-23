@@ -73,7 +73,7 @@ enum AXActions {
     /// capped at `limit` and de-duplicated by role+label+position.
     @MainActor
     static func read(in app: NSRunningApplication? = nil, limit: Int = 150) -> [AXElement] {
-        guard let app = app ?? NSWorkspace.shared.frontmostApplication else { return [] }
+        guard let app = app ?? FrontmostTracker.shared.targetApplication else { return [] }
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetAttributeValue(appElement, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
 
@@ -144,7 +144,7 @@ enum AXActions {
     @MainActor
     @discardableResult
     static func click(label: String, in app: NSRunningApplication? = nil) -> Bool {
-        guard let app = app ?? NSWorkspace.shared.frontmostApplication,
+        guard let app = app ?? FrontmostTracker.shared.targetApplication,
               let frame = AccessibilityFinder.elementFrame(in: app, roles: clickableRoles, matching: label,
                                                             exact: preferExactMatch(for: label), onScreenOnly: true)
         else {
@@ -161,7 +161,7 @@ enum AXActions {
     @MainActor
     @discardableResult
     static func focus(label: String, in app: NSRunningApplication? = nil) -> Bool {
-        guard let app = app ?? NSWorkspace.shared.frontmostApplication,
+        guard let app = app ?? FrontmostTracker.shared.targetApplication,
               let frame = AccessibilityFinder.elementFrame(in: app, roles: focusableRoles, matching: label,
                                                             exact: preferExactMatch(for: label), onScreenOnly: true)
         else {
@@ -191,7 +191,7 @@ enum AXActions {
     @MainActor
     @discardableResult
     static func type(_ text: String, in app: NSRunningApplication? = nil) -> Bool {
-        guard let app = app ?? NSWorkspace.shared.frontmostApplication else { return false }
+        guard let app = app ?? FrontmostTracker.shared.targetApplication else { return false }
         if !hasEditableFocus(in: app) {
             guard let frame = firstFocusableFrame(in: app) else {
                 log.notice("type: no focused or recoverable editable field in \(app.localizedName ?? "?", privacy: .public) — skipping paste")

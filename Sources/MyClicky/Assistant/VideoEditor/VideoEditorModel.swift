@@ -213,8 +213,8 @@ final class VideoEditorModel: ObservableObject {
     static let importableTypes: [UTType] = [.movie, .mpeg4Movie, .quickTimeMovie, .video, .audiovisualContent]
 
     /// The Import button and drop zone: a native picker for the takes. Peeky
-    /// is an accessory app living in a non-activating panel, so the app has
-    /// to be brought forward first; otherwise the picker opens as an
+    /// may be visible without activation after a hotkey/remote show, so the
+    /// app is brought forward first; otherwise the picker opens as an
     /// inactive window whose sidebar (Desktop, external drives, ...) ignores
     /// clicks. It floats so the Peeky panel can't cover it.
     func chooseClips() {

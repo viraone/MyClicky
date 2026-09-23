@@ -88,7 +88,7 @@ enum ActivityLog {
     /// the site the user was on when they used Peeky.
     static func recordAction(_ type: String, _ details: [String: String] = [:]) {
         var payload = details
-        if let app = NSWorkspace.shared.frontmostApplication?.localizedName {
+        if let app = FrontmostTracker.shared.targetApplication?.localizedName {
             payload["app"] = app
         }
         if let url = BrowserTabReader.activeTabURL() {
