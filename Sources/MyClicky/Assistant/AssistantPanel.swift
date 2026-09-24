@@ -2289,16 +2289,29 @@ struct AssistantPanelView: View {
     // Capture + Dictate tab: the latest ⌃⌥X region grab centered on the left,
     // the latest ⌥⌘V dictation on the right. Both are kept on the clipboard as
     // one item (image + text) so a single ⌘V pastes whichever the app accepts.
+    /// Whether a dictation is in flight or has landed: a live recording, a
+    /// failed one, or cleaned-up text. When none of these hold, the tab shows
+    /// only the capture — no dictation hint or empty column.
+    private var showsDictation: Bool {
+        state.status == .listening || state.errorText != nil || !state.dictationText.isEmpty
+    }
+
     private var captureDictateTab: some View {
         Group {
             if state.captureImage != nil {
                 // Once there's a capture it takes center stage, with the
-                // dictation (live transcript or final text) directly beneath.
+                // dictation (live transcript or final text) directly beneath
+                // only while there is one to show.
                 VStack(spacing: 8) {
                     captureColumn
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    dictationUnderImage
+                    if showsDictation {
+                        dictationUnderImage
+                    }
                 }
+            } else if !showsDictation {
+                captureColumn
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if state.size == .half {
                 // The narrow column stacks the two halves instead.
                 VStack(spacing: 14) {
@@ -2326,19 +2339,20 @@ struct AssistantPanelView: View {
     }
 
     /// Compact dictation strip shown under the centered capture preview.
+    /// Only built while `showsDictation` holds, so there is no idle state.
     private var dictationUnderImage: some View {
         HStack(alignment: .top, spacing: 8) {
             if state.status == .listening {
                 Image(systemName: state.phase == .paused ? "pause.fill" : "waveform")
                     .foregroundStyle(state.accent)
                     .symbolEffect(.pulse, isActive: state.phase == .recording)
-                Text(state.transcript.isEmpty
-                     ? "Listening… speak now. Click the mic again when you're done."
-                     : state.transcript)
-                    .font(.system(size: 15, design: .monospaced))
-                    .foregroundStyle(state.transcript.isEmpty ? .white.opacity(0.6) : .white)
-                    .lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                if !state.transcript.isEmpty {
+                    Text(state.transcript)
+                        .font(.system(size: 15, design: .monospaced))
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             } else if let error = state.errorText {
                 // A fresh recording attempt just failed — say so instead of
                 // silently falling back to whatever old text is on screen.
@@ -2347,14 +2361,6 @@ struct AssistantPanelView: View {
                 Text(error)
                     .font(.system(size: 14, design: .monospaced))
                     .foregroundStyle(.orange)
-                    .lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else if state.dictationText.isEmpty {
-                Image(systemName: "mic.badge.plus")
-                    .foregroundStyle(.white.opacity(0.4))
-                Text("Click the mic (or hold ⌥⌘V) and speak — your words appear here and go on the clipboard with the image.")
-                    .font(.system(size: 14, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.55))
                     .lineLimit(2)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
@@ -2389,6 +2395,8 @@ struct AssistantPanelView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    /// The dictation half of the tab when there is no capture yet. Only built
+    /// while `showsDictation` holds, so there is no idle state.
     private var dictateColumn: some View {
         VStack(alignment: .leading, spacing: 8) {
             if state.status == .listening {
@@ -2396,11 +2404,7 @@ struct AssistantPanelView: View {
                     Image(systemName: state.phase == .paused ? "pause.fill" : "waveform")
                         .foregroundStyle(state.accent)
                         .symbolEffect(.pulse, isActive: state.phase == .recording)
-                    if state.transcript.isEmpty {
-                        Text("Listening… speak now. Click the mic again (or release ⌥⌘V) when done.")
-                            .font(.system(size: 15, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.6))
-                    } else {
+                    if !state.transcript.isEmpty {
                         ScrollView {
                             Text(state.transcript)
                                 .font(.system(size: 17, design: .monospaced))
@@ -2420,17 +2424,6 @@ struct AssistantPanelView: View {
                     Text(error)
                         .font(.system(size: 14, design: .monospaced))
                         .foregroundStyle(.orange)
-                        .multilineTextAlignment(.center)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if state.dictationText.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "mic.badge.plus")
-                        .font(.system(size: 24))
-                        .foregroundStyle(.white.opacity(0.4))
-                    Text("Click the mic below, or hold ⌥⌘V (or tap DICTATE on your phone) and speak.\nYour words are tidied up and copied to the clipboard.")
-                        .font(.system(size: 14, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.55))
                         .multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
