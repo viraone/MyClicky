@@ -18,15 +18,9 @@ import Network
 ///   TAB TERMINAL   – switch the panel to Terminal
 ///   TAB EXTENSIONS – switch the panel to Extensions (TAB EXT is an alias)
 ///   TAB DOC        – switch the panel to Peeky Code Doc
-///   TAB VIDEO      – switch the panel to Peeky Video
-///   VIDEO <action> – Peeky Video, the editor tab: PLAYPAUSE, START,
-///                    SKIP <±seconds>, SEEK <seconds>, JOG <±frames> (the
-///                    phone's dial: one frame per detent), TRIM_START <±frames>
-///                    / TRIM_END <±frames> (nudge the selected clip's cut),
-///                    SPLIT, CUT_BEFORE, CUT_AFTER, REJOIN (undo the split
-///                    nearest the playhead), ZOOM_IN, ZOOM_OUT, FILL,
-///                    FIT, EARLIER, LATER, REMOVE, CAPTIONS, EXPORT. The Mac
-///                    answers with VIDEO_STATE (see VideoEditorModel).
+///   VIDEO <action> – the video editor, which moved out to the separate
+///                    ReelFlow app. Still parsed so older phone builds get a
+///                    clean no-op; Peeky no longer answers with VIDEO_STATE.
 ///   DOC <action>   – Peeky Code Doc, the film playing in the tab: ASK (pause
 ///                    and show "Ask about <time>"; the phone then sends
 ///                    ASK <question> or DOC ASK_TEXT <question>), STOP_ASK,
@@ -156,7 +150,8 @@ final class RemoteControlService {
     /// SKIP <±s>, SEEK <s>, RESTART, RESUME, SUGGEST <i>, SHOW_ME, DEEPER,
     /// READOUT ON|OFF, STOP, PLAY_RECENT <i>.
     var onDocumentary: ((String) -> Void)?
-    /// `VIDEO <action>` — drive the Peeky Video editor tab.
+    /// `VIDEO <action>` — the video editor, which moved out to ReelFlow.
+    /// Kept so older phone builds get a clean no-op rather than an error.
     var onVideo: ((String) -> Void)?
     /// `SCREEN <n>`: put Peeky (panel and pointer) on display n, 1-based in
     /// the order macOS lists them — 1 is the built-in display when present.

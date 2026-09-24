@@ -20,9 +20,9 @@
     <key>NSCalendarsUsageDescription</key><string>Peeky creates calendar events when you ask it to, by voice.</string>
     <key>NSCalendarsFullAccessUsageDescription</key><string>Peeky creates calendar events when you ask it to, by voice.</string>
     <key>NSContactsUsageDescription</key><string>Peeky looks up a phone number when you ask it to open someone's conversation in Messages by name.</string>
-    <key>NSRemovableVolumesUsageDescription</key><string>Peeky Video imports takes and screen recordings straight from external drives and SD cards.</string>
-    <key>NSDesktopFolderUsageDescription</key><string>Peeky Video imports the clips you choose from your Desktop.</string>
-    <key>NSDocumentsFolderUsageDescription</key><string>Peeky Video imports the clips you choose from your Documents.</string>
-    <key>NSDownloadsFolderUsageDescription</key><string>Peeky Video imports the clips you choose from your Downloads.</string>
+    <key>NSRemovableVolumesUsageDescription</key><string>Peeky reads files you drop on it from external drives and SD cards.</string>
+    <key>NSDesktopFolderUsageDescription</key><string>Peeky reads the files you choose from your Desktop.</string>
+    <key>NSDocumentsFolderUsageDescription</key><string>Peeky reads the files you choose from your Documents.</string>
+    <key>NSDownloadsFolderUsageDescription</key><string>Peeky reads the files you choose from your Downloads.</string>
 </dict>
 </plist>
