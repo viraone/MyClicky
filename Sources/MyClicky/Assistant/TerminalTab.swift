@@ -23,7 +23,8 @@ final class TerminalSession: ObservableObject {
         view = PeekyTerminalView(frame: NSRect(x: 0, y: 0, width: 600, height: 300))
         view.nativeBackgroundColor = NSColor(calibratedWhite: 0.06, alpha: 1)
         view.nativeForegroundColor = NSColor.white.withAlphaComponent(0.92)
-        view.font = .monospacedSystemFont(ofSize: 12.5, weight: .regular)
+        // Matches the panel's body text; 12.5 read as fine print next to it.
+        view.font = .monospacedSystemFont(ofSize: 15, weight: .regular)
         view.caretColor = .white
         view.optionAsMetaKey = true
         view.allowMouseReporting = true
