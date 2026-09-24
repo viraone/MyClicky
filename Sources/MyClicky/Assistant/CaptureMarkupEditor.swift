@@ -99,6 +99,9 @@ struct CaptureMarkupEditor: View {
     @State private var selectedID: UUID?
     @State private var movingOriginal: CaptureMarkupAnnotation?
     @State private var dragTarget: CaptureMarkupDragTarget?
+    @State private var background: CaptureBackgroundStyle = .lastUsed()
+    // Open the section when a saved backdrop is in play, so it's obvious where it comes from.
+    @State private var showsBackgroundControls = CaptureBackgroundStyle.lastUsed().changesOutput
 
     var body: some View {
         VStack(spacing: 7) {
@@ -119,6 +122,18 @@ struct CaptureMarkupEditor: View {
                 }
 
                 Spacer(minLength: 4)
+
+                // Icon-only like Undo and Trash: the tool row already fills the
+                // narrowest panel, and a text label would truncate the tools.
+                Button {
+                    showsBackgroundControls.toggle()
+                } label: {
+                    Image(systemName: "rectangle.inset.filled")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(showsBackgroundControls || background.changesOutput
+                                 ? AnyShapeStyle(Color.cyan) : AnyShapeStyle(.foreground))
+                .help("Background: padding, backdrop, shadow and rounded corners")
 
                 Button {
                     _ = annotations.popLast()
@@ -144,13 +159,22 @@ struct CaptureMarkupEditor: View {
                 .help(selectedID == nil ? "Clear markup" : "Delete selected markup")
             }
 
+            if showsBackgroundControls {
+                backgroundControls
+            }
+
             GeometryReader { geometry in
-                let canvasSize = Self.widthFit(imageSize: image.size, width: geometry.size.width)
+                let layout = CaptureBackgroundLayout(imageSize: pixelSize, style: background)
+                    .fitted(toWidth: geometry.size.width)
+                // Annotations and gestures live in the capture's own frame, so
+                // normalized coordinates ignore the padding entirely.
+                let canvasSize = layout.screenshotFrame.size
                 ScrollView(.vertical) {
+                    // Padding is equal on every side, so centring the capture
+                    // layers in the composition lands them on `screenshotFrame`.
                     ZStack {
-                        Image(nsImage: image)
-                            .resizable()
-                            .frame(width: canvasSize.width, height: canvasSize.height)
+                        CaptureBackgroundPreview(image: image, style: background, layout: layout)
+                            .equatable()
 
                         Canvas { context, size in
                             for annotation in annotations {
@@ -171,7 +195,7 @@ struct CaptureMarkupEditor: View {
                             .frame(width: canvasSize.width, height: canvasSize.height)
                             .highPriorityGesture(markupGesture(in: canvasSize))
                     }
-                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .frame(width: layout.compositionSize.width, height: layout.compositionSize.height)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .overlay(RoundedRectangle(cornerRadius: 8)
                         .strokeBorder(Color.cyan.opacity(0.45), lineWidth: 1))
@@ -228,7 +252,11 @@ struct CaptureMarkupEditor: View {
                     .foregroundStyle(.white.opacity(0.65))
 
                 Button {
-                    guard let rendered = CaptureMarkupRenderer.render(image: image, annotations: annotations) else { return }
+                    guard let rendered = CaptureMarkupRenderer.render(
+                        image: image,
+                        annotations: annotations,
+                        background: background
+                    ) else { return }
                     onSave(rendered)
                 } label: {
                     Label("Save", systemImage: "checkmark")
@@ -239,9 +267,173 @@ struct CaptureMarkupEditor: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.cyan)
-                .disabled(annotations.isEmpty)
+                .disabled(annotations.isEmpty && !background.changesOutput)
             }
         }
+        .onChange(of: background) { _, style in
+            style.saveAsLastUsed()
+        }
+    }
+
+    /// The capture's pixel size, which is what padding is measured against.
+    /// Retina captures have twice as many pixels as points, and the export
+    /// works in pixels, so the preview must too or the padding would look
+    /// twice as wide on screen as it comes out.
+    private var pixelSize: CGSize {
+        CaptureMarkupRenderer.pixelSize(of: image)
+    }
+
+    /// Three short rows so the section still fits the half-width panel:
+    /// presets and fill type, the fill's own colours, then geometry.
+    private var backgroundControls: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                ForEach(CaptureBackgroundStyle.presets) { preset in
+                    Button {
+                        apply(preset)
+                    } label: {
+                        CaptureBackgroundSwatch(
+                            fill: preset.style.fill,
+                            isSelected: background.fill == preset.style.fill
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .help(preset.name)
+                }
+
+                Divider()
+                    .frame(height: 16)
+
+                Picker("Fill", selection: fillKind) {
+                    ForEach(CaptureBackgroundStyle.Fill.Kind.allCases) { kind in
+                        Text(kind.label).tag(kind)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .controlSize(.small)
+                .frame(width: 190)
+
+                Spacer(minLength: 0)
+            }
+
+            switch background.fill {
+            case .none:
+                EmptyView()
+            case .solid(let color):
+                HStack(spacing: 8) {
+                    controlLabel("Color")
+                    ColorPicker("Color", selection: colorBinding(color) { .solid($0) })
+                        .labelsHidden()
+                        .help("Backdrop color")
+                    Spacer(minLength: 0)
+                }
+            case .gradient(let start, let end, let angle):
+                HStack(spacing: 8) {
+                    controlLabel("From")
+                    ColorPicker("Start", selection: colorBinding(start) {
+                        .gradient(start: $0, end: end, angle: angle)
+                    })
+                    .labelsHidden()
+                    .help("Gradient start color")
+                    controlLabel("To")
+                    ColorPicker("End", selection: colorBinding(end) {
+                        .gradient(start: start, end: $0, angle: angle)
+                    })
+                    .labelsHidden()
+                    .help("Gradient end color")
+                    labeledSlider("Angle", value: gradientAngle, in: 0...360, step: 15, width: 110)
+                    Spacer(minLength: 0)
+                }
+            }
+
+            HStack(spacing: 12) {
+                labeledSlider("Padding", value: $background.padding,
+                              in: CaptureBackgroundStyle.paddingRange, step: 1)
+                labeledSlider("Corners", value: $background.cornerRadius,
+                              in: CaptureBackgroundStyle.cornerRadiusRange, step: 1)
+                Toggle("Shadow", isOn: $background.shadow)
+                    .toggleStyle(.checkbox)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.75))
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.white.opacity(0.05)))
+    }
+
+    private func controlLabel(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 11, design: .monospaced))
+            .foregroundStyle(.white.opacity(0.6))
+    }
+
+    private func labeledSlider(
+        _ title: String,
+        value: Binding<CGFloat>,
+        in range: ClosedRange<CGFloat>,
+        step: CGFloat,
+        width: CGFloat? = nil
+    ) -> some View {
+        HStack(spacing: 6) {
+            controlLabel(title)
+            Slider(value: value, in: range, step: step)
+                .controlSize(.small)
+                .frame(width: width)
+            Text("\(Int(value.wrappedValue))")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.6))
+                .frame(width: 28, alignment: .trailing)
+        }
+    }
+
+    /// From a plain capture a preset brings its whole look. Once padding and
+    /// corners have been tuned, presets only swap the backdrop so that work sticks.
+    private func apply(_ preset: CaptureBackgroundPreset) {
+        if preset.style == .plain || !background.changesOutput {
+            background = preset.style
+        } else {
+            background.fill = preset.style.fill
+        }
+    }
+
+    private var fillKind: Binding<CaptureBackgroundStyle.Fill.Kind> {
+        Binding(
+            get: { background.fill.kind },
+            set: { kind in
+                let fill = background.fill.converted(to: kind)
+                if kind != .none, !background.changesOutput {
+                    // A fill behind a capture with no padding is invisible; give it the default look.
+                    background = CaptureBackgroundStyle(fill: fill)
+                } else {
+                    background.fill = fill
+                }
+            }
+        )
+    }
+
+    private var gradientAngle: Binding<CGFloat> {
+        Binding(
+            get: {
+                guard case .gradient(_, _, let angle) = background.fill else { return 0 }
+                return CGFloat(angle)
+            },
+            set: { angle in
+                guard case .gradient(let start, let end, _) = background.fill else { return }
+                background.fill = .gradient(start: start, end: end, angle: Double(angle))
+            }
+        )
+    }
+
+    private func colorBinding(
+        _ current: CaptureBackgroundColor,
+        _ makeFill: @escaping (CaptureBackgroundColor) -> CaptureBackgroundStyle.Fill
+    ) -> Binding<Color> {
+        Binding(
+            get: { current.swiftUI },
+            set: { background.fill = makeFill(CaptureBackgroundColor($0)) }
+        )
     }
 
     private func choose(_ candidate: CaptureMarkupTool) {
@@ -589,15 +781,119 @@ private enum CaptureMarkupDrawing {
     }
 }
 
+/// The backdrop, shadow and rounded capture, drawn in the same order as the
+/// export so the preview is the export scaled down. Kept as its own equatable
+/// view so dragging annotations doesn't redraw the full-size capture.
+private struct CaptureBackgroundPreview: View, Equatable {
+    let image: NSImage
+    let style: CaptureBackgroundStyle
+    let layout: CaptureMarkupPreviewLayout
+
+    static func == (lhs: CaptureBackgroundPreview, rhs: CaptureBackgroundPreview) -> Bool {
+        lhs.image === rhs.image && lhs.style == rhs.style && lhs.layout == rhs.layout
+    }
+
+    var body: some View {
+        Canvas { context, size in
+            let frame = layout.screenshotFrame
+            let scale = layout.scale
+            let bounds = CGRect(origin: .zero, size: size)
+
+            switch style.fill {
+            case .none:
+                break
+            case .solid(let color):
+                context.fill(Path(bounds), with: .color(color.swiftUI))
+            case .gradient(let start, let end, let angle):
+                let line = CaptureBackgroundStyle.gradientLine(angle: angle, in: bounds)
+                context.fill(Path(bounds), with: .linearGradient(
+                    Gradient(colors: [start.swiftUI, end.swiftUI]),
+                    startPoint: line.start,
+                    endPoint: line.end
+                ))
+            }
+
+            let shape = Path(roundedRect: frame, cornerRadius: style.cornerRadius * scale, style: .circular)
+            context.drawLayer { layer in
+                if style.castsShadow {
+                    layer.addFilter(.shadow(
+                        color: .black.opacity(style.shadowOpacity),
+                        radius: style.shadowRadius * scale,
+                        x: style.shadowOffset.width * scale,
+                        y: style.shadowOffset.height * scale
+                    ))
+                }
+                // A nested layer makes the shadow follow the clipped shape as a whole.
+                layer.drawLayer { capture in
+                    if style.cornerRadius > 0 {
+                        capture.clip(to: shape)
+                    }
+                    capture.draw(Image(nsImage: image), in: frame)
+                }
+            }
+        }
+        .frame(width: layout.compositionSize.width, height: layout.compositionSize.height)
+    }
+}
+
+private struct CaptureBackgroundSwatch: View {
+    let fill: CaptureBackgroundStyle.Fill
+    let isSelected: Bool
+
+    var body: some View {
+        Group {
+            switch fill {
+            case .none:
+                Image(systemName: "circle.slash")
+                    .font(.system(size: 15, weight: .regular))
+                    .foregroundStyle(.white.opacity(0.6))
+            case .solid(let color):
+                Circle().fill(color.swiftUI)
+            case .gradient(let start, let end, let angle):
+                let points = CaptureBackgroundStyle.gradientUnitPoints(angle: angle)
+                Circle().fill(LinearGradient(
+                    colors: [start.swiftUI, end.swiftUI],
+                    startPoint: points.start,
+                    endPoint: points.end
+                ))
+            }
+        }
+        .frame(width: 18, height: 18)
+        .overlay(Circle().strokeBorder(
+            isSelected ? Color.cyan : Color.white.opacity(0.35),
+            lineWidth: isSelected ? 2 : 1
+        ))
+    }
+}
+
 enum CaptureMarkupRenderer {
-    static func render(image: NSImage, annotations: [CaptureMarkupAnnotation]) -> NSImage? {
+    /// The capture's pixel dimensions, falling back to its point size for
+    /// representations without fixed pixels.
+    static func pixelSize(of image: NSImage) -> CGSize {
+        let candidates = image.representations
+            .map { CGSize(width: $0.pixelsWide, height: $0.pixelsHigh) }
+            .filter { $0.width > 0 && $0.height > 0 }
+        return candidates.max { $0.width * $0.height < $1.width * $1.height } ?? image.size
+    }
+
+    /// Draws the backdrop, then the shadow, then the rounded capture, then the
+    /// annotations shifted by the padding. With `.plain` this is the exact call
+    /// sequence the renderer made before backgrounds existed.
+    static func render(
+        image: NSImage,
+        annotations: [CaptureMarkupAnnotation],
+        background: CaptureBackgroundStyle = .plain
+    ) -> NSImage? {
         var sourceRect = CGRect(origin: .zero, size: image.size)
         guard let source = image.cgImage(forProposedRect: &sourceRect, context: nil, hints: nil) else { return nil }
-        let size = NSSize(width: source.width, height: source.height)
+        let style = background.clamped
+        let imageSize = NSSize(width: source.width, height: source.height)
+        let layout = CaptureBackgroundLayout(imageSize: imageSize, style: style)
+        let size = layout.outputSize
         guard let bitmap = NSBitmapImageRep(
             bitmapDataPlanes: nil,
-            pixelsWide: source.width,
-            pixelsHigh: source.height,
+            pixelsWide: Int(size.width),
+            pixelsHigh: Int(size.height),
             bitsPerSample: 8,
             samplesPerPixel: 4,
             hasAlpha: true,
@@ -612,16 +908,20 @@ enum CaptureMarkupRenderer {
         defer { NSGraphicsContext.restoreGraphicsState() }
 
         graphics.imageInterpolation = .high
-        NSImage(cgImage: source, size: size).draw(in: NSRect(origin: .zero, size: size))
-        let lineWidth = max(3, min(size.width, size.height) * 0.009)
+        // AppKit's origin is bottom-left, but equal padding on every side means
+        // the capture's rect is the same numbers in either orientation.
+        let capture = NSRect(x: layout.padding, y: layout.padding, width: imageSize.width, height: imageSize.height)
+        drawFill(style.fill, in: NSRect(origin: .zero, size: size))
+        drawCapture(NSImage(cgImage: source, size: imageSize), in: capture, style: style, padding: layout.padding, context: graphics)
+        let lineWidth = max(3, min(imageSize.width, imageSize.height) * 0.009)
 
         for annotation in annotations {
             annotation.color.appKit.setStroke()
             annotation.color.appKit.setFill()
             switch annotation.kind {
             case .arrow(let start, let end):
-                let a = outputPoint(start, size: size)
-                let b = outputPoint(end, size: size)
+                let a = outputPoint(start, in: capture)
+                let b = outputPoint(end, in: capture)
                 let path = NSBezierPath()
                 path.lineWidth = lineWidth
                 path.lineCapStyle = .round
@@ -638,11 +938,11 @@ enum CaptureMarkupRenderer {
                                       y: b.y - head * sin(angle + .pi / 6)))
                 path.stroke()
             case .rectangle(let start, let end):
-                let path = NSBezierPath(rect: outputRect(start, end, size: size))
+                let path = NSBezierPath(rect: outputRect(start, end, in: capture))
                 path.lineWidth = lineWidth
                 path.stroke()
             case .ellipse(let start, let end):
-                let path = NSBezierPath(ovalIn: outputRect(start, end, size: size))
+                let path = NSBezierPath(ovalIn: outputRect(start, end, in: capture))
                 path.lineWidth = lineWidth
                 path.stroke()
             case .stroke(let points):
@@ -651,12 +951,12 @@ enum CaptureMarkupRenderer {
                 path.lineWidth = lineWidth
                 path.lineCapStyle = .round
                 path.lineJoinStyle = .round
-                path.move(to: outputPoint(first, size: size))
-                for point in points.dropFirst() { path.line(to: outputPoint(point, size: size)) }
+                path.move(to: outputPoint(first, in: capture))
+                for point in points.dropFirst() { path.line(to: outputPoint(point, in: capture)) }
                 path.stroke()
             case .text(let value, let location):
-                let fontSize = max(18, size.height * 0.045)
-                let point = outputPoint(location, size: size)
+                let fontSize = max(18, capture.height * 0.045)
+                let point = outputPoint(location, in: capture)
                 let attributes: [NSAttributedString.Key: Any] = [
                     .font: NSFont.systemFont(ofSize: fontSize, weight: .bold),
                     .foregroundColor: annotation.color.appKit,
@@ -669,15 +969,67 @@ enum CaptureMarkupRenderer {
         return result
     }
 
-    private static func outputPoint(_ point: CGPoint, size: NSSize) -> NSPoint {
-        NSPoint(x: point.x * size.width, y: (1 - point.y) * size.height)
+    private static func drawFill(_ fill: CaptureBackgroundStyle.Fill, in rect: NSRect) {
+        switch fill {
+        case .none:
+            return
+        case .solid(let color):
+            color.appKit.setFill()
+            rect.fill()
+        case .gradient(let start, let end, let angle):
+            // The line is computed top-left like the preview; flip y for AppKit.
+            let line = CaptureBackgroundStyle.gradientLine(angle: angle, in: rect)
+            NSGradient(starting: start.appKit, ending: end.appKit)?.draw(
+                from: NSPoint(x: line.start.x, y: rect.height - line.start.y),
+                to: NSPoint(x: line.end.x, y: rect.height - line.end.y),
+                options: [.drawsBeforeStartingLocation, .drawsAfterEndingLocation]
+            )
+        }
     }
 
-    private static func outputRect(_ a: CGPoint, _ b: CGPoint, size: NSSize) -> NSRect {
-        let left = min(a.x, b.x) * size.width
-        let right = max(a.x, b.x) * size.width
-        let top = min(a.y, b.y) * size.height
-        let bottom = max(a.y, b.y) * size.height
-        return NSRect(x: left, y: size.height - bottom, width: right - left, height: bottom - top)
+    private static func drawCapture(
+        _ capture: NSImage,
+        in rect: NSRect,
+        style: CaptureBackgroundStyle,
+        padding: CGFloat,
+        context: NSGraphicsContext
+    ) {
+        guard padding > 0 || style.cornerRadius > 0 else {
+            // Nothing to decorate: the pre-background draw, byte for byte.
+            capture.draw(in: rect)
+            return
+        }
+        let cg = context.cgContext
+        cg.saveGState()
+        if style.castsShadow {
+            // Drawn inside a transparency layer so the shadow follows the
+            // rounded, clipped capture rather than the clip cutting it off.
+            cg.setShadow(
+                offset: CGSize(width: style.shadowOffset.width, height: -style.shadowOffset.height),
+                blur: style.shadowRadius,
+                color: NSColor.black.withAlphaComponent(style.shadowOpacity).cgColor
+            )
+            cg.beginTransparencyLayer(auxiliaryInfo: nil)
+        }
+        if style.cornerRadius > 0 {
+            NSBezierPath(roundedRect: rect, xRadius: style.cornerRadius, yRadius: style.cornerRadius).addClip()
+        }
+        capture.draw(in: rect)
+        if style.castsShadow {
+            cg.endTransparencyLayer()
+        }
+        cg.restoreGState()
+    }
+
+    private static func outputPoint(_ point: CGPoint, in rect: NSRect) -> NSPoint {
+        NSPoint(x: rect.minX + point.x * rect.width, y: rect.minY + (1 - point.y) * rect.height)
+    }
+
+    private static func outputRect(_ a: CGPoint, _ b: CGPoint, in rect: NSRect) -> NSRect {
+        let left = rect.minX + min(a.x, b.x) * rect.width
+        let right = rect.minX + max(a.x, b.x) * rect.width
+        let top = min(a.y, b.y) * rect.height
+        let bottom = max(a.y, b.y) * rect.height
+        return NSRect(x: left, y: rect.minY + rect.height - bottom, width: right - left, height: bottom - top)
     }
 }
