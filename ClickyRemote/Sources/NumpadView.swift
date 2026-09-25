@@ -2044,18 +2044,22 @@ struct NumpadView: View {
                         icon: askRecording ? "stop.fill" : "questionmark.bubble.fill",
                         tint: askRecording ? Snes.red : Snes.green, lit: true,
                         h: heroH, w: heroW, hero: !isLandscape, waveform: askRecording)
-                    key("talk", label: talkRecording ? "STOP" : "TALK",
-                        icon: talkRecording ? "stop.fill" : "mic.fill",
-                        tint: talkRecording ? Snes.red : Snes.talk, lit: true,
-                        h: heroH, w: heroW, hero: !isLandscape, waveform: talkRecording) { _ in talkTapped() }
+                    key("2", label: "CAPTURE", icon: "camera.viewfinder", tint: Snes.blue, lit: true,
+                        h: heroH, w: heroW, hero: !isLandscape)
                 }
                 HStack(alignment: .top, spacing: gap) {
                     key("code", label: "PEEKY CODE", icon: "chevron.left.forwardslash.chevron.right",
                         tint: Snes.red, lit: true,
                         h: heroH, w: heroW, hero: !isLandscape) { _ in openPeekyCode() }
                         .accessibilityLabel("Open Peeky Code on Mac")
-                    key("2", label: "CAPTURE", icon: "camera.viewfinder", tint: Snes.blue, lit: true,
-                        h: heroH, w: heroW, hero: !isLandscape)
+                    key("talk", label: talkRecording ? "STOP" : "TALK",
+                        icon: talkRecording ? "stop.fill" : "mic.fill",
+                        tint: talkRecording ? Snes.red : Snes.talk, lit: true,
+                        h: heroH, w: heroW, hero: !isLandscape, waveform: talkRecording) { _ in talkTapped() }
+                        // Temporarily off at the user's request; delete these
+                        // two lines to bring TALK back.
+                        .disabled(true)
+                        .opacity(0.35)
                 }
                 HStack(alignment: .top, spacing: gap) {
                     key("terminal", label: "TERMINAL", icon: "terminal",
