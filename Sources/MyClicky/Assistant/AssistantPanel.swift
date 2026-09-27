@@ -760,6 +760,9 @@ final class AssistantState: ObservableObject {
     /// Shrunk in place to a thin bar — mic, phase, nothing else. Distinct
     /// from `collapsed`, which tucks a dot into the screen corner.
     @Published var strip = false
+    /// The strip folded to half its width — phase icon, mic, chevron, no
+    /// label. The strip's leading icon toggles it; kept across strip visits.
+    @Published var stripFolded = false
     /// A hidden tab can't become the current one: when the app tries to
     /// switch there (TALK lands on Actions, a capture on Capture…) the panel
     /// stays put, so hidden really means gone from view.
@@ -1009,6 +1012,8 @@ final class AssistantState: ObservableObject {
     var onRestore: (() -> Void)?
     /// Left-edge chevron: shrinks to the strip, or grows back from it.
     var onToggleStrip: (() -> Void)?
+    /// Strip's leading phase icon: folds the strip to half width, or back.
+    var onToggleStripFold: (() -> Void)?
     /// Sets the card size (half / normal / tall) and resizes the window to match.
     var onSetSize: ((PanelSize) -> Void)?
     /// Live corner-drag resize: called continuously with the cumulative drag
@@ -1122,10 +1127,10 @@ final class AssistantPanelController {
         }
         let visible = screen.visibleFrame
         let origin = NSPoint(
-            x: visible.midX - Self.stripSize.width / 2,
+            x: visible.midX - stripSize.width / 2,
             y: visible.minY + 16
         )
-        panel.setFrame(NSRect(origin: origin, size: Self.stripSize), display: true, animate: panel.isVisible)
+        panel.setFrame(NSRect(origin: origin, size: stripSize), display: true, animate: panel.isVisible)
         panel.orderFrontRegardless()
     }
 
@@ -1169,7 +1174,9 @@ final class AssistantPanelController {
                        y: place(origin.y, length: size.height, from: visible.minY, to: visible.maxY))
     }
     private static let collapsedSize = NSSize(width: 56, height: 56)
-    private static let stripSize = NSSize(width: 420 + glowMargin * 2, height: 52 + glowMargin * 2)
+    private static let fullStripSize = NSSize(width: 420 + glowMargin * 2, height: 52 + glowMargin * 2)
+    private static let foldedStripSize = NSSize(width: 210 + glowMargin * 2, height: 52 + glowMargin * 2)
+    private var stripSize: NSSize { state.stripFolded ? Self.foldedStripSize : Self.fullStripSize }
     private static let minPanelSize = NSSize(width: 480 + glowMargin * 2, height: 160 + glowMargin * 2)
     private static let maxPanelSize = NSSize(width: 2400, height: 1600)
     /// Full frame just before minimizing, so restoring puts it back exactly
@@ -1197,9 +1204,18 @@ final class AssistantPanelController {
         } else {
             savedFrame = panel.frame
             state.strip = true
-            let origin = NSPoint(x: panel.frame.maxX - Self.stripSize.width, y: panel.frame.maxY - Self.stripSize.height)
-            panel.setFrame(NSRect(origin: origin, size: Self.stripSize), display: true, animate: true)
+            let origin = NSPoint(x: panel.frame.maxX - stripSize.width, y: panel.frame.maxY - stripSize.height)
+            panel.setFrame(NSRect(origin: origin, size: stripSize), display: true, animate: true)
         }
+    }
+
+    /// Folds the strip to half its width, or unfolds it. The right edge —
+    /// where the chevron is — stays put.
+    func toggleStripFold() {
+        guard let panel, state.strip, !state.collapsed else { return }
+        state.stripFolded.toggle()
+        let origin = NSPoint(x: panel.frame.maxX - stripSize.width, y: panel.frame.maxY - stripSize.height)
+        panel.setFrame(NSRect(origin: origin, size: stripSize), display: true, animate: true)
     }
 
     func minimize() {
@@ -1415,6 +1431,7 @@ final class AssistantPanelController {
         state.onMinimize = { [weak self] in self?.minimize() }
         state.onRestore = { [weak self] in self?.expand() }
         state.onToggleStrip = { [weak self] in self?.toggleStrip() }
+        state.onToggleStripFold = { [weak self] in self?.toggleStripFold() }
         state.onSetSize = { [weak self] size in self?.setSize(size) }
         state.onResize = { [weak self] corner, translation in self?.resize(corner, translation: translation) }
         panel.onCancel = { [weak self] in
@@ -1788,31 +1805,42 @@ struct AssistantPanelView: View {
     /// are being heard and to end the recording, and nothing more.
     private var stripBar: some View {
         let phase = state.phase
+        let folded = state.stripFolded
         return HStack(spacing: 12) {
-            Group {
-                if phase == .recording {
-                    RecordingBars(color: phase.color)
-                } else {
-                    Image(systemName: phase.icon)
-                        .symbolEffect(.pulse, isActive: phase == .working)
+            Button {
+                state.onToggleStripFold?()
+            } label: {
+                Group {
+                    if phase == .recording {
+                        RecordingBars(color: phase.color)
+                    } else {
+                        Image(systemName: phase.icon)
+                            .symbolEffect(.pulse, isActive: phase == .working)
+                    }
                 }
-            }
-            .font(.system(size: 15, weight: .bold))
-            .foregroundStyle(phase.color)
-            .frame(width: 28, height: 20)
-            Text(phase.label)
-                .font(.system(size: 14, weight: .heavy, design: .monospaced))
-                .kerning(1.2)
+                .font(.system(size: 15, weight: .bold))
                 .foregroundStyle(phase.color)
-                .lineLimit(1)
-                .fixedSize()
-            Text(phaseHint)
-                .font(.system(size: 12.5, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.65))
-                .lineLimit(1)
-                .truncationMode(.tail)
+                .frame(width: 28, height: 28)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(folded ? "Unfold the strip" : "Fold the strip in half")
+            if !folded {
+                Text(phase.label)
+                    .font(.system(size: 14, weight: .heavy, design: .monospaced))
+                    .kerning(1.2)
+                    .foregroundStyle(phase.color)
+                    .lineLimit(1)
+                    .fixedSize()
+                Text(phaseHint)
+                    .font(.system(size: 12.5, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.65))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
             Spacer(minLength: 4)
-            if state.micLive { recBadge }
+            // Folded, the recording bars already say the mic is live.
+            if state.micLive && !folded { recBadge }
             micIndicator
             if state.canStop && state.status != .listening {
                 stopButton
