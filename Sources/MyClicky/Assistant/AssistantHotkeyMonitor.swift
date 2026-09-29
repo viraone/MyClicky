@@ -1,8 +1,10 @@
 import AppKit
 import CoreGraphics
 
-/// Press-and-hold Option+Command+C. Hold begins listening; releasing any part
-/// of the chord (the C key or either modifier) ends the hold and submits.
+/// Press-and-hold ⌥⌘ chords (⌥⌘V, for one: hold begins listening;
+/// releasing any part of the chord — the letter or either modifier — ends the
+/// hold and submits). Callers that want a one-shot (⌥⌘C, ⌥⌘D, ⌥⌘G) just leave
+/// `onHoldEnded` unset.
 ///
 /// Uses a CGEventTap so the chord (and its auto-repeats) is swallowed instead
 /// of being delivered to the focused app — otherwise macOS plays the alert
