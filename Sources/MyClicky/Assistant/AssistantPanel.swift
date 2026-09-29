@@ -289,6 +289,88 @@ private struct CaptureTrayThumb: View {
     }
 }
 
+/// A file name that turns into a text field on double-click so the file can
+/// be renamed in place, Finder-style. Only the base name is editable; the
+/// extension sits beside the field and stays put. Return commits, Escape
+/// cancels, and clicking elsewhere commits too. `onRename` gets the full new
+/// name and says whether the rename took; either way the field closes (a
+/// failure is reported through the panel's error line).
+private struct RenamableFileName: View {
+    let fileName: String
+    let font: Font
+    let color: Color
+    let onRename: (String) -> Bool
+    /// The base name being typed; nil while the plain label is showing.
+    @State private var draft: String?
+    @FocusState private var focused: Bool
+
+    private var baseName: String { (fileName as NSString).deletingPathExtension }
+    private var pathExtension: String { (fileName as NSString).pathExtension }
+
+    var body: some View {
+        if draft != nil {
+            // Deliberately bigger and brighter than the label it replaces:
+            // the small dim name is easy to lose once it turns into a field.
+            HStack(spacing: 2) {
+                TextField("", text: Binding(get: { draft ?? "" }, set: { draft = $0 }))
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 16, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white)
+                    .frame(minWidth: 220, maxWidth: 320)
+                    .focused($focused)
+                    .onSubmit(commit)
+                    .onExitCommand(perform: cancel)
+                    .onChange(of: focused) { isFocused in
+                        if !isFocused { commit() }
+                    }
+                if !pathExtension.isEmpty {
+                    Text(".\(pathExtension)")
+                        .font(.system(size: 16, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.55))
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(0.14)))
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.cyan.opacity(0.95), lineWidth: 2))
+            .shadow(color: .cyan.opacity(0.35), radius: 6)
+            .onAppear {
+                // Focus after the field has landed in the hierarchy; setting
+                // it in the same pass as the swap is silently dropped.
+                DispatchQueue.main.async { focused = true }
+            }
+        } else {
+            Text(fileName)
+                .font(font)
+                .foregroundStyle(color)
+                .lineLimit(1)
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) { draft = baseName }
+                .help("Double-click to rename the file")
+        }
+    }
+
+    private func commit() {
+        guard let typed = draft else { return }
+        draft = nil
+        let trimmed = typed.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != baseName else { return }
+        _ = onRename(Self.fullName(base: trimmed, extension: pathExtension))
+    }
+
+    private func cancel() {
+        draft = nil
+    }
+
+    /// Re-attaches the extension unless the user typed it themselves.
+    static func fullName(base: String, extension ext: String) -> String {
+        guard !ext.isEmpty else { return base }
+        if base.lowercased().hasSuffix(".\(ext.lowercased())") { return base }
+        return "\(base).\(ext)"
+    }
+}
+
 @MainActor
 final class AssistantState: ObservableObject {
     @Published var status: AssistantStatus = .idle {
@@ -826,7 +908,8 @@ final class AssistantState: ObservableObject {
     struct CaptureTrayItem: Identifiable, Equatable {
         let id = UUID()
         var image: NSImage
-        let url: URL
+        /// Follows the file when it's renamed from the preview.
+        var url: URL
         let kind: AttachmentKind
         var edited: NSImage?
         var choice: CaptureClipboardChoice = .edited
@@ -945,6 +1028,9 @@ final class AssistantState: ObservableObject {
     /// Drops just one version (original or edited) from the pair, keeping
     /// the other and the file watcher running.
     var onDiscardCaptureVersion: ((CaptureClipboardChoice) -> Void)?
+    /// Double-click on the file name under the preview: renames the file on
+    /// disk to the given name. Returns whether the rename took.
+    var onRenameCapture: ((String) -> Bool)?
     /// Tray strip: make another added image the current one, or drop one
     /// (current or not) without touching the others.
     var onSelectCaptureItem: ((UUID) -> Void)?
@@ -2544,11 +2630,12 @@ struct AssistantPanelView: View {
                                 .resizable()
                                 .aspectRatio(contentMode: .fit)
                                 .frame(width: 96, height: 96)
-                            Text(state.captureURL?.lastPathComponent ?? "")
-                                .font(.system(size: 14, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(.white.opacity(0.85))
-                                .lineLimit(2)
-                                .multilineTextAlignment(.center)
+                            RenamableFileName(
+                                fileName: state.captureURL?.lastPathComponent ?? "",
+                                font: .system(size: 14, weight: .semibold, design: .monospaced),
+                                color: .white.opacity(0.85),
+                                onRename: renameCapture
+                            )
                             Text(state.captureURL?.deletingLastPathComponent().path
                                     .replacingOccurrences(of: NSHomeDirectory(), with: "~") ?? "")
                                 .font(.system(size: 12, design: .monospaced))
@@ -2608,6 +2695,20 @@ struct AssistantPanelView: View {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(.green)
                     captureCopyAgainButton
+                    if captureStatusShowsName {
+                        if let name = state.captureURL?.lastPathComponent {
+                            RenamableFileName(
+                                fileName: name,
+                                font: .system(size: 13, design: .monospaced),
+                                color: .white.opacity(0.6),
+                                onRename: renameCapture
+                            )
+                        } else {
+                            Text("Saved")
+                                .font(.system(size: 13, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.6))
+                        }
+                    }
                     Text(captureStatusText)
                         .font(.system(size: 13, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.6))
@@ -2679,13 +2780,20 @@ struct AssistantPanelView: View {
             .buttonStyle(.plain)
             .help("Use this version for the clipboard")
             if let fileName {
-                Text(fileName)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.4))
-                    .lineLimit(1)
+                RenamableFileName(
+                    fileName: fileName,
+                    font: .system(size: 12, design: .monospaced),
+                    color: .white.opacity(0.4),
+                    onRename: renameCapture
+                )
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Hands a new name from any of the file-name labels to the controller.
+    private func renameCapture(to name: String) -> Bool {
+        state.onRenameCapture?(name) ?? false
     }
 
     /// Per-thumbnail ✕ for the Original/Edited pair, dropping just that one
@@ -2752,20 +2860,27 @@ struct AssistantPanelView: View {
         .onHover { captureCopyAgainHovering = $0 }
     }
 
+    /// The status line leads with the file name except when the
+    /// Original/Edited pair is up — each thumbnail carries the name then.
+    private var captureStatusShowsName: Bool {
+        state.attachmentKind != .capture || state.editedCaptureImage == nil
+    }
+
+    /// What follows the file name on the status line (the name itself is a
+    /// separate, renamable label — see `captureStatusShowsName`).
     private var captureStatusText: String {
-        let name = state.captureURL?.lastPathComponent ?? "Saved"
         let tray = state.captureTray
         var position = ""
         if tray.count > 1, let index = tray.firstIndex(where: { $0.id == state.captureTraySelection }) {
             position = " · \(index + 1) of \(tray.count)"
         }
         switch state.attachmentKind {
-        case .image: return "\(name) — added from this Mac and on your clipboard\(position)"
-        case .file: return "\(name) — added from this Mac, copied as a file, click to open\(position)"
+        case .image: return "— added from this Mac and on your clipboard\(position)"
+        case .file: return "— added from this Mac, copied as a file, click to open\(position)"
         case .capture: break
         }
         guard state.editedCaptureImage != nil else {
-            return "\(name) — on your clipboard\(position)"
+            return "— on your clipboard\(position)"
         }
         let which = state.clipboardChoice == .edited ? "Edited version" : "Original"
         return "\(which) on your clipboard\(position)"

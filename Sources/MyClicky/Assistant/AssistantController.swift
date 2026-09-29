@@ -389,6 +389,57 @@ final class AssistantController {
         }
     }
 
+    /// Double-click on the file name under the preview: moves the file to
+    /// the new name in the same folder, then points the preview, its tray
+    /// entry, the file watcher, and (for a file attachment, which rides the
+    /// clipboard as a URL) the clipboard at it. Nothing in memory changes —
+    /// the original and edited pixels stay exactly as they were.
+    private func renameCapture(to rawName: String) -> Bool {
+        guard let oldURL = panel.state.captureURL else { return false }
+        guard let newURL = Self.renamedCaptureURL(oldURL, to: rawName) else {
+            panel.state.errorText = "That isn't a usable file name."
+            return false
+        }
+        guard newURL != oldURL else { return true }
+        let manager = FileManager.default
+        if manager.fileExists(atPath: newURL.path) {
+            panel.state.errorText = "A file named \(newURL.lastPathComponent) is already there."
+            return false
+        }
+        do {
+            try manager.moveItem(at: oldURL, to: newURL)
+        } catch {
+            panel.state.errorText = "Couldn't rename the file: \(error.localizedDescription)"
+            return false
+        }
+        panel.state.errorText = nil
+        panel.state.captureURL = newURL
+        if let id = panel.state.captureTraySelection,
+           let index = panel.state.captureTray.firstIndex(where: { $0.id == id }) {
+            panel.state.captureTray[index].url = newURL
+        }
+        if panel.state.attachmentKind == .file {
+            copyPairToClipboard()
+        } else {
+            captureFileWatcher.start(url: newURL)
+        }
+        return true
+    }
+
+    /// Where a rename of `url` to `rawName` lands, or nil when the name is
+    /// unusable. Whitespace is trimmed, path separators become dashes, and a
+    /// name typed without an extension keeps the file's current one.
+    static func renamedCaptureURL(_ url: URL, to rawName: String) -> URL? {
+        var name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        name = name.replacingOccurrences(of: "/", with: "-").replacingOccurrences(of: ":", with: "-")
+        guard !name.isEmpty, !name.hasPrefix(".") else { return nil }
+        let currentExtension = url.pathExtension
+        if !currentExtension.isEmpty, (name as NSString).pathExtension.isEmpty {
+            name += ".\(currentExtension)"
+        }
+        return url.deletingLastPathComponent().appendingPathComponent(name)
+    }
+
     private static func captureData(_ image: NSImage, for url: URL) -> Data? {
         var rect = CGRect(origin: .zero, size: image.size)
         guard let cgImage = image.cgImage(forProposedRect: &rect, context: nil, hints: nil) else { return nil }
@@ -1186,6 +1237,7 @@ final class AssistantController {
         panel.state.onSelectCaptureItem = { [weak self] id in self?.selectCaptureItem(id) }
         panel.state.onRemoveCaptureItem = { [weak self] id in self?.removeCaptureItem(id) }
         panel.state.onDiscardCaptureVersion = { [weak self] which in self?.discardCaptureVersion(which) }
+        panel.state.onRenameCapture = { [weak self] name in self?.renameCapture(to: name) ?? false }
         panel.state.onAttachFile = { [weak self] in self?.attachFileFromMac() }
         panel.state.onAttachToAsk = { [weak self] in self?.attachImagesToAsk() }
         panel.state.askHistory = AskHistoryStore.load()
