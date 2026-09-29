@@ -4284,8 +4284,8 @@ struct AssistantPanelView: View {
 
     /// Mic in the bottom bar: click to start recording, click again to stop.
     /// What it records follows the tab — a question on Ask, a dictation on
-    /// Capture + Dictate, a command to carry out on Talk. (⌥⌘C / ⌥⌘V still
-    /// work as system-wide shortcuts.)
+    /// Capture + Dictate, a command to carry out on Talk. (⌥⌘V still works
+    /// as a system-wide dictation shortcut; ⌥⌘C only opens the panel.)
     private var recBadge: some View {
         RecBadge(since: state.micLiveSince)
             .transition(.opacity.combined(with: .scale(scale: 0.9)))
@@ -4600,7 +4600,7 @@ struct AssistantPanelView: View {
             .layoutPriority(1)
             .animation(.easeInOut(duration: 0.25), value: state.phase)
             if state.size != .half {
-                Text("⌥⌘C ask · ⌥⌘V dictate")
+                Text("⌥⌘C open · ⌥⌘V dictate")
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.28))
                     .padding(.leading, 6)

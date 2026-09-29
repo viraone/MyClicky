@@ -13,15 +13,15 @@ ChatGPT, etc.) via the file-upload picker.
 
 Press **Escape**, or release without dragging, to cancel a capture.
 
-## Assistant (hold Option–Command–C)
+## Assistant (Option–Command–C)
 
-**Hold** Option–Command–C, speak your question, release to submit. A floating
-panel appears with a status dot (cyan idle → red listening → yellow thinking →
-green answering). Your voice is transcribed on-device (Apple Speech), the
-screen under your cursor is captured, and both are sent to Claude in one
-request. The answer is spoken aloud and shown in the panel. You can also type
-a question in the panel's text field instead of speaking. Press Escape to
-dismiss the panel.
+Press Option–Command–C to bring up the Peeky panel — it opens without
+recording anything. A status dot shows what it's doing (cyan idle → red
+listening → yellow thinking → green answering). Type a question in the
+panel's text field, or click the mic button to ask by voice: your speech is
+transcribed on-device (Apple Speech), the screen under your cursor is
+captured, and both are sent to Claude in one request. The answer is spoken
+aloud and shown in the panel. Press Escape to dismiss the panel.
 
 The assistant isn't limited to what's on screen — depending on the question
 and context, it swaps the screenshot for a more accurate source:
@@ -365,8 +365,8 @@ only ever shows the trailing 7 days).
   downscaled-JPEG full-display capture for the assistant
 - `Assistant/AssistantController`: hold-to-talk orchestration (listen → capture
   → Claude → speak/show)
-- `Assistant/AssistantHotkeyMonitor`: press-and-hold Option–Command–C chord
-  tracking
+- `Assistant/AssistantHotkeyMonitor`: Option–Command letter chord tracking
+  (⌥⌘C opens the panel; ⌥⌘V is press-and-hold dictation)
 - `Assistant/AssistantPanel`: floating non-activating status/answer panel with
   text input
 - `Assistant/SpeechService`: on-device speech-to-text (Apple Speech framework)

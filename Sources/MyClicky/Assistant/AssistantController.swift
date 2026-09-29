@@ -1360,8 +1360,10 @@ final class AssistantController {
         speechDelegate.onSpeakingChanged = { [weak self] speaking in
             self?.panel.state.isSpeaking = speaking
         }
-        hotkey.onHoldBegan = { [weak self] in self?.beginListening() }
-        hotkey.onHoldEnded = { [weak self] in self?.endListening() }
+        // ⌥⌘C just brings Peeky up — no recording. Fires on key-down like
+        // ⌥⌘D; the release does nothing. Voice questions come from the mic
+        // button, the phone, or ⌥⌘V (dictation), which still press-and-hold.
+        hotkey.onHoldBegan = { [weak self] in self?.showPanelFromHotkey() }
         hotkey.start()
         dictationHotkey.onHoldBegan = { [weak self] in self?.beginListening(kind: .dictate) }
         dictationHotkey.onHoldEnded = { [weak self] in self?.endListening() }
@@ -1810,6 +1812,14 @@ final class AssistantController {
         } else {
             panel.show(near: cursor, on: screen)
         }
+    }
+
+    /// ⌥⌘C: show the panel on whatever tab it was last on, leaving the mic
+    /// alone. A press mid-recording (say, while holding ⌥⌘V) is ignored so
+    /// it can't yank the status out from under the recording.
+    private func showPanelFromHotkey() {
+        guard panel.state.status != .listening else { return }
+        showPanel()
     }
 
     /// `SCREENS <count> <current>` — how many displays are attached and which
