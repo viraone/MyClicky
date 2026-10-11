@@ -36,7 +36,7 @@ enum AssistantPhase: Equatable {
 
     var hint: String {
         switch self {
-        case .ready: "press TALK, or click the mic"
+        case .ready: ""
         case .recording: "listening — keep talking"
         case .paused: "say a command (“open Dino Dad’s conversation”), or press STOP"
         case .working: "Peeky is on it"
