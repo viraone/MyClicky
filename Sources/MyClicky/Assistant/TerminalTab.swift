@@ -24,7 +24,7 @@ final class TerminalSession: ObservableObject {
         view.nativeBackgroundColor = NSColor(calibratedWhite: 0.06, alpha: 1)
         view.nativeForegroundColor = NSColor.white.withAlphaComponent(0.92)
         // Matches the panel's body text; 12.5 read as fine print next to it.
-        view.font = .monospacedSystemFont(ofSize: 15, weight: .regular)
+        view.font = .monospacedSystemFont(ofSize: 17, weight: .regular)
         view.caretColor = .white
         view.optionAsMetaKey = true
         view.allowMouseReporting = true
