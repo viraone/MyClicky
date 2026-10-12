@@ -494,7 +494,15 @@ struct CaptureMarkupEditor: View {
                 annotations.append(draft)
                 selectedID = draft.id
                 self.draft = nil
-                tool = .select
+                // For the select tool, switch back to select mode after completion
+                // For drawing tools (arrow, rectangle, ellipse, draw), keep the current tool
+                // so users can add multiple annotations without re-selecting
+                if tool == .select {
+                    // Tool was already select, nothing to do
+                } else if tool == .text {
+                    // Text tool handled separately - already switched to select above
+                }
+                // For arrow, rectangle, ellipse, draw: stay in current tool mode
             }
     }
 
