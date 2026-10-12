@@ -247,6 +247,31 @@ private struct CaptureVersionCloseButton: View {
     }
 }
 
+/// Copy button that copies the image to the clipboard when clicked.
+private struct CopyButton: View {
+    let image: NSImage
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: copyToClipboard) {
+            Image(systemName: "doc.on.doc")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(hovering ? .cyan : .white.opacity(0.6))
+                .frame(width: 16, height: 16)
+                .background(Circle().fill(Color.cyan.opacity(hovering ? 0.3 : 0.2)))
+                .overlay(Circle().strokeBorder(Color.cyan.opacity(0.5), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .help("Copy image to clipboard")
+        .onHover { hovering = $0 }
+    }
+
+    private func copyToClipboard() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.writeObjects([image])
+    }
+}
+
 /// One small thumbnail in the Capture tab's tray strip: the picture (its
 /// edited version if there is one), a cyan ring when it's the one in the
 /// big preview, and its own ✕ that appears on hover.
@@ -2780,12 +2805,15 @@ struct AssistantPanelView: View {
             .buttonStyle(.plain)
             .help("Use this version for the clipboard")
             if let fileName {
-                RenamableFileName(
-                    fileName: fileName,
-                    font: .system(size: 12, design: .monospaced),
-                    color: .white.opacity(0.4),
-                    onRename: renameCapture
-                )
+                HStack(spacing: 6) {
+                    RenamableFileName(
+                        fileName: fileName,
+                        font: .system(size: 12, design: .monospaced),
+                        color: .white.opacity(0.4),
+                        onRename: renameCapture
+                    )
+                    CopyButton(image: image)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
