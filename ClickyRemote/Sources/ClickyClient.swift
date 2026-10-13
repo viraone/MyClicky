@@ -480,6 +480,10 @@ final class ClickyClient: ObservableObject {
     /// Recording ended with nothing to send — take the Mac out of listening too.
     func stopListening() { send("STOP") }
     func collapse() { send("COLLAPSE") }
+    /// Tuck Peeky into its corner dot — the panel header's "Minimize to corner" button.
+    func minimize() { send("MINIMIZE") }
+    /// Bring Peeky back out of the corner dot.
+    func expand() { send("EXPAND") }
     /// Toggle Peeky's thin status strip without minimizing it to the corner dot.
     func toggleStrip() { send("STRIP") }
     /// Put Peeky (panel and pointer) on display n, 1-based.

@@ -2005,7 +2005,10 @@ struct NumpadView: View {
             // Portrait keeps square hero keys. Landscape uses the full
             // two-column width and lets height fit the available rows.
             let columnW = (geo.size.width - gap) / 2
-            let bannerW = (geo.size.width - gap * 2) / 3
+            // ASK / CAPTURE / COLLAPSE sit three across, so that row is
+            // sized to thirds; the two-across rows below keep halves.
+            let trioW = (geo.size.width - gap * 2) / 3
+            let bannerW = columnW
             let minimumPhotoH: CGFloat = isLandscape ? 40 : 56
             let rowH = (geo.size.height - topInset - gap * 8) / 9.8
             let chromeBudget = max(88, geo.size.height - topInset - gap * 6
@@ -2015,9 +2018,10 @@ struct NumpadView: View {
             let calculatedBannerH = min(max(64, rowH), max(36, chromeBudget - switchH))
             let bannerH = isLandscape ? 44 : calculatedBannerH
             let available = geo.size.height - topInset - gap * 6 - switchH - bannerH
-            let squareHeroSide = max(0, min(columnW, (available - minimumPhotoH * 3) / 2))
+            let squareHeroSide = max(0, min(trioW, (available - minimumPhotoH * 3) / 2))
             let landscapeKeyH = max(minimumPhotoH, available / 5)
             let heroW = isLandscape ? columnW : squareHeroSide
+            let trioHeroW = isLandscape ? trioW : squareHeroSide
             let heroH = isLandscape ? landscapeKeyH : squareHeroSide
             let photoH = isLandscape ? landscapeKeyH : max(minimumPhotoH, (available - heroH * 2) / 3)
             VStack(spacing: gap) {
@@ -2031,10 +2035,6 @@ struct NumpadView: View {
                         h: bannerH, w: bannerW, banner: true)
                     key("0", label: "PEEKY", icon: "sparkles", tint: Snes.purple, lit: true,
                         h: bannerH, w: bannerW, banner: true)
-                    key("strip", label: client.peekyLayout == "STRIP" ? "EXPAND" : "COLLAPSE",
-                        icon: client.peekyLayout == "STRIP" ? "chevron.right" : "chevron.left",
-                        tint: Snes.green, lit: true,
-                        h: bannerH, w: bannerW, banner: true)
                 }
                 HStack(alignment: .top, spacing: gap) {
                     // ASK records on the phone and sends `ASK <text>`: the Mac
@@ -2043,9 +2043,17 @@ struct NumpadView: View {
                     key("5", label: askRecording ? "STOP" : "ASK",
                         icon: askRecording ? "stop.fill" : "questionmark.bubble.fill",
                         tint: askRecording ? Snes.red : Snes.green, lit: true,
-                        h: heroH, w: heroW, hero: !isLandscape, waveform: askRecording)
+                        h: heroH, w: trioHeroW, hero: !isLandscape, waveform: askRecording)
                     key("2", label: "CAPTURE", icon: "camera.viewfinder", tint: Snes.blue, lit: true,
-                        h: heroH, w: heroW, hero: !isLandscape)
+                        h: heroH, w: trioHeroW, hero: !isLandscape)
+                    // COLLAPSE is the panel header's "Minimize to corner"
+                    // button: Peeky tucks into its corner dot. Once it is
+                    // there the key reads EXPAND and brings it back.
+                    key("minimize", label: client.peekyLayout == "COLLAPSED" ? "EXPAND" : "COLLAPSE",
+                        icon: client.peekyLayout == "COLLAPSED" ? "arrow.up.left.and.arrow.down.right"
+                                                                : "arrow.down.right.and.arrow.up.left",
+                        tint: Snes.green, lit: true,
+                        h: heroH, w: trioHeroW, hero: !isLandscape)
                 }
                 HStack(alignment: .top, spacing: gap) {
                     key("code", label: "PEEKY CODE", icon: "chevron.left.forwardslash.chevron.right",
@@ -2298,9 +2306,14 @@ struct NumpadView: View {
         case "on":
             client.show()
             statusText = "Peeky is ON and visible on your Mac"
-        case "strip":
-            client.toggleStrip()
-            statusText = "Peeky's compact bar toggled on your Mac"
+        case "minimize":
+            if client.peekyLayout == "COLLAPSED" {
+                client.expand()
+                statusText = "Peeky brought back from the corner on your Mac"
+            } else {
+                client.minimize()
+                statusText = "Peeky minimized to the corner on your Mac — tap EXPAND to bring it back"
+            }
         case "4":
             client.show()
             client.tab("ASK")

@@ -1454,6 +1454,24 @@ final class AssistantController {
             }
             self.remote.broadcast(self.peekyLayoutLine())
         }
+        // The phone's COLLAPSE button: exactly the header's "Minimize to
+        // corner" button, so it only ever tucks the panel into its dot.
+        remote.onMinimize = { [weak self] in
+            guard let self else { return }
+            if self.panel.isVisible { self.panel.minimize() }
+            self.remote.broadcast(self.peekyLayoutLine())
+        }
+        // The same button once Peeky is in the corner: bring it back, like
+        // clicking the dot.
+        remote.onExpand = { [weak self] in
+            guard let self else { return }
+            if self.panel.isVisible {
+                self.panel.expand()
+            } else {
+                self.showPanel()
+            }
+            self.remote.broadcast(self.peekyLayoutLine())
+        }
         remote.onStrip = { [weak self] in
             guard let self else { return }
             if self.panel.isVisible && !self.panel.state.collapsed {
