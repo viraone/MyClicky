@@ -1956,6 +1956,23 @@ struct AssistantPanelView: View {
             if state.canStop && state.status != .listening {
                 stopButton
             }
+            Button {
+                state.onToggleStripFold?()
+            } label: {
+                Image(systemName: "rectangle.lefthalf.inset.filled")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(state.accent)
+                    .frame(width: 28, height: 28)
+                    .background(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(state.accent.opacity(0.14))
+                            .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .strokeBorder(state.accent.opacity(0.5), lineWidth: 1))
+                    )
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(folded ? "Unfold the strip" : "Shrink the strip to half width")
             edgeChevron(expanded: false)
         }
         .padding(.horizontal, 10)
