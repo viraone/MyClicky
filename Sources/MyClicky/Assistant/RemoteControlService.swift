@@ -9,7 +9,12 @@ import Network
 ///   LISTEN         – show the panel in listening state (remote mic active)
 ///   LISTEN TALK    – same, on the Talk tab, streaming pause-delimited commands
 ///   STOP           – phone ended its recording with nothing to send; stop listening
-///   COLLAPSE       – minimize the panel to its collapsed bubble
+///   COLLAPSE       – toggle: minimize the panel to its corner dot if it is
+///                    showing, bring it back if it is minimized or hidden
+///   MINIMIZE       – tuck the panel into its corner dot (same as the
+///                    "Minimize to corner" button in the panel's header);
+///                    no-op when it is already minimized or hidden
+///   EXPAND         – bring the panel back out of the corner dot
 ///   STRIP          – toggle the panel's thin status-bar layout
 ///   TAB ASK        – switch the panel to the Ask tab
 ///   TAB DICTATE    – switch the panel to the Capture + Dictate tab
@@ -125,6 +130,8 @@ final class RemoteControlService {
     /// Phone ended a recording with nothing to send; the Mac should stop too.
     var onStop: (() -> Void)?
     var onCollapse: (() -> Void)?
+    var onMinimize: (() -> Void)?
+    var onExpand: (() -> Void)?
     var onStrip: (() -> Void)?
     var onTab: ((String) -> Void)?
     var onEnter: (() -> Void)?
@@ -255,6 +262,10 @@ final class RemoteControlService {
             onStop?()
         } else if line == "COLLAPSE" {
             onCollapse?()
+        } else if line == "MINIMIZE" {
+            onMinimize?()
+        } else if line == "EXPAND" {
+            onExpand?()
         } else if line == "STRIP" {
             onStrip?()
         } else if line == "CAPTURE" {

@@ -2031,8 +2031,12 @@ struct NumpadView: View {
                         h: bannerH, w: bannerW, banner: true)
                     key("0", label: "PEEKY", icon: "sparkles", tint: Snes.purple, lit: true,
                         h: bannerH, w: bannerW, banner: true)
-                    key("strip", label: client.peekyLayout == "STRIP" ? "EXPAND" : "COLLAPSE",
-                        icon: client.peekyLayout == "STRIP" ? "chevron.right" : "chevron.left",
+                    // COLLAPSE is the panel header's "Minimize to corner"
+                    // button: Peeky tucks into its corner dot. Once it is
+                    // there the key reads EXPAND and brings it back.
+                    key("minimize", label: client.peekyLayout == "COLLAPSED" ? "EXPAND" : "COLLAPSE",
+                        icon: client.peekyLayout == "COLLAPSED" ? "arrow.up.left.and.arrow.down.right"
+                                                                : "arrow.down.right.and.arrow.up.left",
                         tint: Snes.green, lit: true,
                         h: bannerH, w: bannerW, banner: true)
                 }
@@ -2298,9 +2302,14 @@ struct NumpadView: View {
         case "on":
             client.show()
             statusText = "Peeky is ON and visible on your Mac"
-        case "strip":
-            client.toggleStrip()
-            statusText = "Peeky's compact bar toggled on your Mac"
+        case "minimize":
+            if client.peekyLayout == "COLLAPSED" {
+                client.expand()
+                statusText = "Peeky brought back from the corner on your Mac"
+            } else {
+                client.minimize()
+                statusText = "Peeky minimized to the corner on your Mac — tap EXPAND to bring it back"
+            }
         case "4":
             client.show()
             client.tab("ASK")
