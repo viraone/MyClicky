@@ -66,6 +66,14 @@ import Network
 ///                    TOGGLE_APP (quit Safari, or open it again when it's
 ///                    already gone — what a double tap on the phone's Open
 ///                    tile sends, in both directions)
+///   KEYNOTE <action> – a clicker for the Keynote slideshow on the Mac:
+///                    OPEN (Keynote to the front, launching it if needed),
+///                    PLAY (start from the current slide, or stop if playing),
+///                    SELECT (start if stopped, else next build/slide),
+///                    NEXT, PREV, FIRST, LAST, EXIT, BLACK, WHITE, POINTER,
+///                    SWAP (presenter/audience displays), SWITCHER (the
+///                    in-show slide switcher); the Mac replies with
+///                    KEYNOTE_STATE after each one
 ///   GMAIL TRASH_OPEN – trash the email open in the browser (confirm on Mac)
 ///   WHATSAPP OPEN_CHAT <name> – open the named chat in the WhatsApp desktop app
 ///   WHATSAPP TYPE_TEXT <text> – tidy the text and type it into the open chat (does not send)
@@ -92,6 +100,8 @@ import Network
 ///   SAVE_PHOTO_STATUS OK|FAIL\t<message> – outcome of the last SAVE_PHOTO command
 ///   YOUTUBE_STATE COLLAPSED|EXPANDED – resulting state of the last
 ///                    YOUTUBE COLLAPSE toggle
+///   KEYNOTE_STATE PLAYING|STOPPED – whether a slideshow is running after
+///                    the last KEYNOTE command
 ///   GMAIL_UNREAD <n>          – Gmail's unread count changed (read from its
 ///                    tab title; 0 = cleared, or no Gmail tab open right now)
 ///   PEEKY_LAYOUT <state>       – HIDDEN, COLLAPSED, STRIP, or EXPANDED
@@ -139,6 +149,7 @@ final class RemoteControlService {
     var onGmail: ((String) -> Void)?
     var onSpotify: ((String) -> Void)?
     var onYouTube: ((String) -> Void)?
+    var onKeynote: ((String) -> Void)?
     var onWhatsApp: ((String) -> Void)?
     var onSavePhoto: ((Data) -> Void)?
     var onBrowserReload: (() -> Void)?
@@ -284,6 +295,8 @@ final class RemoteControlService {
             onSpotify?(String(line.dropFirst(8)))
         } else if line.hasPrefix("YOUTUBE ") {
             onYouTube?(String(line.dropFirst(8)))
+        } else if line.hasPrefix("KEYNOTE ") {
+            onKeynote?(String(line.dropFirst(8)).trimmingCharacters(in: .whitespaces))
         } else if line.hasPrefix("WHATSAPP ") {
             onWhatsApp?(String(line.dropFirst(9)))
         } else if line.hasPrefix("DOC ") {

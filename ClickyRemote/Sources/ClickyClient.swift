@@ -24,6 +24,9 @@ final class ClickyClient: ObservableObject {
     /// Whether the browser window playing YouTube is currently minimized —
     /// drives the Collapse/Expand label on the YouTube pad.
     @Published var youtubeCollapsed = false
+    /// Whether a Keynote slideshow is running on the Mac — flips the
+    /// Keynote pad's centre button between PLAY and NEXT.
+    @Published var keynotePlaying = false
     /// Displays attached to the Mac, and which one (1-based) Peeky is on —
     /// 0 when its panel is hidden. Straight from the Mac's `SCREENS` line.
     @Published var screenCount = 1
@@ -278,6 +281,8 @@ final class ClickyClient: ObservableObject {
                             }
                         } else if line.hasPrefix("YOUTUBE_STATE ") {
                             self.youtubeCollapsed = line.dropFirst(14).trimmingCharacters(in: .whitespaces) == "COLLAPSED"
+                        } else if line.hasPrefix("KEYNOTE_STATE ") {
+                            self.keynotePlaying = line.dropFirst(14).trimmingCharacters(in: .whitespaces) == "PLAYING"
                         } else if line.hasPrefix("STATUS ") {
                             let text = String(line.dropFirst(7))
                             self.talkMessage = text
@@ -496,6 +501,8 @@ final class ClickyClient: ObservableObject {
     /// Peeky Video: transport, dial nudges and the editing buttons.
     func video(_ action: String) { send("VIDEO \(action)") }
     func youtube(_ action: String) { send("YOUTUBE \(action)") }
+    /// Keynote clicker: play, next/previous, and the in-show toggles.
+    func keynote(_ action: String) { send("KEYNOTE \(action)") }
     func whatsapp(_ action: String) { send("WHATSAPP \(action)") }
     func savePhoto(_ base64JPEG: String) { send("SAVE_PHOTO \(base64JPEG)") }
     func browserReload() { send("BROWSER RELOAD") }

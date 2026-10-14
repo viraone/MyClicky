@@ -85,6 +85,7 @@ struct NumpadView: View {
         case video = "PEEKY VIDEO"
         case whatsapp = "WHATSAPP"
         case youtube = "YOUTUBE"
+        case keynote = "KEYNOTE"
 
         var icon: String {
             switch self {
@@ -94,6 +95,7 @@ struct NumpadView: View {
             case .video: "film"
             case .whatsapp: "bubble.left.and.bubble.right.fill"
             case .youtube: "play.rectangle.fill"
+            case .keynote: "play.rectangle.on.rectangle.fill"
             }
         }
 
@@ -117,6 +119,7 @@ struct NumpadView: View {
             case .video: Snes.video
             case .whatsapp: Snes.whatsapp
             case .youtube: Snes.youtube
+            case .keynote: Snes.keynote
             }
         }
 
@@ -128,6 +131,7 @@ struct NumpadView: View {
             case .video: "Peeky Video — play, cut and export the project open on your Mac; spin the dial to move frame by frame"
             case .whatsapp: "WhatsApp mode — buttons control the WhatsApp app on your Mac"
             case .youtube: "YouTube mode — buttons control the YouTube tab open in your browser"
+            case .keynote: "Keynote clicker — the ring steps through slides, the centre plays / advances, Home brings Keynote up on your Mac"
             }
         }
     }
@@ -237,14 +241,14 @@ struct NumpadView: View {
 
     // MARK: - Mode tabs (cartridge selector)
 
-    /// Shared portrait/landscape order. Peeky Code replaces Gmail and Refresh
-    /// moves into Gmail's former third position.
-    /// Peeky Code is temporarily off and parked at the end; delete the
+    /// Shared portrait/landscape order. Keynote sits where Peeky Code used
+    /// to; Peeky Code is temporarily off and parked at the end — delete the
     /// `.disabled`/`.opacity` in `stripButton` and move it back up to
     /// bring it back.
     private var wheelEntries: [String] {
         [
             RemoteMode.remote.rawValue,
+            RemoteMode.keynote.rawValue,
             RemoteMode.doc.rawValue,
             "REFRESH",
             RemoteMode.video.rawValue,
@@ -265,6 +269,7 @@ struct NumpadView: View {
             case .video: videoPad
             case .whatsapp: whatsappPad
             case .youtube: youtubePad
+            case .keynote: keynotePad
             }
         }
         // Talk rides along in the corner of every pad but the keypad,
@@ -276,7 +281,9 @@ struct NumpadView: View {
             // The trailing padding is what holds it off the right
             // edge — raise it to move Talk further left, lower it to
             // push it back toward the corner.
-            if mode != .remote && mode != .code && mode != .doc && mode != .video { cornerTalkButton.padding(.trailing, 44) }
+            if mode != .remote && mode != .code && mode != .doc && mode != .video && mode != .keynote {
+                cornerTalkButton.padding(.trailing, 44)
+            }
         }
         // A confirmation is the one thing that must not be missed —
         // it used to live on the Talk pad, so it now covers whichever
@@ -1936,6 +1943,189 @@ struct NumpadView: View {
         }
     }
 
+    // MARK: - Keynote pad (a TV-remote clicker)
+
+    private var keynotePad: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 8) {
+                Circle().fill(Snes.keynote).frame(width: 8, height: 8)
+                Text("Keynote")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                Text("on your Mac")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.45))
+                Spacer()
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(client.keynotePlaying ? Snes.green : .white.opacity(0.3))
+                        .frame(width: 7, height: 7)
+                    Text(client.keynotePlaying ? "PLAYING" : "READY")
+                        .font(.system(size: 10, weight: .black, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.8))
+                }
+                .padding(.horizontal, 9).padding(.vertical, 4)
+                .background(Capsule().fill(.white.opacity(0.08)))
+            }
+            .padding(.horizontal, 4)
+
+            keynoteRing
+                .aspectRatio(1, contentMode: .fit)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            // Black / white screen · TALK · swap displays · pointer
+            HStack(spacing: 0) {
+                keynoteIcon("moon.fill", "Black screen") { keynoteTapped("BLACK") }
+                keynoteIcon("sun.max.fill", "White screen") { keynoteTapped("WHITE") }
+                Button { talkTapped() } label: {
+                    Image(systemName: talkRecording ? "stop.fill" : "mic.fill")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 54, height: 54)
+                        .background(Circle().fill(talkRecording ? Snes.red : Snes.keynote))
+                        .shadow(color: (talkRecording ? Snes.red : Snes.keynote).opacity(0.5), radius: 8, y: 2)
+                }
+                .buttonStyle(SpotifyPressStyle())
+                .frame(maxWidth: .infinity)
+                .accessibilityLabel(talkRecording ? "Stop" : "Talk")
+                keynoteIcon("rectangle.2.swap", "Swap displays") { keynoteTapped("SWAP") }
+                keynoteIcon("cursorarrow", "Pointer") { keynoteTapped("POINTER") }
+            }
+            .frame(height: 56)
+
+            Rectangle().fill(.white.opacity(0.12)).frame(height: 1)
+
+            HStack(spacing: 0) {
+                keynoteRound("arrow.uturn.backward", "Exit") { keynoteTapped("EXIT") }
+                keynoteRound("house", "Keynote") { keynoteTapped("OPEN") }
+                keynoteRound("square.grid.2x2", "Slides") { keynoteTapped("SWITCHER") }
+            }
+            HStack(spacing: 0) {
+                keynoteRound("backward.end.fill", "First") { keynoteTapped("FIRST") }
+                keynoteRound(client.keynotePlaying ? "stop.fill" : "play.fill",
+                             client.keynotePlaying ? "Stop" : "Play") { keynoteTapped("PLAY") }
+                keynoteRound("forward.end.fill", "Last") { keynoteTapped("LAST") }
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 20)
+                .fill(LinearGradient(colors: [Color(red: 0.09, green: 0.09, blue: 0.10),
+                                              Color(red: 0.04, green: 0.04, blue: 0.05)],
+                                     startPoint: .top, endPoint: .bottom))
+                .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.white.opacity(0.08), lineWidth: 1))
+                .shadow(color: .black.opacity(0.35), radius: 6, y: 4)
+        )
+    }
+
+    /// The big ring: four wedges step back / forward through the deck
+    /// (up and left go back, down and right go forward, as in Keynote
+    /// itself), and the centre plays, or advances once a show is running.
+    private var keynoteRing: some View {
+        GeometryReader { geo in
+            let side = min(geo.size.width, geo.size.height)
+            let gapColor = Color(red: 0.04, green: 0.04, blue: 0.05)
+            let inner: CGFloat = 0.22
+            ZStack {
+                ForEach(KeynoteDirection.allCases, id: \.self) { dir in
+                    Button { keynoteTapped(dir.command) } label: {
+                        ZStack {
+                            KeynoteWedge(startDegrees: dir.startDegrees, innerRatio: inner)
+                                .fill(Color(white: 0.17))
+                            Image(systemName: dir.icon)
+                                .font(.system(size: side * 0.09, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .offset(x: dir.unit.x * side * 0.36, y: dir.unit.y * side * 0.36)
+                        }
+                        .frame(width: side, height: side)
+                        .contentShape(KeynoteWedge(startDegrees: dir.startDegrees, innerRatio: inner))
+                    }
+                    .buttonStyle(KeynoteWedgeStyle())
+                    .accessibilityLabel(dir.command == "NEXT" ? "Next slide" : "Previous slide")
+                }
+                // The dark seams between the wedges.
+                Path { p in
+                    let c = CGPoint(x: side / 2, y: side / 2)
+                    let r = side / 2
+                    for angle in [45.0, 135.0] {
+                        let dx = cos(angle * .pi / 180) * r, dy = sin(angle * .pi / 180) * r
+                        p.move(to: CGPoint(x: c.x - dx, y: c.y - dy))
+                        p.addLine(to: CGPoint(x: c.x + dx, y: c.y + dy))
+                    }
+                }
+                .stroke(gapColor, lineWidth: side * 0.018)
+                .frame(width: side, height: side)
+                .allowsHitTesting(false)
+                Button { keynoteTapped("SELECT") } label: {
+                    Circle()
+                        .fill(Color(white: 0.26))
+                        .overlay(Circle().strokeBorder(gapColor, lineWidth: side * 0.018))
+                        .overlay(
+                            Text(client.keynotePlaying ? "NEXT" : "PLAY")
+                                .font(.system(size: side * 0.055, weight: .black, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.55))
+                        )
+                        .frame(width: side * inner * 2, height: side * inner * 2)
+                }
+                .buttonStyle(SpotifyPressStyle())
+                .accessibilityLabel(client.keynotePlaying ? "Next" : "Play slideshow")
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
+        }
+    }
+
+    private func keynoteIcon(_ name: String, _ label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: name)
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.95))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(SpotifyPressStyle())
+        .accessibilityLabel(label)
+    }
+
+    private func keynoteRound(_ icon: String, _ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 62, height: 62)
+                    .background(Circle().fill(Color(white: 0.2)))
+                Text(title)
+                    .font(.system(size: 9, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.45))
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(SpotifyPressStyle())
+        .accessibilityLabel(title)
+    }
+
+    private func keynoteTapped(_ command: String) {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        client.keynote(command)
+        let playing = client.keynotePlaying
+        switch command {
+        case "OPEN": statusText = "Keynote — bringing it up on your Mac"
+        case "PLAY": statusText = playing ? "Keynote — stopping the slideshow" : "Keynote — playing from the current slide"
+        case "SELECT": statusText = playing ? "Keynote — next" : "Keynote — playing from the current slide"
+        case "NEXT": statusText = "Keynote — next"
+        case "PREV": statusText = "Keynote — previous"
+        case "FIRST": statusText = "Keynote — first slide"
+        case "LAST": statusText = "Keynote — last slide"
+        case "EXIT": statusText = "Keynote — leaving the slideshow"
+        case "BLACK": statusText = "Keynote — black screen (tap again to resume)"
+        case "WHITE": statusText = "Keynote — white screen (tap again to resume)"
+        case "POINTER": statusText = "Keynote — pointer shown / hidden"
+        case "SWAP": statusText = "Keynote — presenter and audience displays swapped"
+        case "SWITCHER": statusText = "Keynote — slide switcher"
+        default: break
+        }
+    }
+
     // MARK: - Header (slim status strip)
 
     private var header: some View {
@@ -2076,6 +2266,20 @@ struct NumpadView: View {
                         h: heroH, w: trioHeroW, hero: !isLandscape)
                 }
                 HStack(alignment: .top, spacing: gap) {
+                    key("keynote", label: "KEYNOTE", icon: "play.rectangle.on.rectangle.fill",
+                        tint: Snes.keynote, lit: true,
+                        h: heroH, w: heroW, hero: !isLandscape) { _ in selectMode(.keynote) }
+                        .accessibilityLabel("Open the Keynote clicker")
+                    key("talk", label: talkRecording ? "STOP" : "TALK",
+                        icon: talkRecording ? "stop.fill" : "mic.fill",
+                        tint: talkRecording ? Snes.red : Snes.talk, lit: true,
+                        h: heroH, w: heroW, hero: !isLandscape, waveform: talkRecording) { _ in talkTapped() }
+                        // Temporarily off at the user's request; delete these
+                        // two lines to bring TALK back.
+                        .disabled(true)
+                        .opacity(0.35)
+                }
+                HStack(alignment: .top, spacing: gap) {
                     key("terminal", label: "TERMINAL", icon: "terminal",
                         tint: Snes.red, lit: true, h: photoH, w: heroW)
                         .accessibilityLabel("Open Terminal on Mac")
@@ -2097,26 +2301,12 @@ struct NumpadView: View {
                     key("enter", label: "ENTER", icon: "return",
                         tint: Snes.talk, lit: true, h: photoH, w: heroW)
                         .accessibilityLabel("Press Enter on Mac")
-                    Color.clear
-                        .frame(width: heroW, height: photoH)
-                        .accessibilityHidden(true)
-                }
-                // Moved to the bottom and turned off at the user's
-                // request; delete the `.disabled`/`.opacity` pair below
-                // and move this row back up to bring Peeky Code back.
-                HStack(alignment: .top, spacing: gap) {
+                    // Parked here and turned off at the user's request;
+                    // delete the `.disabled`/`.opacity` pair to bring
+                    // Peeky Code back.
                     key("code", label: "PEEKY CODE", icon: "chevron.left.forwardslash.chevron.right",
-                        tint: Snes.red, lit: true,
-                        h: heroH, w: heroW, hero: !isLandscape) { _ in openPeekyCode() }
+                        tint: Snes.red, lit: true, h: photoH, w: heroW) { _ in openPeekyCode() }
                         .accessibilityLabel("Open Peeky Code on Mac")
-                        .disabled(true)
-                        .opacity(0.35)
-                    key("talk", label: talkRecording ? "STOP" : "TALK",
-                        icon: talkRecording ? "stop.fill" : "mic.fill",
-                        tint: talkRecording ? Snes.red : Snes.talk, lit: true,
-                        h: heroH, w: heroW, hero: !isLandscape, waveform: talkRecording) { _ in talkTapped() }
-                        // Temporarily off at the user's request; delete these
-                        // two lines to bring TALK back.
                         .disabled(true)
                         .opacity(0.35)
                 }
@@ -2722,6 +2912,8 @@ enum Snes {
     /// Peeky Code Doc's streaming-service red.
     static let doc = Color(red: 0.90, green: 0.04, blue: 0.08)
     static let talk = Color(red: 0.98, green: 0.55, blue: 0.05)
+    /// Keynote's app-icon blue.
+    static let keynote = Color(red: 0.10, green: 0.50, blue: 0.95)
 }
 
 /// Owns only presentation state, so stopping a recording also cancels its pulse.
@@ -2883,6 +3075,74 @@ struct SpotifyPressStyle: ButtonStyle {
             .scaleEffect(configuration.isPressed ? 0.93 : 1)
             .opacity(configuration.isPressed ? 0.75 : 1)
             .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
+
+/// One quarter of the Keynote ring: an annular sector 90° wide, starting
+/// at `startDegrees` (0° is three o'clock, increasing clockwise on screen).
+struct KeynoteWedge: Shape {
+    var startDegrees: Double
+    var innerRatio: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        let outer = min(rect.width, rect.height) / 2
+        let inner = outer * innerRatio * 2
+        let start = Angle.degrees(startDegrees)
+        let end = Angle.degrees(startDegrees + 90)
+        var p = Path()
+        p.addArc(center: center, radius: outer, startAngle: start, endAngle: end, clockwise: false)
+        p.addArc(center: center, radius: inner, startAngle: end, endAngle: start, clockwise: true)
+        p.closeSubpath()
+        return p
+    }
+}
+
+enum KeynoteDirection: CaseIterable {
+    case up, right, down, left
+
+    var command: String {
+        switch self {
+        case .up, .left: "PREV"
+        case .down, .right: "NEXT"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .up: "chevron.up"
+        case .right: "chevron.right"
+        case .down: "chevron.down"
+        case .left: "chevron.left"
+        }
+    }
+
+    var startDegrees: Double {
+        switch self {
+        case .right: -45
+        case .down: 45
+        case .left: 135
+        case .up: 225
+        }
+    }
+
+    var unit: CGPoint {
+        switch self {
+        case .up: CGPoint(x: 0, y: -1)
+        case .right: CGPoint(x: 1, y: 0)
+        case .down: CGPoint(x: 0, y: 1)
+        case .left: CGPoint(x: -1, y: 0)
+        }
+    }
+}
+
+/// Wedges can't scale like a tile without overlapping their neighbours,
+/// so a press just lifts the fill.
+struct KeynoteWedgeStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .brightness(configuration.isPressed ? 0.12 : 0)
+            .animation(.easeOut(duration: 0.1), value: configuration.isPressed)
     }
 }
 

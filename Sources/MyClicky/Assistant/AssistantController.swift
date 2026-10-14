@@ -1591,6 +1591,14 @@ final class AssistantController {
                                  tint: ok ? .red : .orange)
             }
         }
+        remote.onKeynote = { [weak self] action in
+            KeynoteActions.perform(action) { [weak self] message, ok, playing in
+                self?.toast.show(message,
+                                 icon: ok ? "play.rectangle.on.rectangle.fill" : "exclamationmark.triangle.fill",
+                                 tint: ok ? .blue : .orange)
+                self?.remote.broadcast("KEYNOTE_STATE \(playing ? "PLAYING" : "STOPPED")")
+            }
+        }
         remote.onWhatsApp = { [weak self] action in
             guard let self else { return }
             let report: (String, Bool) -> Void = { [weak self] message, ok in
