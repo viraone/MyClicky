@@ -239,15 +239,18 @@ struct NumpadView: View {
 
     /// Shared portrait/landscape order. Peeky Code replaces Gmail and Refresh
     /// moves into Gmail's former third position.
+    /// Peeky Code is temporarily off and parked at the end; delete the
+    /// `.disabled`/`.opacity` in `stripButton` and move it back up to
+    /// bring it back.
     private var wheelEntries: [String] {
         [
             RemoteMode.remote.rawValue,
-            RemoteMode.code.rawValue,
             RemoteMode.doc.rawValue,
             "REFRESH",
             RemoteMode.video.rawValue,
             RemoteMode.whatsapp.rawValue,
             RemoteMode.youtube.rawValue,
+            RemoteMode.code.rawValue,
         ]
     }
 
@@ -335,6 +338,10 @@ struct NumpadView: View {
                     unreadBadge(client.whatsappUnread).offset(x: 6, y: -6)
                 }
             }
+            // Temporarily off at the user's request; delete this
+            // modifier to bring Peeky Code back.
+            .disabled(m == .code)
+            .opacity(m == .code ? 0.35 : 1)
         }
     }
 
@@ -2069,20 +2076,6 @@ struct NumpadView: View {
                         h: heroH, w: trioHeroW, hero: !isLandscape)
                 }
                 HStack(alignment: .top, spacing: gap) {
-                    key("code", label: "PEEKY CODE", icon: "chevron.left.forwardslash.chevron.right",
-                        tint: Snes.red, lit: true,
-                        h: heroH, w: heroW, hero: !isLandscape) { _ in openPeekyCode() }
-                        .accessibilityLabel("Open Peeky Code on Mac")
-                    key("talk", label: talkRecording ? "STOP" : "TALK",
-                        icon: talkRecording ? "stop.fill" : "mic.fill",
-                        tint: talkRecording ? Snes.red : Snes.talk, lit: true,
-                        h: heroH, w: heroW, hero: !isLandscape, waveform: talkRecording) { _ in talkTapped() }
-                        // Temporarily off at the user's request; delete these
-                        // two lines to bring TALK back.
-                        .disabled(true)
-                        .opacity(0.35)
-                }
-                HStack(alignment: .top, spacing: gap) {
                     key("terminal", label: "TERMINAL", icon: "terminal",
                         tint: Snes.red, lit: true, h: photoH, w: heroW)
                         .accessibilityLabel("Open Terminal on Mac")
@@ -2107,6 +2100,25 @@ struct NumpadView: View {
                     Color.clear
                         .frame(width: heroW, height: photoH)
                         .accessibilityHidden(true)
+                }
+                // Moved to the bottom and turned off at the user's
+                // request; delete the `.disabled`/`.opacity` pair below
+                // and move this row back up to bring Peeky Code back.
+                HStack(alignment: .top, spacing: gap) {
+                    key("code", label: "PEEKY CODE", icon: "chevron.left.forwardslash.chevron.right",
+                        tint: Snes.red, lit: true,
+                        h: heroH, w: heroW, hero: !isLandscape) { _ in openPeekyCode() }
+                        .accessibilityLabel("Open Peeky Code on Mac")
+                        .disabled(true)
+                        .opacity(0.35)
+                    key("talk", label: talkRecording ? "STOP" : "TALK",
+                        icon: talkRecording ? "stop.fill" : "mic.fill",
+                        tint: talkRecording ? Snes.red : Snes.talk, lit: true,
+                        h: heroH, w: heroW, hero: !isLandscape, waveform: talkRecording) { _ in talkTapped() }
+                        // Temporarily off at the user's request; delete these
+                        // two lines to bring TALK back.
+                        .disabled(true)
+                        .opacity(0.35)
                 }
             }
             .padding(.top, topInset)
