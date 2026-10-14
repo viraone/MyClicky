@@ -1553,7 +1553,15 @@ final class AssistantPanelController {
         panel.onPaste = { [weak self] in
             guard let self else { return false }
             if self.state.tab == .terminal {
-                self.state.terminal.view.paste(self)
+                // ⌘V reaches the shell whatever has focus, so give the
+                // terminal focus too — otherwise the Return that follows
+                // lands on the SwiftUI host, beeps, and the command sits
+                // there until the user clicks into the terminal.
+                let view = self.state.terminal.view
+                if let window = view.window, window.firstResponder !== view {
+                    window.makeFirstResponder(view)
+                }
+                view.paste(self)
                 return true
             }
             guard self.state.tab == .code else { return false }
@@ -1563,6 +1571,17 @@ final class AssistantPanelController {
             guard board.string(forType: .string) == nil,
                   board.canReadObject(forClasses: [NSImage.self], options: nil) else { return false }
             self.state.onPasteCodeImage?()
+            return true
+        }
+        panel.onUnhandledKey = { [weak self] event in
+            guard let self, self.state.tab == .terminal else { return false }
+            let view = self.state.terminal.view
+            guard let window = view.window, !view.isHiddenOrHasHiddenAncestor,
+                  // Already the terminal's: it chose to pass the key up, so
+                  // let AppKit have it rather than loop it back.
+                  window.firstResponder !== view,
+                  window.makeFirstResponder(view) else { return false }
+            view.keyDown(with: event)
             return true
         }
         panel.onFind = { [weak self] in
@@ -1687,6 +1706,11 @@ final class KeyablePanel: NSPanel {
     /// ⌘V anywhere in the panel. Return true for terminal paste or a Code
     /// image attachment; false lets the focused field paste text.
     var onPaste: (() -> Bool)?
+    /// A key press nothing in the panel handled — typically Return or a
+    /// letter typed while the SwiftUI host, not a field, has focus. Return
+    /// true to take it (the Terminal tab hands it to the shell); false lets
+    /// AppKit beep as usual.
+    var onUnhandledKey: ((NSEvent) -> Bool)?
     /// ⌘F anywhere in the panel. Return true when a find bar took it.
     var onFind: (() -> Bool)?
     /// ⌘K. Return true when a terminal took it as "clear".
@@ -1850,6 +1874,12 @@ final class KeyablePanel: NSPanel {
     override func cancelOperation(_ sender: Any?) {
         if onCancel?() == true { return }
         orderOut(nil)
+    }
+
+    /// NSWindow's default beeps for a key press no responder took.
+    override func keyDown(with event: NSEvent) {
+        if onUnhandledKey?(event) == true { return }
+        super.keyDown(with: event)
     }
 }
 

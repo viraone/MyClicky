@@ -1,5 +1,6 @@
 import SwiftUI
 import AudioToolbox
+import Photos
 import PhotosUI
 
 /// A 22-key numeric keypad skinned like a Super Nintendo console.
@@ -870,7 +871,12 @@ struct NumpadView: View {
                 CameraCapture { image in
                     cameraShown = false
                     guard let image, let chat = photoChat else { photoChat = nil; return }
-                    Task { await sendPhoto(image, to: chat) }
+                    Task {
+                        // A shot from the in-app camera isn't in Photos the way
+                        // one from the Camera app would be — keep a copy there.
+                        await CameraRoll.add(image)
+                        await sendPhoto(image, to: chat)
+                    }
                 }
                 .ignoresSafeArea()
             }
@@ -1051,8 +1057,10 @@ struct NumpadView: View {
         await sendPhotoToDesktop(image)
     }
 
-    /// Shared by the Photos picker and the camera.
-    private func sendPhotoToDesktop(_ image: UIImage) async {
+    /// Shared by the Photos picker and the camera. `addedToPhotos` is nil for
+    /// a library pick (it's already in Photos), otherwise whether the camera
+    /// shot made it into the library.
+    private func sendPhotoToDesktop(_ image: UIImage, addedToPhotos: Bool? = nil) async {
         savingToDesktop = true
         statusText = "Sending photo to VIRADETH_RESUME on your Mac…"
         defer { savingToDesktop = false }
@@ -1063,7 +1071,12 @@ struct NumpadView: View {
         }
         client.savePhoto(jpeg.base64EncodedString())
         UINotificationFeedbackGenerator().notificationOccurred(.success)
-        statusText = "Photo sent (\(jpeg.count / 1024) KB) — saving to VIRADETH_RESUME…"
+        let sent = "sent (\(jpeg.count / 1024) KB) — saving to VIRADETH_RESUME…"
+        switch addedToPhotos {
+        case nil: statusText = "Photo \(sent)"
+        case true?: statusText = "Added to Photos · \(sent)"
+        case false?: statusText = "⚠︎ Couldn't add to Photos (check Settings → Peeky Remote → Photos) · \(sent)"
+        }
     }
 
     private func whatsappTextTapped(_ chat: WhatsAppChat) {
@@ -2104,7 +2117,12 @@ struct NumpadView: View {
             CameraCapture { image in
                 desktopCameraShown = false
                 guard let image else { return }
-                Task { await sendPhotoToDesktop(image) }
+                Task {
+                    // Keep the full-size shot in Photos, then send the Mac a
+                    // phone-friendly copy for VIRADETH_RESUME.
+                    let inPhotos = await CameraRoll.add(image)
+                    await sendPhotoToDesktop(image, addedToPhotos: inPhotos)
+                }
             }
             .ignoresSafeArea()
         }
@@ -2882,6 +2900,27 @@ struct WaveformView: View {
 
 #Preview {
     NumpadView()
+}
+
+/// Adds a camera shot to the user's Photos library. The in-app camera
+/// (UIImagePickerController) hands the picture back without keeping it, so
+/// without this the only copy would be the one on the Mac.
+private enum CameraRoll {
+    /// Returns true once the photo is in the library, false if permission was
+    /// refused or the write failed.
+    @discardableResult
+    static func add(_ image: UIImage) async -> Bool {
+        let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+        guard status == .authorized || status == .limited else { return false }
+        do {
+            try await PHPhotoLibrary.shared().performChanges {
+                PHAssetChangeRequest.creationRequestForAsset(from: image)
+            }
+            return true
+        } catch {
+            return false
+        }
+    }
 }
 
 /// The system camera, returning the shot (or nil if cancelled).
