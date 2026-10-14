@@ -64,7 +64,19 @@ enum KeynoteActions {
             let first = action == "FIRST"
             run("set current slide of front document to \(first ? "first" : "last") slide of front document")
             status(first ? "Keynote — first slide" : "Keynote — last slide", true, playing)
-        case "BLACK", "WHITE", "POINTER", "SWAP", "SWITCHER":
+        case "MOVIE":
+            // Keynote's in-show "Pause/Play movie" key. Outside a show it
+            // has no meaning, so start from the current slide and send it
+            // once the slideshow window is up.
+            if playing {
+                press("k", in: app)
+                status("Keynote — video play / pause", true, true)
+            } else {
+                start()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { press("k", in: app) }
+                status("Keynote — playing the show, then the video", true, true)
+            }
+        case "BLACK", "WHITE", "POINTER", "SWAP":
             guard playing else { status("Start the slideshow first", false, false); return }
             let key: String
             let message: String
@@ -72,8 +84,7 @@ enum KeynoteActions {
             case "BLACK": key = "b"; message = "Keynote — black screen toggled"
             case "WHITE": key = "w"; message = "Keynote — white screen toggled"
             case "POINTER": key = "c"; message = "Keynote — pointer toggled"
-            case "SWAP": key = "x"; message = "Keynote — displays swapped"
-            default: key = "equal"; message = "Keynote — slide switcher"
+            default: key = "x"; message = "Keynote — displays swapped"
             }
             press(key, in: app)
             status(message, true, true)

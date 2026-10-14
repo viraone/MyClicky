@@ -1998,7 +1998,7 @@ struct NumpadView: View {
             HStack(spacing: 0) {
                 keynoteRound("arrow.uturn.backward", "Exit") { keynoteTapped("EXIT") }
                 keynoteRound("house", "Keynote") { keynoteTapped("OPEN") }
-                keynoteRound("square.grid.2x2", "Slides") { keynoteTapped("SWITCHER") }
+                keynoteRound("play.rectangle.fill", "Video") { keynoteTapped("MOVIE") }
             }
             HStack(spacing: 0) {
                 keynoteRound("backward.end.fill", "First") { keynoteTapped("FIRST") }
@@ -2121,7 +2121,8 @@ struct NumpadView: View {
         case "WHITE": statusText = "Keynote — white screen (tap again to resume)"
         case "POINTER": statusText = "Keynote — pointer shown / hidden"
         case "SWAP": statusText = "Keynote — presenter and audience displays swapped"
-        case "SWITCHER": statusText = "Keynote — slide switcher"
+        case "MOVIE": statusText = playing ? "Keynote — play / pause the video on this slide"
+                                           : "Keynote — starting the show, then playing the video"
         default: break
         }
     }

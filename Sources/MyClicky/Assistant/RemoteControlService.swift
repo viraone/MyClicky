@@ -71,8 +71,9 @@ import Network
 ///                    PLAY (start from the current slide, or stop if playing),
 ///                    SELECT (start if stopped, else next build/slide),
 ///                    NEXT, PREV, FIRST, LAST, EXIT, BLACK, WHITE, POINTER,
-///                    SWAP (presenter/audience displays), SWITCHER (the
-///                    in-show slide switcher); the Mac replies with
+///                    SWAP (presenter/audience displays), MOVIE (play /
+///                    pause the video on the current slide, starting the
+///                    show first if needed); the Mac replies with
 ///                    KEYNOTE_STATE after each one
 ///   GMAIL TRASH_OPEN – trash the email open in the browser (confirm on Mac)
 ///   WHATSAPP OPEN_CHAT <name> – open the named chat in the WhatsApp desktop app

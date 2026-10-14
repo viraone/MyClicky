@@ -467,7 +467,6 @@ enum AXActions {
         "delete": 51, "backspace": 51, "forwarddelete": 117,
         "up": 126, "down": 125, "left": 123, "right": 124,
         "home": 115, "end": 119, "pageup": 116, "pagedown": 121,
-        "equal": 24, "minus": 27,
     ]
 
     private static func keyCode(for key: String) -> CGKeyCode? {
