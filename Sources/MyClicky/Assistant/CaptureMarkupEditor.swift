@@ -157,6 +157,20 @@ struct CaptureMarkupEditor: View {
                 .buttonStyle(.plain)
                 .disabled(annotations.isEmpty)
                 .help(selectedID == nil ? "Clear markup" : "Delete selected markup")
+
+                // Same as Cancel below, but always in reach at the top-right corner.
+                Button(action: onCancel) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 14, weight: .heavy))
+                        .foregroundStyle(.white)
+                        .frame(width: 30, height: 30)
+                        .background(Circle().fill(Color.red.opacity(0.85)))
+                        .overlay(Circle().stroke(Color.white.opacity(0.35), lineWidth: 1))
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .padding(.leading, 6)
+                .help("Close editor without saving")
             }
 
             if showsBackgroundControls {
