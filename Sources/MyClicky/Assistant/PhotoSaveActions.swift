@@ -5,7 +5,8 @@ private let log = Logger(subsystem: "com.myclicky", category: "photosave")
 
 /// Saves a photo sent from the phone straight into Desktop/VIRADETH_RESUME —
 /// a one-tap replacement for "save to Photos, send to a WhatsApp group,
-/// switch to the Mac, open WhatsApp, download the attachment".
+/// switch to the Mac, open WhatsApp, download the attachment". The photo is
+/// also put on the Mac clipboard so it can be pasted straight into an app.
 enum PhotoSaveActions {
     private static let folderName = "VIRADETH_RESUME"
 
@@ -13,7 +14,7 @@ enum PhotoSaveActions {
     static func save(_ imageData: Data, status: @escaping (_ message: String, _ ok: Bool) -> Void) {
         ActivityLog.recordAction("save-photo-to-desktop", ["bytes": "\(imageData.count)"])
         log.notice("save \(imageData.count) bytes")
-        guard NSImage(data: imageData) != nil else {
+        guard let image = NSImage(data: imageData) else {
             status("That photo couldn't be decoded.", false)
             return
         }
@@ -36,10 +37,27 @@ enum PhotoSaveActions {
         do {
             try imageData.write(to: url)
             log.notice("saved to \(url.path, privacy: .public)")
-            status("Saved to \(folderName) — \(name)", true)
+            let copied = copyToClipboard(image, jpeg: imageData)
+            status("Saved to \(folderName) — \(name)" + (copied ? " · copied to clipboard" : ""), true)
         } catch {
             log.error("write failed: \(error.localizedDescription, privacy: .public)")
             status("Couldn't save to \(folderName): \(error.localizedDescription)", false)
         }
+    }
+
+    /// Puts the photo on the general pasteboard as both JPEG and TIFF, so it
+    /// pastes into Messages, Mail, Docs, Preview and chat apps alike.
+    @MainActor
+    private static func copyToClipboard(_ image: NSImage, jpeg: Data) -> Bool {
+        let item = NSPasteboardItem()
+        item.setData(jpeg, forType: NSPasteboard.PasteboardType("public.jpeg"))
+        if let tiff = image.tiffRepresentation {
+            item.setData(tiff, forType: .tiff)
+        }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        let ok = pasteboard.writeObjects([item])
+        if !ok { log.error("couldn't write the photo to the clipboard") }
+        return ok
     }
 }
