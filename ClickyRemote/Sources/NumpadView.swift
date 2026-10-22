@@ -2122,7 +2122,7 @@ struct NumpadView: View {
         case "POINTER": statusText = "Keynote — pointer shown / hidden"
         case "SWAP": statusText = "Keynote — presenter and audience displays swapped"
         case "MOVIE": statusText = playing ? "Keynote — play / pause the video on this slide"
-                                           : "Keynote — starting the show, then playing the video"
+                                           : "Keynote — starting the show; tap Video again to pause / play the movie"
         default: break
         }
     }

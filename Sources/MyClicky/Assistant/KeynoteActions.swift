@@ -65,16 +65,18 @@ enum KeynoteActions {
             run("set current slide of front document to \(first ? "first" : "last") slide of front document")
             status(first ? "Keynote — first slide" : "Keynote — last slide", true, playing)
         case "MOVIE":
-            // Keynote's in-show "Pause/Play movie" key. Outside a show it
-            // has no meaning, so start from the current slide and send it
-            // once the slideshow window is up.
+            // Keynote's in-show "Pause/Play movie" key. It only has meaning
+            // while a show is running, and it is a toggle: a movie set to
+            // start automatically is already playing by the time the show
+            // is up, so pressing K then would pause it a second in. Outside
+            // a show, just start from the current slide and let the slide's
+            // own movie setting decide; the next tap pauses or plays.
             if playing {
                 press("k", in: app)
                 status("Keynote — video play / pause", true, true)
             } else {
                 start()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { press("k", in: app) }
-                status("Keynote — playing the show, then the video", true, true)
+                status("Keynote — playing the show; tap Video again to pause / play the movie", true, true)
             }
         case "BLACK", "WHITE", "POINTER", "SWAP":
             guard playing else { status("Start the slideshow first", false, false); return }
