@@ -1995,15 +1995,45 @@ struct NumpadView: View {
 
             Rectangle().fill(.white.opacity(0.12)).frame(height: 1)
 
+            // Video: one big green PLAY (first slide + show, so the movie on
+            // it starts), one big red STOP, then Keynote's in-show movie keys.
+            VStack(spacing: 8) {
+                HStack(spacing: 6) {
+                    Text("VIDEO")
+                        .font(.system(size: 10, weight: .black, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.5))
+                    Text(client.keynotePlaying ? "tap ⏯ to pause / resume" : "PLAY starts from slide 1")
+                        .font(.system(size: 10, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.35))
+                    Spacer()
+                }
+                .padding(.horizontal, 4)
+                HStack(spacing: 10) {
+                    keynoteWide("play.fill", client.keynotePlaying ? "PLAY / PAUSE" : "PLAY VIDEO", Snes.green) {
+                        keynoteTapped("VIDEO_PLAY")
+                    }
+                    keynoteWide("stop.fill", "STOP", Snes.red) { keynoteTapped("VIDEO_STOP") }
+                }
+                HStack(spacing: 0) {
+                    keynoteIcon("backward.end.fill", "Restart") { keynoteTapped("VIDEO_RESTART") }
+                    keynoteIcon("backward.fill", "Rewind") { keynoteTapped("VIDEO_REWIND") }
+                    keynoteIcon("playpause.fill", "Pause / resume") { keynoteTapped("VIDEO_PAUSE") }
+                    keynoteIcon("forward.fill", "Fast-forward") { keynoteTapped("VIDEO_FORWARD") }
+                    keynoteIcon("forward.end.fill", "Skip to end") { keynoteTapped("VIDEO_END") }
+                }
+                .frame(height: 50)
+            }
+
+            Rectangle().fill(.white.opacity(0.12)).frame(height: 1)
+
             HStack(spacing: 0) {
                 keynoteRound("arrow.uturn.backward", "Exit") { keynoteTapped("EXIT") }
                 keynoteRound("house", "Keynote") { keynoteTapped("OPEN") }
-                keynoteRound("play.rectangle.fill", "Video") { keynoteTapped("MOVIE") }
+                keynoteRound(client.keynotePlaying ? "stop.fill" : "play.fill",
+                             client.keynotePlaying ? "Stop show" : "Play slides") { keynoteTapped("PLAY") }
             }
             HStack(spacing: 0) {
                 keynoteRound("backward.end.fill", "First") { keynoteTapped("FIRST") }
-                keynoteRound(client.keynotePlaying ? "stop.fill" : "play.fill",
-                             client.keynotePlaying ? "Stop" : "Play") { keynoteTapped("PLAY") }
                 keynoteRound("forward.end.fill", "Last") { keynoteTapped("LAST") }
             }
         }
@@ -2086,6 +2116,28 @@ struct NumpadView: View {
         .accessibilityLabel(label)
     }
 
+    /// Big pill for the two video controls that matter on stage: PLAY and STOP.
+    private func keynoteWide(_ icon: String, _ title: String, _ tint: Color,
+                             action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 20, weight: .bold))
+                Text(title)
+                    .font(.system(size: 15, weight: .black, design: .rounded))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .frame(height: 58)
+            .background(Capsule().fill(tint))
+            .shadow(color: tint.opacity(0.45), radius: 8, y: 3)
+        }
+        .buttonStyle(SpotifyPressStyle())
+        .accessibilityLabel(title)
+    }
+
     private func keynoteRound(_ icon: String, _ title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 4) {
@@ -2123,6 +2175,14 @@ struct NumpadView: View {
         case "SWAP": statusText = "Keynote — presenter and audience displays swapped"
         case "MOVIE": statusText = playing ? "Keynote — play / pause the video on this slide"
                                            : "Keynote — starting the show; tap Video again to pause / play the movie"
+        case "VIDEO_PLAY": statusText = playing ? "Keynote — video paused / resumed"
+                                                : "Keynote — playing from slide 1, video starts with the slide"
+        case "VIDEO_STOP": statusText = "Keynote — stopping"
+        case "VIDEO_PAUSE": statusText = "Keynote — video paused / resumed"
+        case "VIDEO_RESTART": statusText = "Keynote — video back to the start"
+        case "VIDEO_REWIND": statusText = "Keynote — video rewinding"
+        case "VIDEO_FORWARD": statusText = "Keynote — video fast-forwarding"
+        case "VIDEO_END": statusText = "Keynote — video skipped to the end"
         default: break
         }
     }

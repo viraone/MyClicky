@@ -74,8 +74,12 @@ import Network
 ///                    SWAP (presenter/audience displays), MOVIE (in a show,
 ///                    pause / play the movie on the current slide; outside
 ///                    one, start the show and leave the movie to the slide's
-///                    own start setting); the Mac replies with
-///                    KEYNOTE_STATE after each one
+///                    own start setting), VIDEO_PLAY (from a standing start:
+///                    first slide + start the show; in a show: pause / resume
+///                    the movie), VIDEO_STOP (stop the show), VIDEO_PAUSE,
+///                    VIDEO_RESTART, VIDEO_REWIND, VIDEO_FORWARD, VIDEO_END
+///                    (Keynote's in-show movie keys K, I, J, L, O); the Mac
+///                    replies with KEYNOTE_STATE after each one
 ///   GMAIL TRASH_OPEN – trash the email open in the browser (confirm on Mac)
 ///   WHATSAPP OPEN_CHAT <name> – open the named chat in the WhatsApp desktop app
 ///   WHATSAPP TYPE_TEXT <text> – tidy the text and type it into the open chat (does not send)

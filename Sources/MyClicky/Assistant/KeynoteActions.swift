@@ -78,6 +78,37 @@ enum KeynoteActions {
                 start()
                 status("Keynote — playing the show; tap Video again to pause / play the movie", true, true)
             }
+        case "VIDEO_PLAY":
+            // The phone's big PLAY: from a standing start, go to the first
+            // slide and run the show so the movie on it starts with the
+            // slide. In a show it is Keynote's pause / resume key.
+            if playing {
+                press("k", in: app)
+                status("Keynote — video paused / resumed", true, true)
+            } else {
+                run("set current slide of front document to first slide of front document")
+                start()
+                status("Keynote — playing from slide 1; the video starts with the slide", true, true)
+            }
+        case "VIDEO_STOP":
+            guard playing else { status("Keynote — nothing is playing", true, false); return }
+            stop()
+            status("Keynote — stopped", true, false)
+        case "VIDEO_PAUSE", "VIDEO_RESTART", "VIDEO_REWIND", "VIDEO_FORWARD", "VIDEO_END":
+            // Keynote's in-show movie keys: K pause / resume, I to the
+            // start, J rewind, L fast-forward, O to the end.
+            guard playing else { status("Start the show first — tap PLAY", false, false); return }
+            let key: String
+            let message: String
+            switch action {
+            case "VIDEO_PAUSE": key = "k"; message = "Keynote — video paused / resumed"
+            case "VIDEO_RESTART": key = "i"; message = "Keynote — video back to the start"
+            case "VIDEO_REWIND": key = "j"; message = "Keynote — video rewinding"
+            case "VIDEO_FORWARD": key = "l"; message = "Keynote — video fast-forwarding"
+            default: key = "o"; message = "Keynote — video skipped to the end"
+            }
+            press(key, in: app)
+            status(message, true, true)
         case "BLACK", "WHITE", "POINTER", "SWAP":
             guard playing else { status("Start the slideshow first", false, false); return }
             let key: String
