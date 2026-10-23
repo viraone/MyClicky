@@ -2,7 +2,7 @@ import AppKit
 import CoreGraphics
 import Foundation
 
-/// Counts the time spent at the computer and, every 25 minutes of it, asks
+/// Counts the time spent at the computer and, every 30 minutes of it, asks
 /// for a break. Exists because the person using it will otherwise sit for
 /// hours.
 ///
@@ -16,10 +16,10 @@ import Foundation
 final class BreakCoach {
     /// One work stretch before a check-in. Overridable for testing:
     /// `defaults write com.local.MyClicky breakCoachIntervalSeconds -int 60`
-    /// (delete the key to go back to 25 minutes).
+    /// (delete the key to go back to 30 minutes).
     static var interval: TimeInterval {
         let override = UserDefaults.standard.double(forKey: "breakCoachIntervalSeconds")
-        return override > 0 ? override : 25 * 60
+        return override > 0 ? override : 30 * 60
     }
     /// Quiet for this long and the person is assumed to have stepped away.
     private static let awayAfter: TimeInterval = 5 * 60

@@ -5131,7 +5131,7 @@ struct AssistantPanelView: View {
             )
         }
         .buttonStyle(.plain)
-        .help(on ? "Break coach is on — Peeky checks in after 25 minutes at the computer. Click to turn off."
+        .help(on ? "Break coach is on — Peeky checks in after 30 minutes at the computer. Click to turn off."
                  : "Break coach is off. Click to turn on.")
     }
 

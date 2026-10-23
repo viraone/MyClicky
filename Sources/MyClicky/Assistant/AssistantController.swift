@@ -1895,7 +1895,7 @@ final class AssistantController {
 
     // MARK: - Break coach
 
-    /// Wires the 25-minute coach to the panel: a live countdown in the bottom
+    /// Wires the 30-minute coach to the panel: a live countdown in the bottom
     /// bar, and a spoken check-in when the stretch is up.
     private func startBreakCoach() {
         panel.state.coachEnabled = breakCoach.enabled
