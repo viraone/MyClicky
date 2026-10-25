@@ -2279,7 +2279,6 @@ struct NumpadView: View {
             // ASK / CAPTURE / COLLAPSE sit three across, so that row is
             // sized to thirds; the two-across rows below keep halves.
             let trioW = (geo.size.width - gap * 2) / 3
-            let bannerW = columnW
             let minimumPhotoH: CGFloat = isLandscape ? 40 : 56
             let rowH = (geo.size.height - topInset - gap * 8) / 9.8
             let chromeBudget = max(88, geo.size.height - topInset - gap * 6
@@ -2303,9 +2302,7 @@ struct NumpadView: View {
                 .frame(width: geo.size.width, height: switchH)
                 HStack(spacing: gap) {
                     key("on", label: "ON", icon: "power", tint: Snes.blue, lit: true,
-                        h: bannerH, w: bannerW, banner: true)
-                    key("0", label: "PEEKY", icon: "sparkles", tint: Snes.purple, lit: true,
-                        h: bannerH, w: bannerW, banner: true)
+                        h: bannerH, w: geo.size.width, banner: true)
                 }
                 HStack(alignment: .top, spacing: gap) {
                     // ASK records on the phone and sends `ASK <text>`: the Mac
@@ -2585,9 +2582,6 @@ struct NumpadView: View {
     private func tapped(_ label: String) {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         switch label {
-        case "0":
-            client.collapse()
-            statusText = "Peeky toggled — tap PEEKY again to hide or bring it back"
         case "on":
             client.show()
             statusText = "Peeky is ON and visible on your Mac"
