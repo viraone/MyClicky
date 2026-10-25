@@ -2315,6 +2315,10 @@ struct NumpadView: View {
                         icon: askRecording ? "stop.fill" : "questionmark.bubble.fill",
                         tint: askRecording ? Snes.red : Snes.green, lit: true,
                         h: heroH, w: trioHeroW, hero: !isLandscape, waveform: askRecording)
+                        // Temporarily off at the user's request; delete these
+                        // two lines to bring ASK back.
+                        .disabled(true)
+                        .opacity(0.35)
                     key("2", label: "CAPTURE", icon: "camera.viewfinder", tint: Snes.blue, lit: true,
                         h: heroH, w: trioHeroW, hero: !isLandscape)
                     // COLLAPSE is the panel header's "Minimize to corner"
