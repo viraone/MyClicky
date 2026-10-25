@@ -304,9 +304,26 @@ struct CaptureBackgroundLayout: Equatable {
     func fitted(toWidth width: CGFloat) -> CaptureMarkupPreviewLayout {
         let output = outputSize
         guard output.width > 0, output.height > 0, width > 0 else { return .empty }
-        let scale = width / output.width
-        return CaptureMarkupPreviewLayout(
-            compositionSize: CGSize(width: width, height: output.height * scale),
+        return preview(scale: width / output.width)
+    }
+
+    /// The same composition scaled to fit inside `available` on both axes —
+    /// the preview's `.aspectRatio(contentMode: .fit)` applied to the padded
+    /// composition. The editor uses this so a wide capture doesn't jump to
+    /// the panel's full width and overflow the window when Edit is clicked.
+    func fitted(in available: CGSize) -> CaptureMarkupPreviewLayout {
+        let output = outputSize
+        guard output.width > 0, output.height > 0,
+              available.width > 0, available.height > 0 else { return .empty }
+        return preview(scale: min(
+            available.width / output.width,
+            available.height / output.height
+        ))
+    }
+
+    private func preview(scale: CGFloat) -> CaptureMarkupPreviewLayout {
+        CaptureMarkupPreviewLayout(
+            compositionSize: CGSize(width: outputSize.width * scale, height: outputSize.height * scale),
             screenshotFrame: CGRect(
                 x: padding * scale,
                 y: padding * scale,

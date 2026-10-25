@@ -178,42 +178,45 @@ struct CaptureMarkupEditor: View {
             }
 
             GeometryReader { geometry in
+                // Fit the whole composition inside the panel — both axes, like
+                // the read-only preview. Fitting to width alone made a wide
+                // capture jump to the panel's full width (and overflow the
+                // window) the moment Edit was clicked.
                 let layout = CaptureBackgroundLayout(imageSize: pixelSize, style: background)
-                    .fitted(toWidth: geometry.size.width)
+                    .fitted(in: geometry.size)
                 // Annotations and gestures live in the capture's own frame, so
                 // normalized coordinates ignore the padding entirely.
                 let canvasSize = layout.screenshotFrame.size
-                ScrollView(.vertical) {
-                    // Padding is equal on every side, so centring the capture
-                    // layers in the composition lands them on `screenshotFrame`.
-                    ZStack {
-                        CaptureBackgroundPreview(image: image, style: background, layout: layout)
-                            .equatable()
+                // Padding is equal on every side, so centring the capture
+                // layers in the composition lands them on `screenshotFrame`.
+                ZStack {
+                    CaptureBackgroundPreview(image: image, style: background, layout: layout)
+                        .equatable()
 
-                        Canvas { context, size in
-                            for annotation in annotations {
-                                draw(annotation, in: &context, size: size)
-                                if annotation.id == selectedID {
-                                    drawSelection(around: annotation, in: &context, size: size)
-                                }
-                            }
-                            if let draft {
-                                draw(draft, in: &context, size: size)
+                    Canvas { context, size in
+                        for annotation in annotations {
+                            draw(annotation, in: &context, size: size)
+                            if annotation.id == selectedID {
+                                drawSelection(around: annotation, in: &context, size: size)
                             }
                         }
-                        .frame(width: canvasSize.width, height: canvasSize.height)
-                        .allowsHitTesting(false)
-
-                        Color.clear
-                            .contentShape(Rectangle())
-                            .frame(width: canvasSize.width, height: canvasSize.height)
-                            .highPriorityGesture(markupGesture(in: canvasSize))
+                        if let draft {
+                            draw(draft, in: &context, size: size)
+                        }
                     }
-                    .frame(width: layout.compositionSize.width, height: layout.compositionSize.height)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .overlay(RoundedRectangle(cornerRadius: 8)
-                        .strokeBorder(Color.cyan.opacity(0.45), lineWidth: 1))
+                    .frame(width: canvasSize.width, height: canvasSize.height)
+                    .allowsHitTesting(false)
+
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .frame(width: canvasSize.width, height: canvasSize.height)
+                        .highPriorityGesture(markupGesture(in: canvasSize))
                 }
+                .frame(width: layout.compositionSize.width, height: layout.compositionSize.height)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(Color.cyan.opacity(0.45), lineWidth: 1))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color.black.opacity(0.18))
             }
 

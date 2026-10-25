@@ -172,6 +172,28 @@ final class CaptureMarkupEditorTests: XCTestCase {
         XCTAssertEqual(preview.screenshotFrame, CGRect(x: 100, y: 100, width: 400, height: 200))
     }
 
+    func testPreviewLayoutShrinksToFitShortPanelsInsteadOfOverflowing() {
+        let preview = CaptureBackgroundLayout(
+            imageSize: CGSize(width: 1600, height: 900),
+            style: CaptureBackgroundStyle(padding: 0)
+        ).fitted(in: CGSize(width: 600, height: 200))
+
+        XCTAssertEqual(preview.scale, 200.0 / 900, accuracy: 0.0001)
+        XCTAssertEqual(preview.compositionSize.width, 1600.0 * 200 / 900, accuracy: 0.0001)
+        XCTAssertEqual(preview.compositionSize.height, 200, accuracy: 0.0001)
+    }
+
+    func testPreviewLayoutKeepsWidthFitWhenThePanelIsTallEnough() {
+        let preview = CaptureBackgroundLayout(
+            imageSize: CGSize(width: 200, height: 100),
+            style: CaptureBackgroundStyle(padding: 50)
+        ).fitted(in: CGSize(width: 600, height: 1000))
+
+        XCTAssertEqual(preview.scale, 2)
+        XCTAssertEqual(preview.compositionSize, CGSize(width: 600, height: 400))
+        XCTAssertEqual(preview.screenshotFrame, CGRect(x: 100, y: 100, width: 400, height: 200))
+    }
+
     func testRenderedOutputGrowsByTwiceThePadding() throws {
         let image = try makeImage(width: 200, height: 100, fill: .white)
         let style = CaptureBackgroundStyle(padding: 40, fill: .solid(CaptureBackgroundColor(hex: 0x0000FF)))
