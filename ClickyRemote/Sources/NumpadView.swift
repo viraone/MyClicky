@@ -302,14 +302,20 @@ struct NumpadView: View {
     /// label for every mode, plus REFRESH, evenly spaced across a single
     /// translucent card. The active mode is lit in its own colour.
     private var modeStrip: some View {
-        HStack(spacing: 0) {
-            ForEach(wheelEntries, id: \.self) { entry in
-                stripButton(entry)
-                    .frame(maxWidth: .infinity)
+        // Scrolls sideways rather than squeezing every cartridge into the
+        // screen's width: eight across left each icon about 48pt wide and shrank
+        // the labels to 7pt. At a fixed 80pt each they are legible, and the row
+        // slides to reach the ones past the edge.
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 2) {
+                ForEach(wheelEntries, id: \.self) { entry in
+                    stripButton(entry)
+                        .frame(width: 80)
+                }
             }
+            .padding(.horizontal, 6)
         }
         .padding(.vertical, 10)
-        .padding(.horizontal, 4)
         .background(
             RoundedRectangle(cornerRadius: 16)
                 .fill(Snes.bodyDark.opacity(0.55))
@@ -342,8 +348,8 @@ struct NumpadView: View {
         Button(action: action) {
             VStack(spacing: 6) {
                 Image(systemName: icon)
-                    .font(.system(size: 20, weight: .bold))
-                    .frame(width: 40, height: 40)
+                    .font(.system(size: 30, weight: .bold))
+                    .frame(width: 60, height: 60)
                     .foregroundStyle(.white)
                     .background(
                         Circle()
@@ -357,9 +363,9 @@ struct NumpadView: View {
                     )
                     .scaleEffect(selected ? 1.08 : 1)
                 Text(title)
-                    .font(.system(size: 10, design: .rounded).weight(.heavy))
+                    .font(.system(size: 13, design: .rounded).weight(.heavy))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.7)
+                    .minimumScaleFactor(0.75)
                     .foregroundStyle(selected ? accent.darker(0.15) : Snes.text)
             }
             .padding(.horizontal, 2)
