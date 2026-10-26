@@ -21,6 +21,9 @@ final class ClickyClient: ObservableObject {
     var onWhatsAppStatus: ((_ message: String, _ ok: Bool) -> Void)?
     /// Outcome of the last SAVE_PHOTO command as reported by the Mac.
     var onSavePhotoStatus: ((_ message: String, _ ok: Bool) -> Void)?
+    /// Outcome of the last SCREENSHOT CHROME command as reported by the Mac.
+    /// Shown as a toast rather than spoken.
+    var onScreenshotStatus: ((_ message: String, _ ok: Bool) -> Void)?
     /// Whether the browser window playing YouTube is currently minimized —
     /// drives the Collapse/Expand label on the YouTube pad.
     @Published var youtubeCollapsed = false
@@ -228,6 +231,9 @@ final class ClickyClient: ObservableObject {
                         } else if line.hasPrefix("SAVE_PHOTO_STATUS ") {
                             let parts = line.dropFirst(18).split(separator: "\t", maxSplits: 1).map(String.init)
                             if parts.count == 2 { self.onSavePhotoStatus?(parts[1], parts[0] == "OK") }
+                        } else if line.hasPrefix("SCREENSHOT_STATUS ") {
+                            let parts = line.dropFirst(18).split(separator: "\t", maxSplits: 1).map(String.init)
+                            if parts.count == 2 { self.onScreenshotStatus?(parts[1], parts[0] == "OK") }
                         } else if line.hasPrefix("SCREENS ") {
                             let parts = line.dropFirst(8).split(separator: " ").compactMap { Int($0) }
                             if parts.count == 2 {

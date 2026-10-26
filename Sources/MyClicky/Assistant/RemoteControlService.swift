@@ -106,6 +106,8 @@ import Network
 ///   WHATSAPP_UNREAD <n>       – WhatsApp's unread badge changed (0 = cleared)
 ///   WHATSAPP_STATUS OK|FAIL\t<message> – outcome of the last WHATSAPP command
 ///   SAVE_PHOTO_STATUS OK|FAIL\t<message> – outcome of the last SAVE_PHOTO command
+///   SCREENSHOT_STATUS OK|FAIL\t<message> – outcome of the last SCREENSHOT
+///                    CHROME command; the phone shows it as a toast, unspoken
 ///   YOUTUBE_STATE COLLAPSED|EXPANDED – resulting state of the last
 ///                    YOUTUBE COLLAPSE toggle
 ///   KEYNOTE_STATE PLAYING|STOPPED – whether a slideshow is running after

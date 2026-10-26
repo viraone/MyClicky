@@ -200,6 +200,12 @@ struct NumpadView: View {
                 showNotice(ok ? "Added to VIRADETH_RESUME on your Desktop" : message,
                            ok: ok, seconds: ok ? 2.4 : 3.5)
             }
+            // ENTIRE SCREEN: a black toast, not a spoken status — the shot is
+            // already described by the key and the toast is enough.
+            client.onScreenshotStatus = { message, ok in
+                statusText = (ok ? "✓ " : "⚠︎ ") + message
+                showNotice(message, ok: ok, seconds: ok ? 2.4 : 3.5)
+            }
             client.start()
             permissionDenied = !(await SpeechRecorder.requestPermissions())
         }
@@ -2592,7 +2598,7 @@ struct NumpadView: View {
             statusText = "Peeky is ON and visible on your Mac"
         case "entire_screen":
             client.entireScreen()
-            statusText = "Screenshot of your Chrome screen is on the Mac clipboard. Paste it anywhere."
+            statusText = "Copying your Chrome screen to the Mac clipboard…"
         case "minimize":
             if client.peekyLayout == "COLLAPSED" {
                 client.expand()

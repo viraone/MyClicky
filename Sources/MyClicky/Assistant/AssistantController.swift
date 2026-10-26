@@ -1824,16 +1824,16 @@ final class AssistantController {
     }
 
     /// ENTIRE SCREEN on the phone: a full-resolution PNG of the display
-    /// Chrome's front window is on, onto the clipboard, then a STATUS line
-    /// back to the phone saying how it went.
+    /// Chrome's front window is on, onto the clipboard, then a
+    /// SCREENSHOT_STATUS line the phone shows as a toast (not spoken).
     private func copyChromeScreenToClipboard() async {
         switch await ChromeScreenshot.copyEntireScreenToClipboard(capture: capture) {
         case .copied:
-            remote.broadcast("STATUS Chrome screenshot copied to the clipboard")
+            remote.broadcast("SCREENSHOT_STATUS OK\tChrome screenshot copied to the clipboard")
         case .chromeNotOpen:
-            remote.broadcast("STATUS Chrome is not open on the Mac")
+            remote.broadcast("SCREENSHOT_STATUS FAIL\tChrome is not open on the Mac")
         case .failed(let message):
-            remote.broadcast("STATUS \(message.replacingOccurrences(of: "\n", with: " "))")
+            remote.broadcast("SCREENSHOT_STATUS FAIL\t\(message.replacingOccurrences(of: "\n", with: " "))")
         }
     }
 
