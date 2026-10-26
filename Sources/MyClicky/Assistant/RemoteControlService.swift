@@ -40,6 +40,8 @@ import Network
 ///   KEY ENTER      – press Return once in the currently focused Mac control
 ///   KEY PASTE      – press Command-V in the currently focused Mac control
 ///   BROWSER RELOAD – reload the active browser tab (like ⌘R)
+///   SCREENSHOT CHROME – copy a full-resolution PNG of the whole display
+///                    Chrome's front window is on to the Mac clipboard
 ///   GMAIL COMPOSE  – open a new Gmail compose window in the browser
 ///   GMAIL INBOX    – go back to the inbox list
 ///   GMAIL OPEN_LATEST – open the newest Primary-inbox email
@@ -160,6 +162,9 @@ final class RemoteControlService {
     var onSavePhoto: ((Data) -> Void)?
     var onBrowserReload: (() -> Void)?
     var onCapture: (() -> Void)?
+    /// `SCREENSHOT CHROME` — full-resolution PNG of the display Chrome's
+    /// front window is on, onto the clipboard.
+    var onScreenshotChrome: (() -> Void)?
     var onAsk: ((String) -> Void)?
     var onDictate: ((String) -> Void)?
     var onPartial: ((String) -> Void)?
@@ -287,6 +292,8 @@ final class RemoteControlService {
             onStrip?()
         } else if line == "CAPTURE" {
             onCapture?()
+        } else if line == "SCREENSHOT CHROME" {
+            onScreenshotChrome?()
         } else if line.hasPrefix("TAB ") {
             onTab?(String(line.dropFirst(4)))
         } else if line == "KEY ENTER" {

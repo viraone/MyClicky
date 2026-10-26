@@ -69,6 +69,31 @@ actor ScreenCaptureService {
         return data
     }
 
+    /// Captures the whole display at full resolution and returns a PNG —
+    /// the same capture as `captureDisplayJPEG`, without the downscale, for
+    /// pasting a screenshot elsewhere.
+    func captureDisplayPNG(screen: NSScreen, excludingOwnWindows: Bool = true) async throws -> Data {
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        guard let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
+              let display = content.displays.first(where: { $0.displayID == number }) else {
+            throw CaptureError.noDisplay
+        }
+
+        let ownWindows = excludingOwnWindows
+            ? content.windows.filter { $0.owningApplication?.processID == getpid() }
+            : []
+        let filter = SCContentFilter(display: display, excludingWindows: ownWindows)
+        let scale = screen.backingScaleFactor
+        let config = SCStreamConfiguration()
+        config.width = Int(screen.frame.width * scale)
+        config.height = Int(screen.frame.height * scale)
+        config.showsCursor = false
+        config.captureResolution = .best
+        let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+        guard let data = Self.pngData(from: image) else { throw CaptureError.encodingFailed }
+        return data
+    }
+
     private static func downscale(_ image: CGImage, maxDimension: CGFloat) -> CGImage? {
         let width = CGFloat(image.width)
         let height = CGFloat(image.height)

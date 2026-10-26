@@ -2302,7 +2302,12 @@ struct NumpadView: View {
                 .frame(width: geo.size.width, height: switchH)
                 HStack(spacing: gap) {
                     key("on", label: "ON", icon: "power", tint: Snes.blue, lit: true,
-                        h: bannerH, w: geo.size.width, banner: true)
+                        h: bannerH, w: columnW, banner: true)
+                    // ENTIRE SCREEN: a full-resolution PNG of the whole display
+                    // Chrome's front window is on, left on the Mac clipboard.
+                    key("entire_screen", label: "ENTIRE SCREEN", icon: "display",
+                        tint: Snes.purple, lit: true,
+                        h: bannerH, w: columnW, banner: true)
                 }
                 HStack(alignment: .top, spacing: gap) {
                     // ASK records on the phone and sends `ASK <text>`: the Mac
@@ -2585,6 +2590,9 @@ struct NumpadView: View {
         case "on":
             client.show()
             statusText = "Peeky is ON and visible on your Mac"
+        case "entire_screen":
+            client.entireScreen()
+            statusText = "Screenshot of your Chrome screen is on the Mac clipboard. Paste it anywhere."
         case "minimize":
             if client.peekyLayout == "COLLAPSED" {
                 client.expand()

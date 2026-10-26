@@ -1520,6 +1520,10 @@ final class AssistantController {
             self.toast.show("Pasted into Peeky Terminal", icon: "doc.on.clipboard", tint: .green)
         }
         remote.onCapture = { [weak self] in self?.onCaptureRequest?() }
+        remote.onScreenshotChrome = { [weak self] in
+            guard let self else { return }
+            Task { await self.copyChromeScreenToClipboard() }
+        }
         remote.onBrowserReload = { [weak self] in
             ActivityLog.recordAction("browser-reload")
             if !BrowserTabReader.reloadActiveTab() {
@@ -1817,6 +1821,20 @@ final class AssistantController {
         remote.start()
         ActivityLog.startSampling()
         startBreakCoach()
+    }
+
+    /// ENTIRE SCREEN on the phone: a full-resolution PNG of the display
+    /// Chrome's front window is on, onto the clipboard, then a STATUS line
+    /// back to the phone saying how it went.
+    private func copyChromeScreenToClipboard() async {
+        switch await ChromeScreenshot.copyEntireScreenToClipboard(capture: capture) {
+        case .copied:
+            remote.broadcast("STATUS Chrome screenshot copied to the clipboard")
+        case .chromeNotOpen:
+            remote.broadcast("STATUS Chrome is not open on the Mac")
+        case .failed(let message):
+            remote.broadcast("STATUS \(message.replacingOccurrences(of: "\n", with: " "))")
+        }
     }
 
     /// Brings up the assistant panel without starting local speech capture
