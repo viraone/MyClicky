@@ -149,6 +149,27 @@ enum BrowserTabReader {
         return nil
     }
 
+    /// Runs JavaScript in a tab — in any window, and whether or not it is the
+    /// active one — whose URL contains `needle`. Unlike `runJavaScript` above,
+    /// this targets the tab object itself (`execute <tab> javascript`), so a
+    /// job can read a background admin tab without bringing it forward first.
+    /// Several tabs can match; each is tried in turn and the first non-empty
+    /// result wins, so another tab on a neighbouring page can't answer for
+    /// the one the caller navigated. Returns nil when no tab matched or the
+    /// browser refused (Chrome needs View ▸ Developer ▸ "Allow JavaScript from
+    /// Apple Events").
+    static func runJavaScript(_ js: String, inTabMatching needle: String) -> String? {
+        let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
+        let escaped = js
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        for (bundleID, script) in tabJavaScriptScripts(urlContains: needle, js: escaped)
+        where running.contains(bundleID) {
+            if let result = run(script: script) { return result }
+        }
+        return nil
+    }
+
     /// The frontmost (or any running) supported browser whose active tab URL
     /// matches `predicate`.
     static func runningBrowser(withTabMatching predicate: (String) -> Bool) -> NSRunningApplication? {
@@ -342,6 +363,48 @@ enum BrowserTabReader {
                             set miniaturized of w to false
                             set index of w to 1
                             return "1"
+                        end if
+                    end repeat
+                end try
+            end repeat
+        end tell
+        return ""
+        """#
+        return [
+            ("com.google.Chrome", chromiumScript("Google Chrome")),
+            ("com.apple.Safari", safariScript),
+            ("company.thebrowser.Browser", chromiumScript("Arc")),
+            ("com.microsoft.edgemac", chromiumScript("Microsoft Edge")),
+            ("com.brave.Browser", chromiumScript("Brave Browser")),
+        ]
+    }
+
+    private static func tabJavaScriptScripts(urlContains needle: String, js: String) -> [(bundleID: String, script: String)] {
+        func chromiumScript(_ app: String) -> String {
+            #"""
+            tell application "\#(app)"
+                repeat with w in windows
+                    try
+                        repeat with t in tabs of w
+                            if (URL of t contains "\#(needle)") then
+                                set resultText to (execute t javascript "\#(js)")
+                                if resultText is not "" then return resultText
+                            end if
+                        end repeat
+                    end try
+                end repeat
+            end tell
+            return ""
+            """#
+        }
+        let safariScript = #"""
+        tell application "Safari"
+            repeat with w in windows
+                try
+                    repeat with t in tabs of w
+                        if (URL of t contains "\#(needle)") then
+                            set resultText to (do JavaScript "\#(js)" in t)
+                            if resultText is not "" then return resultText
                         end if
                     end repeat
                 end try

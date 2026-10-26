@@ -25,7 +25,7 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Peeky Remote connects to the Peeky app running on your Mac over your local network.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Peeky Remote uses the camera to snap a photo and send it to WhatsApp on your Mac.</string>
+	<string>Peeky Remote uses the camera to snap a photo and save it to your Mac.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Peeky Remote adds the photos you snap to your Photos library.</string>
 	<key>NSMicrophoneUsageDescription</key>

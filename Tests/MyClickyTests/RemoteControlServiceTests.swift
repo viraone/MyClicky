@@ -59,6 +59,39 @@ final class RemoteControlServiceTests: XCTestCase {
         XCTAssertEqual(keyActions, 0)
     }
 
+    func testShopifySectionsAreForwardedTrimmed() {
+        let service = RemoteControlService()
+        var sections: [String] = []
+        service.onShopify = { sections.append($0) }
+
+        service.handle("SHOPIFY Orders")
+        service.handle("SHOPIFY Online Store ")
+        service.handle("SHOPIFY Inventory")
+        service.handle("SHOPIFY Bill Pay")
+
+        XCTAssertEqual(sections, ["Orders", "Online Store", "Inventory", "Bill Pay"])
+    }
+
+    /// A sub-item whose admin route runs to more than one segment is sent by
+    /// its display name and resolves to the whole route.
+    func testMultiSegmentShopifySectionResolvesToItsWholeRoute() {
+        let service = RemoteControlService()
+        var sections: [String] = []
+        service.onShopify = { sections.append($0) }
+
+        service.handle("SHOPIFY Inventory")
+
+        XCTAssertEqual(sections, ["Inventory"])
+        XCTAssertEqual(ShopifyActions.section(named: sections[0])?.path, "products/inventory")
+    }
+
+    func testShopifyTableNoneReplyNamesItsSection() {
+        XCTAssertEqual(RemoteControlService.shopifyTableNoneLine(for: "Home"),
+                       "SHOPIFY_TABLE_NONE Home")
+        XCTAssertEqual(RemoteControlService.shopifyTableNoneLine(for: "Live View"),
+                       "SHOPIFY_TABLE_NONE Live View")
+    }
+
     func testExistingTabAliasesRemainForwarded() {
         let service = RemoteControlService()
         var tabs: [String] = []

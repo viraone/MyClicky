@@ -20,38 +20,20 @@ struct NumpadView: View {
     /// True after tapping "1"/"3": speech goes to the Mac clipboard, not a question.
     @State private var dictateMode = false
     /// Which target the current recording is for.
-    enum RecordTarget { case ask, dictate, whatsapp, talk, doc }
+    enum RecordTarget { case ask, dictate, talk, doc }
     @State private var recordTarget: RecordTarget = .ask
-    /// Which WhatsApp chat the current dictation is for.
-    @State private var whatsappChat: WhatsAppChat = .test
-    /// Photo picker state: which chat the picked photo goes to, and the pick itself.
-    @State private var photoChat: WhatsAppChat?
-    @State private var photoPickerShown = false
-    @State private var photoPick: PhotosPickerItem?
-    @State private var cameraShown = false
-    @State private var sendingPhoto = false
-    /// Chat with a photo preview waiting on the Mac; Send must not re-open it.
-    @State private var photoAttachedIn: WhatsAppChat?
-    /// Small copy of the attached photo, shown on the Photo button as proof it went.
-    @State private var attachedThumb: UIImage?
-    /// Typed-message alert state: which chat "Text" was tapped for, and the draft.
-    @State private var showingTextCompose = false
-    @State private var textComposeChat: WhatsAppChat = .test
-    @State private var textDraft = ""
-    /// Quick-save state: send a photo straight to the Mac's Desktop, no chat involved.
+    /// Quick-save state: send a photo straight to the Mac's Desktop.
     @State private var desktopPickerShown = false
     @State private var desktopPick: PhotosPickerItem?
     @State private var desktopCameraShown = false
     @State private var savingToDesktop = false
+    /// Shopify's second screen: a live table read from Chrome. `shopifyParent`
+    /// is the sidebar tile that was tapped (which picks the tab strip);
+    /// `shopifySection` is the tab currently showing.
+    @State private var shopifyTableShown = false
+    @State private var shopifyParent = "Orders"
+    @State private var shopifySection = "Orders"
 
-    struct WhatsAppChat: Equatable {
-        let label: String
-        let icon: String
-        let name: String
-        static let test = WhatsAppChat(label: "Test", icon: "person.3.fill", name: "Test")
-        static let vip = WhatsAppChat(label: "VIP", icon: "star.fill",
-                                      name: "viradeth xay-ananh- VIP Automated Resume System")
-    }
     /// Which "cartridge" is loaded: the desktop remote, Peeky Code, or an app remote.
     @State private var mode: RemoteMode = .remote
     /// Documentary answers are silent on the phone unless the user opts in.
@@ -83,7 +65,7 @@ struct NumpadView: View {
         case code = "PEEKY CODE"
         case doc = "PEEKY DOC"
         case video = "PEEKY VIDEO"
-        case whatsapp = "WHATSAPP"
+        case shopify = "SHOPIFY"
         case youtube = "YOUTUBE"
         case keynote = "KEYNOTE"
 
@@ -93,7 +75,7 @@ struct NumpadView: View {
             case .code: "chevron.left.forwardslash.chevron.right"
             case .doc: "film.stack"
             case .video: "film"
-            case .whatsapp: "bubble.left.and.bubble.right.fill"
+            case .shopify: "storefront.fill"
             case .youtube: "play.rectangle.fill"
             case .keynote: "play.rectangle.on.rectangle.fill"
             }
@@ -117,7 +99,7 @@ struct NumpadView: View {
             case .code: Snes.red
             case .doc: Snes.doc
             case .video: Snes.video
-            case .whatsapp: Snes.whatsapp
+            case .shopify: Snes.shopify
             case .youtube: Snes.youtube
             case .keynote: Snes.keynote
             }
@@ -129,7 +111,7 @@ struct NumpadView: View {
             case .code: "Peeky Code mode — Terminal and Enter control Peeky on your Mac"
             case .doc: "Peeky Doc — play a documentary, then Ask Peeky about the moment on screen"
             case .video: "Peeky Video — play, cut and export the project open on your Mac; spin the dial to move frame by frame"
-            case .whatsapp: "WhatsApp mode — buttons control the WhatsApp app on your Mac"
+            case .shopify: "Shopify mode — tap a section to open it in the admin tab in Chrome on your Mac"
             case .youtube: "YouTube mode — buttons control the YouTube tab open in your browser"
             case .keynote: "Keynote clicker — the ring steps through slides, the centre plays / advances, Home brings Keynote up on your Mac"
             }
@@ -190,8 +172,8 @@ struct NumpadView: View {
                     }
                 }
             }
-            client.onWhatsAppStatus = { message, ok in
-                guard mode == .whatsapp else { return }
+            client.onShopifyStatus = { message, ok in
+                guard mode == .shopify else { return }
                 statusText = (ok ? "✓ " : "⚠︎ ") + message
                 if !ok { UINotificationFeedbackGenerator().notificationOccurred(.warning) }
             }
@@ -255,10 +237,10 @@ struct NumpadView: View {
         [
             RemoteMode.remote.rawValue,
             RemoteMode.keynote.rawValue,
-            RemoteMode.doc.rawValue,
+            RemoteMode.shopify.rawValue,
             "REFRESH",
             RemoteMode.video.rawValue,
-            RemoteMode.whatsapp.rawValue,
+            RemoteMode.doc.rawValue,
             RemoteMode.youtube.rawValue,
             RemoteMode.code.rawValue,
         ]
@@ -273,13 +255,14 @@ struct NumpadView: View {
             case .code: keypad
             case .doc: docPad
             case .video: videoPad
-            case .whatsapp: whatsappPad
+            case .shopify: shopifyPad
             case .youtube: youtubePad
             case .keynote: keynotePad
             }
         }
-        // Talk rides along in the corner of every pad but the keypad,
-        // which has a full-size TALK key of its own.
+        // Talk rides along in the corner of the remaining pads — the keypad
+        // has a full-size TALK key of its own, and Shopify is kept clear so
+        // the whole bottom edge belongs to its section grid.
         // `safeAreaInset` rather than an overlay: it reserves its own
         // space instead of sitting on top of a key or tile and
         // swallowing taps meant for what's underneath.
@@ -287,7 +270,8 @@ struct NumpadView: View {
             // The trailing padding is what holds it off the right
             // edge — raise it to move Talk further left, lower it to
             // push it back toward the corner.
-            if mode != .remote && mode != .code && mode != .doc && mode != .video && mode != .keynote {
+            if mode != .remote && mode != .code && mode != .doc && mode != .video
+                && mode != .keynote && mode != .shopify {
                 cornerTalkButton.padding(.trailing, 44)
             }
         }
@@ -345,11 +329,6 @@ struct NumpadView: View {
             stripItem(icon: m.icon.isEmpty ? "sparkles" : m.icon, title: m.shortName, accent: m.accent,
                       selected: mode == m) {
                 selectMode(m)
-            }
-            .overlay(alignment: .topTrailing) {
-                if m == .whatsapp, client.whatsappUnread > 0 {
-                    unreadBadge(client.whatsappUnread).offset(x: 6, y: -6)
-                }
             }
             // Temporarily off at the user's request; delete this
             // modifier to bring Peeky Code back.
@@ -449,14 +428,6 @@ struct NumpadView: View {
             modeButton(icon: m.icon, title: m.rawValue, accent: m.accent, selected: mode == m) {
                 selectMode(m)
             }
-            .overlay(alignment: .topTrailing) {
-                if m == .whatsapp, client.whatsappUnread > 0 {
-                    unreadBadge(client.whatsappUnread)
-                        .offset(x: 4, y: -6)
-                        .transition(.scale.combined(with: .opacity))
-                }
-            }
-            .animation(.spring(response: 0.3, dampingFraction: 0.6), value: client.whatsappUnread)
         }
     }
 
@@ -487,22 +458,6 @@ struct NumpadView: View {
             recordTarget = .ask
             applySelection()
         }
-    }
-
-    /// Small red pill with the unread count — silent, works while the phone is on DND.
-    private func unreadBadge(_ count: Int) -> some View {
-        Text(count > 99 ? "99+" : "\(count)")
-            .font(.system(size: 11, weight: .black, design: .rounded))
-            .foregroundStyle(.white)
-            .padding(.horizontal, count > 9 ? 6 : 0)
-            .frame(minWidth: 20, minHeight: 20)
-            .background(
-                Capsule()
-                    .fill(LinearGradient(colors: [Color(red: 1, green: 0.35, blue: 0.3), Color(red: 0.85, green: 0.1, blue: 0.1)],
-                                         startPoint: .top, endPoint: .bottom))
-                    .overlay(Capsule().strokeBorder(Color.white.opacity(0.9), lineWidth: 1.5))
-                    .shadow(color: .black.opacity(0.4), radius: 2, y: 1)
-            )
     }
 
     /// Ratchet click as the wheel passes each notch.
@@ -854,67 +809,489 @@ struct NumpadView: View {
         }
     }
 
-    // MARK: - WhatsApp pad (controls the WhatsApp desktop app on the Mac)
+    // MARK: - Shopify pad (drives the admin tab open in Chrome on the Mac)
 
-    // Each section is wrapped in AnyView on purpose: the combined modifier
-    // chain (photosPicker + fullScreenCover + onChange + alert + six-button
-    // rows) produced a generic type so deeply nested that the Swift runtime
-    // overflowed its stack just decoding the type name when this pad first
-    // appeared. Erasing per section keeps every type shallow.
-    private var whatsappPad: some View {
+    /// One row of the Shopify admin's left sidebar, in the order it appears
+    /// there, with the icon the remote draws for it.
+    private struct ShopifySection: Identifiable {
+        let name: String
+        let icon: String
+        var id: String { name }
+    }
+
+    private static let shopifySections: [ShopifySection] = [
+        ShopifySection(name: "Home", icon: "house.fill"),
+        ShopifySection(name: "Orders", icon: "bag.fill"),
+        ShopifySection(name: "Products", icon: "tag.fill"),
+        ShopifySection(name: "Customers", icon: "person.2.fill"),
+        ShopifySection(name: "Growth", icon: "chart.line.uptrend.xyaxis"),
+        ShopifySection(name: "Discounts", icon: "percent"),
+        ShopifySection(name: "Content", icon: "doc.text.fill"),
+        ShopifySection(name: "Markets", icon: "globe"),
+        ShopifySection(name: "Finance", icon: "creditcard.fill"),
+        ShopifySection(name: "Analytics", icon: "chart.bar.fill"),
+        ShopifySection(name: "Online Store", icon: "storefront.fill"),
+        ShopifySection(name: "Apps", icon: "square.grid.2x2.fill"),
+        ShopifySection(name: "Settings", icon: "gearshape.fill"),
+    ]
+
+    /// Each parent tile and the sidebar sub-items indented under it. The
+    /// parent itself is the first tab; a section with no sub-items still gets
+    /// a one-tab strip. Every tab opens its own live table inside the panel.
+    private static let shopifyTabSections: [String: [String]] = [
+        "Home": ["Home"],
+        "Orders": ["Orders", "Drafts", "Shipping labels", "Abandoned checkouts"],
+        "Products": ["Products", "Collections", "Inventory", "Purchase orders",
+                     "Transfers", "Gift cards"],
+        "Customers": ["Customers", "Segments", "Companies"],
+        "Growth": ["Growth", "Attribution", "Autopilot", "Campaigns"],
+        "Discounts": ["Discounts"],
+        "Content": ["Content", "Metaobjects", "Files", "Menus", "Blog posts"],
+        "Markets": ["Markets", "Catalogs", "Rollouts"],
+        "Finance": ["Finance", "Credit", "Payouts", "Bill Pay"],
+        "Analytics": ["Analytics", "Reports", "Live View"],
+        "Online Store": ["Online Store"],
+        "Apps": ["Apps"],
+        "Settings": ["Settings"],
+    ]
+
+    /// The cartridge's two screens: the sidebar grid, or — after tapping any
+    /// tile — that section's live table read out of Chrome.
+    @ViewBuilder
+    private var shopifyPad: some View {
+        if shopifyTableShown {
+            shopifyTablesPad
+        } else {
+            shopifyGrid
+        }
+    }
+
+    /// The admin's own look: a dark sidebar, one green-edged key per section.
+    /// Every tap retargets the same admin tab already open in Chrome, so the
+    /// grid is a remote for that one tab rather than a way to spawn copies.
+    private var shopifyGrid: some View {
         VStack(spacing: 10) {
-            whatsappChatsSection
-            Spacer()
-            clickyPill
+            HStack(spacing: 8) {
+                Circle().fill(Snes.shopify).frame(width: 8, height: 8)
+                Text("Shopify admin")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                Text("in Chrome on your Mac")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.45))
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 4)
+
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.flexible(), spacing: 8),
+                                    GridItem(.flexible(), spacing: 8)],
+                          spacing: 8) {
+                    ForEach(Self.shopifySections) { section in
+                        shopifyTile(section)
+                    }
+                }
+            }
+            .scrollIndicators(.hidden)
+
             HStack(spacing: 6) {
                 Image(systemName: "info.circle.fill")
-                Text("Buttons act on the WhatsApp app on your Mac.")
+                Text("Opens in the Shopify admin tab already open in Chrome.")
             }
             .font(.system(size: 9, design: .monospaced).weight(.semibold))
             .foregroundStyle(Snes.text.opacity(0.6))
             .lineLimit(1)
             .minimumScaleFactor(0.7)
         }
+        .padding(10)
+        .background(shopifyPanelBackground)
     }
 
-    private var whatsappChatsSection: AnyView {
-        AnyView(
-            padSection(title: "CHATS", subtitle: "Open → Reply (speak, tap again to stop) → check it → Send · Photo attaches from your library") {
-                VStack(spacing: 8) {
-                    AnyView(whatsappRow(.test))
-                    AnyView(whatsappRow(.vip))
-                }
+    /// The charcoal card both Shopify screens sit in.
+    private var shopifyPanelBackground: some View {
+        RoundedRectangle(cornerRadius: 20)
+            .fill(LinearGradient(colors: [Color(red: 0.09, green: 0.09, blue: 0.10),
+                                          Color(red: 0.04, green: 0.04, blue: 0.05)],
+                                 startPoint: .top, endPoint: .bottom))
+            .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.white.opacity(0.08), lineWidth: 1))
+            .shadow(color: .black.opacity(0.35), radius: 6, y: 4)
+    }
+
+    /// One sidebar section shrunk to a phone key: Shopify-green rail, icon,
+    /// name, and a chevron for "this takes you somewhere".
+    private func shopifyTile(_ section: ShopifySection) -> some View {
+        Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            // Every tile opens the live mirror; its strip is the section's
+            // own sub-items (a single tab when it has none).
+            shopifyParent = section.name
+            shopifySection = section.name
+            shopifyTableShown = true
+            client.shopify(section.name)
+            statusText = "Shopify — opening \(section.name) in Chrome on your Mac"
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: section.icon)
+                    .font(.system(size: 16, weight: .bold))
+                    .frame(width: 22)
+                    .foregroundStyle(Snes.shopify.lighter(0.45))
+                Text(section.name)
+                    .font(.system(size: 13, design: .monospaced).weight(.heavy))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.65)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 9, weight: .black))
+                    .foregroundStyle(.white.opacity(0.3))
             }
-            .photosPicker(isPresented: $photoPickerShown, selection: $photoPick,
-                          matching: .images, photoLibrary: .shared())
-            .fullScreenCover(isPresented: $cameraShown) {
-                CameraCapture { image in
-                    cameraShown = false
-                    guard let image, let chat = photoChat else { photoChat = nil; return }
-                    Task {
-                        // A shot from the in-app camera isn't in Photos the way
-                        // one from the Camera app would be — keep a copy there.
-                        await CameraRoll.add(image)
-                        await sendPhoto(image, to: chat)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity)
+            .frame(height: 50)
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(LinearGradient(colors: [Color(white: 0.20), Color(white: 0.13)],
+                                         startPoint: .top, endPoint: .bottom))
+                    .overlay(alignment: .leading) {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(Snes.shopify)
+                            .frame(width: 3)
+                            .padding(.vertical, 10)
+                            .padding(.leading, 1)
                     }
-                }
-                .ignoresSafeArea()
-            }
-            .onChange(of: photoPick) { _, item in
-                guard let item, let chat = photoChat else { return }
-                Task { await sendPhoto(item, to: chat) }
-            }
-            .alert("Type a message", isPresented: $showingTextCompose) {
-                TextField("Message", text: $textDraft)
-                Button("Type it") { whatsappSendTypedText() }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("Peeky types this into \(textComposeChat.label) on your Mac — you still tap Send.")
-            }
-        )
+                    .overlay(RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(.white.opacity(0.10), lineWidth: 1))
+            )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Open \(section.name) in Shopify")
+        .accessibilityHint("Opens in the Shopify admin tab in Chrome on your Mac")
     }
 
-    /// Peeky toggle: bring the Mac panel up (e.g. to see what was typed), tap again to collapse it.
+    // MARK: - Shopify tables (a mirror of the desktop's Orders pages)
+
+    private var shopifyTablesPad: some View {
+        VStack(spacing: 8) {
+            shopifyTableTitleBar
+            shopifySectionTabs
+            Group {
+                if let table = client.shopifyTables[shopifySection] {
+                    shopifyTable(table)
+                } else if let error = client.shopifyTableErrors[shopifySection] {
+                    shopifyTableErrorView(error)
+                } else if client.shopifyTableNone.contains(shopifySection) {
+                    shopifyTableNoneView
+                } else {
+                    shopifyTableLoading
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+        }
+        .padding(10)
+        .background(shopifyPanelBackground)
+    }
+
+    private var shopifyTableTitleBar: some View {
+        HStack(spacing: 8) {
+            Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                shopifyTableShown = false
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 12, weight: .black))
+                    Text("Shopify")
+                        .font(.system(size: 12, design: .monospaced).weight(.heavy))
+                }
+                .foregroundStyle(Snes.shopify.lighter(0.45))
+                .padding(.horizontal, 10)
+                .frame(height: 30)
+                .background(Capsule().fill(.white.opacity(0.08)))
+                .overlay(Capsule().strokeBorder(.white.opacity(0.12), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Back to Shopify sections")
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(shopifySection)
+                    .font(.system(size: 15, design: .monospaced).weight(.black))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                Text(shopifyTableSubtitle)
+                    .font(.system(size: 9, design: .monospaced).weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.45))
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                client.shopify(shopifySection)
+                statusText = "Shopify — refreshing \(shopifySection) from Chrome"
+            } label: {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.8))
+                    .frame(width: 36, height: 30)
+                    .background(Capsule().fill(.white.opacity(0.08)))
+                    .overlay(Capsule().strokeBorder(.white.opacity(0.12), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Refresh \(shopifySection)")
+        }
+        .padding(.horizontal, 2)
+    }
+
+    /// The tapped tile and its sidebar sub-items, each a tappable panel. The
+    /// strip scrolls horizontally: Products alone has six tabs.
+    private var shopifySectionTabs: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 6) {
+                ForEach(Self.shopifyTabSections[shopifyParent] ?? [shopifyParent], id: \.self) { name in
+                    let selected = name == shopifySection
+                    Button {
+                        guard !selected else { return }
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        shopifySection = name
+                        client.shopify(name)
+                        statusText = "Shopify — reading \(name) from Chrome"
+                    } label: {
+                        Text(name)
+                            .font(.system(size: 11, design: .monospaced).weight(.heavy))
+                            .foregroundStyle(selected ? Color.white : Color.white.opacity(0.65))
+                            .padding(.horizontal, 12)
+                            .frame(height: 30)
+                            .background(Capsule().fill(selected ? Snes.shopify : Color.white.opacity(0.08)))
+                            .overlay(Capsule().strokeBorder(.white.opacity(selected ? 0.35 : 0.12),
+                                                            lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Show \(name)")
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                }
+            }
+            .padding(.horizontal, 2)
+        }
+        .scrollIndicators(.hidden)
+    }
+
+    private var shopifyTableSubtitle: String {
+        if let table = client.shopifyTables[shopifySection] {
+            return "\(table.rows.count) \(shopifyRowNoun) · live from Chrome"
+        }
+        if client.shopifyTableErrors[shopifySection] != nil {
+            return "couldn't read from Chrome on your Mac"
+        }
+        if client.shopifyTableNone.contains(shopifySection) {
+            return "opened in Chrome on your Mac"
+        }
+        return "live from Chrome on your Mac"
+    }
+
+    private var shopifyRowNoun: String {
+        switch shopifySection {
+        case "Orders": "orders"
+        case "Drafts": "draft orders"
+        case "Shipping labels": "labels"
+        case "Abandoned checkouts": "checkouts"
+        default: "rows"
+        }
+    }
+
+    private var shopifyTableLoading: some View {
+        VStack(spacing: 10) {
+            ProgressView().tint(.white)
+            Text("Reading \(shopifySection) from Chrome…")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.7))
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(white: 0.10))
+    }
+
+    /// Home, Live View, Online Store, Autopilot and friends are dashboards,
+    /// cards or charts, not grids. That is a normal answer, so this reads as
+    /// plain text — no warning triangle, no "try again".
+    private var shopifyTableNoneView: some View {
+        VStack(spacing: 8) {
+            Text("Opened in Chrome.")
+                .font(.system(size: 12, design: .monospaced).weight(.semibold))
+                .foregroundStyle(.white.opacity(0.8))
+            Text("This page isn't a table.")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.55))
+        }
+        .multilineTextAlignment(.center)
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(white: 0.10))
+    }
+
+    private func shopifyTableErrorView(_ message: String) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 22, weight: .bold))
+                .foregroundStyle(Snes.yellow)
+            Text(message)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.8))
+                .multilineTextAlignment(.center)
+            Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                client.shopify(shopifySection)
+            } label: {
+                Text("Try again")
+                    .font(.system(size: 12, design: .monospaced).weight(.heavy))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 20)
+                    .frame(height: 36)
+                    .background(Capsule().fill(Snes.shopify))
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(white: 0.10))
+    }
+
+    /// The desktop's grid, shrunk to phone text: the same headers, cells and
+    /// status pills, Polaris-white. Too wide for one screen, so it scrolls
+    /// both ways.
+    private func shopifyTable(_ table: ClickyClient.ShopifyTable) -> some View {
+        ScrollView([.horizontal, .vertical]) {
+            VStack(alignment: .leading, spacing: 0) {
+                shopifyTableColumns(table.headers, section: table.section)
+                ForEach(Array(table.rows.enumerated()), id: \.offset) { index, row in
+                    shopifyTableRow(row, headers: table.headers, section: table.section,
+                                    striped: !index.isMultiple(of: 2))
+                }
+            }
+            .background(Color.white)
+        }
+        .background(Color.white)
+    }
+
+    private func shopifyTableColumns(_ headers: [String], section: String) -> some View {
+        HStack(spacing: 0) {
+            ForEach(Array(headers.enumerated()), id: \.offset) { _, header in
+                Text(header)
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.black.opacity(0.5))
+                    .lineLimit(1)
+                    .padding(.horizontal, 7)
+                    .frame(width: Self.shopifyColumnWidth(header, section: section), alignment: .leading)
+                    .frame(height: 26, alignment: .leading)
+            }
+        }
+        .background(Color(white: 0.95))
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Color.black.opacity(0.14)).frame(height: 1)
+        }
+    }
+
+    private func shopifyTableRow(_ row: ClickyClient.ShopifyTable.Row,
+                                 headers: [String], section: String, striped: Bool) -> some View {
+        HStack(spacing: 0) {
+            ForEach(Array(headers.enumerated()), id: \.offset) { index, header in
+                shopifyTableCell(index < row.cells.count ? row.cells[index] : "", header: header)
+                    .padding(.horizontal, 7)
+                    .frame(width: Self.shopifyColumnWidth(header, section: section), alignment: .leading)
+                    .frame(height: 30, alignment: .leading)
+            }
+        }
+        .background(striped ? Color(white: 0.975) : Color.white)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Color.black.opacity(0.07)).frame(height: 1)
+        }
+    }
+
+    @ViewBuilder
+    private func shopifyTableCell(_ value: String, header: String) -> some View {
+        switch header {
+        case "Fulfillment status", "Delivery status", "Payment status", "Document status":
+            if value.isEmpty {
+                Color.clear.frame(height: 16)
+            } else {
+                shopifyStatusPill(value)
+            }
+        case "Order", "Draft order", "Checkout":
+            Text(value)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(Color.black.opacity(0.85))
+                .lineLimit(1)
+        default:
+            Text(value)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(Color.black.opacity(0.7))
+                .lineLimit(1)
+        }
+    }
+
+    private func shopifyStatusPill(_ text: String) -> some View {
+        let fill: Color
+        switch text.lowercased() {
+        case "unfulfilled", "partially fulfilled", "pending", "authorized", "partially paid":
+            fill = Color(red: 1.0, green: 0.88, blue: 0.25)
+        case "paid", "fulfilled", "delivered":
+            fill = Color(white: 0.90)
+        case "refunded", "voided", "cancelled", "canceled":
+            fill = Color(white: 0.86)
+        default:
+            fill = Color(white: 0.93)
+        }
+        return Text(text)
+            .font(.system(size: 9, weight: .semibold))
+            .foregroundStyle(Color.black.opacity(0.72))
+            .lineLimit(1)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(fill))
+    }
+
+    /// Column widths copied from the desktop grid so the two read alike.
+    /// Labels pack several fields into one cell, so theirs are wider.
+    private static func shopifyColumnWidth(_ header: String, section: String) -> CGFloat {
+        if section == "Shipping labels" {
+            switch header {
+            case "Order": return 190
+            case "Items": return 180
+            case "Package": return 170
+            case "Weight": return 70
+            case "Cost": return 70
+            case "Shipping service": return 170
+            case "Document status": return 95
+            case "Delivery status": return 90
+            default: return 90
+            }
+        }
+        switch header {
+        case "Order": return 52
+        case "Flags", "": return 34
+        case "Date", "Created": return 96
+        case "Customer", "Customer name": return 108
+        case "Destination": return 118
+        case "Channel": return 84
+        case "Total": return 68
+        case "Items": return 50
+        case "Fulfillment status": return 98
+        case "Delivery status": return 86
+        case "Delivery method": return 100
+        case "Fulfill by": return 68
+        case "Payment status": return 78
+        case "Draft order": return 100
+        case "PO number": return 90
+        case "Status": return 90
+        case "Checkout": return 160
+        case "Region": return 100
+        case "Recovery status": return 100
+        case "Total price": return 80
+        default: return 90
+        }
+    }
+
+    /// Peeky toggle: bring the Mac panel up, tap again to collapse it.
     private var clickyPill: some View {
         Button {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -943,89 +1320,6 @@ struct NumpadView: View {
             )
         }
         .buttonStyle(.plain)
-    }
-
-    /// One chat: open it, dictate a reply into it, send what's typed there.
-    private func whatsappRow(_ chat: WhatsAppChat) -> some View {
-        let recording = whatsappRecording && whatsappChat == chat
-        return HStack(spacing: 8) {
-            padButton(icon: chat.icon, title: chat.label,
-                      hint: "Open on your Mac", tint: Snes.whatsapp) { whatsappOpenChat(chat) }
-            padButton(icon: "keyboard", title: "Text",
-                      hint: "Type — Peeky types it there", tint: Snes.whatsapp) { whatsappTextTapped(chat) }
-            padButton(icon: recording ? "stop.fill" : "mic.fill",
-                      title: recording ? "Stop" : "Reply",
-                      hint: recording ? "Tap when you're done talking" : "Dictate — Peeky types it there",
-                      tint: recording ? Snes.red : Snes.whatsapp) { whatsappReplyTapped(chat) }
-            let attached = photoAttachedIn == chat
-            let sending = sendingPhoto && photoChat == chat
-            padButton(icon: "paperplane.fill", title: attached ? "Send photo" : "Send",
-                      hint: attached ? "Photo is waiting in \(chat.label) on your Mac" : "Send what's typed in \(chat.label)",
-                      tint: attached ? Snes.blue : Snes.whatsapp) { whatsappSendTapped(chat) }
-            padButton(icon: sending ? "arrow.up.circle.dotted" : "photo.on.rectangle.angled",
-                      title: sending ? "Sending…" : attached ? "Attached" : "Photo",
-                      hint: sending ? "Copying to your Mac…"
-                          : attached ? "Tap to pick a different photo" : "Pick from Photos — attaches in \(chat.label)",
-                      tint: attached ? Snes.yellow : Snes.whatsapp,
-                      thumbnail: attached ? attachedThumb : nil) { whatsappPhotoTapped(chat) }
-                .disabled(sendingPhoto)
-                .animation(.easeInOut(duration: 0.2), value: attached)
-            padButton(icon: "camera.fill", title: "Camera",
-                      hint: "Snap a photo — attaches in \(chat.label)", tint: Snes.whatsapp) { whatsappCameraTapped(chat) }
-                .disabled(sendingPhoto)
-        }
-    }
-
-    private func whatsappPhotoTapped(_ chat: WhatsAppChat) {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        photoPick = nil
-        photoChat = chat
-        photoPickerShown = true
-    }
-
-    private func whatsappCameraTapped(_ chat: WhatsAppChat) {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        guard UIImagePickerController.isSourceTypeAvailable(.camera) else {
-            statusText = "No camera available on this device"
-            return
-        }
-        photoChat = chat
-        cameraShown = true
-    }
-
-    /// Loads the picked photo, shrinks it to a phone-friendly JPEG and ships it
-    /// to the Mac, which pastes it into the chat's compose box (not yet sent —
-    /// tap Send to send it, or type a caption first).
-    private func sendPhoto(_ item: PhotosPickerItem, to chat: WhatsAppChat) async {
-        photoPick = nil
-        guard let data = try? await item.loadTransferable(type: Data.self),
-              let image = UIImage(data: data) else {
-            photoChat = nil
-            UINotificationFeedbackGenerator().notificationOccurred(.error)
-            statusText = "Couldn't read that photo — try another one"
-            return
-        }
-        await sendPhoto(image, to: chat)
-    }
-
-    /// Shared by the Photos picker and the camera.
-    private func sendPhoto(_ image: UIImage, to chat: WhatsAppChat) async {
-        sendingPhoto = true
-        statusText = "WhatsApp — preparing photo for \(chat.label)…"
-        defer {
-            sendingPhoto = false
-            photoChat = nil
-        }
-        guard let jpeg = Self.jpegForSending(image) else {
-            UINotificationFeedbackGenerator().notificationOccurred(.error)
-            statusText = "Couldn't read that photo — try another one"
-            return
-        }
-        client.whatsapp("PHOTO_IN \(chat.name)\t\(jpeg.base64EncodedString())")
-        attachedThumb = Self.jpegForSending(image, maxSide: 160).flatMap(UIImage.init(data:))
-        photoAttachedIn = chat
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
-        statusText = "Photo sent to your Mac (\(jpeg.count / 1024) KB) — WhatsApp is attaching it in \(chat.label)…"
     }
 
     /// Re-encodes as JPEG no larger than 1600px on its longest side so the
@@ -1065,7 +1359,7 @@ struct NumpadView: View {
     }
 
     /// Loads the picked photo and ships it to the Mac, which writes it
-    /// straight to the Desktop — no WhatsApp relay needed.
+    /// straight to the Desktop — no app relay needed.
     private func sendPhotoToDesktop(_ item: PhotosPickerItem) async {
         desktopPick = nil
         guard let data = try? await item.loadTransferable(type: Data.self),
@@ -1097,59 +1391,6 @@ struct NumpadView: View {
         case true?: statusText = "Added to Photos · \(sent)"
         case false?: statusText = "⚠︎ Couldn't add to Photos (check Settings → Peeky Remote → Photos) · \(sent)"
         }
-    }
-
-    private func whatsappTextTapped(_ chat: WhatsAppChat) {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        textComposeChat = chat
-        textDraft = ""
-        showingTextCompose = true
-    }
-
-    private func whatsappSendTypedText() {
-        let trimmed = textDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        photoAttachedIn = nil
-        client.whatsapp("TYPE_TEXT_IN \(textComposeChat.name)\t\(trimmed)")
-        statusText = "WhatsApp — typing into \(textComposeChat.label) on your Mac"
-    }
-
-    private func whatsappReplyTapped(_ chat: WhatsAppChat) {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        if blockedByActiveRecording(.whatsapp) { return }
-        if recorder.isListening {
-            // Only the row that started the recording can stop it.
-            guard whatsappChat == chat else {
-                showRecordingNotice("Still recording for \(whatsappChat.label) — tap its Stop first")
-                return
-            }
-        } else {
-            recordTarget = .whatsapp
-            dictateMode = false
-            whatsappChat = chat
-            photoAttachedIn = nil
-            client.whatsapp("OPEN_CHAT \(chat.name)")
-        }
-        toggleListening()
-    }
-
-    private func whatsappSendTapped(_ chat: WhatsAppChat) {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        if photoAttachedIn == chat {
-            // Clicking the chat row again would dismiss the attachment preview.
-            client.whatsapp("SEND")
-            photoAttachedIn = nil
-        } else {
-            client.whatsapp("SEND_IN \(chat.name)")
-        }
-        statusText = "WhatsApp — sent in \(chat.label)"
-    }
-
-    private func whatsappOpenChat(_ chat: WhatsAppChat) {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        photoAttachedIn = nil
-        client.whatsapp("OPEN_CHAT \(chat.name)")
-        statusText = "WhatsApp — opening \(chat.label) on your Mac"
     }
 
     private var spotifyCard: some View {
@@ -2215,9 +2456,7 @@ struct NumpadView: View {
             if recorder.isListening {
                 WaveformView(level: recorder.level)
                     .frame(height: 18)
-                Text(recorder.transcript.isEmpty
-                     ? (recordTarget == .whatsapp ? "Listening… tap Stop when done" : "Listening… tap STOP when done")
-                     : recorder.transcript)
+                Text(recorder.transcript.isEmpty ? "Listening… tap STOP when done" : recorder.transcript)
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(Snes.red)
                     .lineLimit(6)
@@ -2499,7 +2738,6 @@ struct NumpadView: View {
 
     private var askRecording: Bool { recorder.isListening && recordTarget == .ask }
     private var dictateRecording: Bool { recorder.isListening && recordTarget == .dictate }
-    private var whatsappRecording: Bool { recorder.isListening && recordTarget == .whatsapp }
     private var talkRecording: Bool { recorder.isListening && recordTarget == .talk }
 
     /// A record key was tapped while a *different* mode is still recording.
@@ -2529,7 +2767,6 @@ struct NumpadView: View {
         case .dictate: running = "DICTATE"
         case .ask: running = "ASK"
         case .doc: running = "Ask Peeky (Doc)"
-        case .whatsapp: running = "the WhatsApp reply"
         }
         showRecordingNotice("\(running) is still recording — stop it first")
         return true
@@ -2663,11 +2900,9 @@ struct NumpadView: View {
                 switch recordTarget {
                 case _ where text.isEmpty:
                     // The Mac is still in its listening state for ask/dictate/talk
-                    // (WhatsApp records locally only) — tell it to stand down.
-                    if recordTarget == .doc { client.doc("STOP_ASK") }
-                    else if recordTarget != .whatsapp { client.stopListening() }
+                    // — tell it to stand down.
+                    if recordTarget == .doc { client.doc("STOP_ASK") } else { client.stopListening() }
                     switch recordTarget {
-                    case .whatsapp: statusText = "Didn't catch that — tap Reply and try again"
                     case .talk: statusText = "Didn't catch that — press TALK and try again"
                     case .doc: statusText = "Didn't catch that — tap Ask Peeky and try again"
                     default: statusText = "Didn't catch that — tap \(dictateMode ? "DICTATE" : "ASK") and try again"
@@ -2675,9 +2910,6 @@ struct NumpadView: View {
                 case .doc:
                     client.doc("ASK_TEXT \(text)")
                     statusText = "Asked about \(client.doc.momentLabel): “\(text)”"
-                case .whatsapp:
-                    client.whatsapp("TYPE_TEXT_IN \(whatsappChat.name)\t\(text.replacingOccurrences(of: "\n", with: " "))")
-                    statusText = "Typed in \(whatsappChat.label) on your Mac — tap Send if it looks right: “\(text)”"
                 case .dictate:
                     client.dictate(text)
                     statusText = "On your Mac's clipboard (with the latest capture): “\(text)”"
@@ -2695,13 +2927,11 @@ struct NumpadView: View {
                 try recorder.start()
                 recorder.onPartial = { [client] text in client.partial(text) }
                 switch recordTarget {
-                case .whatsapp: break
                 case .talk: client.listenTalk()
                 case .doc: client.doc("ASK")
                 default: client.listen()
                 }
                 switch recordTarget {
-                case .whatsapp: statusText = "Listening… speak your reply, then tap Stop"
                 case .dictate: statusText = "Listening… speak, then tap STOP to copy to your Mac"
                 case .ask: statusText = "Listening… speak, then tap STOP to ask"
                 case .doc: statusText = "Paused at \(client.doc.momentLabel) — ask your question, then tap Stop"
@@ -2980,7 +3210,8 @@ enum Snes {
     static let blue = Color(red: 0.16, green: 0.30, blue: 0.72)
     /// Peeky Video's editing-suite teal.
     static let video = Color(red: 0.12, green: 0.62, blue: 0.70)
-    static let whatsapp = Color(red: 0.07, green: 0.55, blue: 0.40)
+    /// Shopify's admin green, for the store pad.
+    static let shopify = Color(red: 0.0, green: 0.50, blue: 0.38)
     static let youtube = Color(red: 0.94, green: 0.13, blue: 0.13)
     /// Peeky Code Doc's streaming-service red.
     static let doc = Color(red: 0.90, green: 0.04, blue: 0.08)

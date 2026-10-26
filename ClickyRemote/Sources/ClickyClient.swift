@@ -13,12 +13,34 @@ final class ClickyClient: ObservableObject {
     }
 
     @Published var status: Status = .searching
-    /// WhatsApp's unread count on the Mac (from its Dock badge). 0 = none.
-    @Published var whatsappUnread = 0
     /// Gmail's unread count on the Mac (from its browser tab title). 0 = none.
     @Published var gmailUnread = 0
-    /// Outcome of the last WhatsApp command as reported by the Mac.
-    var onWhatsAppStatus: ((_ message: String, _ ok: Bool) -> Void)?
+    /// Outcome of the last Shopify command as reported by the Mac.
+    var onShopifyStatus: ((_ message: String, _ ok: Bool) -> Void)?
+
+    /// A Shopify page as read from Chrome on the Mac — the same columns and
+    /// rows the desktop shows, so the phone can mirror it.
+    struct ShopifyTable: Decodable, Equatable {
+        struct Row: Decodable, Equatable {
+            /// One value per header, in the desktop's column order.
+            let cells: [String]
+            /// That row's admin link, e.g. `/store/purrified-air/orders/123`.
+            let href: String
+        }
+        /// Which section the table belongs to (Orders, Drafts, …).
+        let section: String
+        let headers: [String]
+        let rows: [Row]
+    }
+
+    /// Latest table per section, so switching tabs shows that tab's own rows.
+    @Published var shopifyTables: [String: ShopifyTable] = [:]
+    /// Read failures per section (no admin tab, JS blocked, …).
+    @Published var shopifyTableErrors: [String: String] = [:]
+    /// Sections whose page opened in Chrome but isn't a table — a dashboard,
+    /// cards or a chart. Kept apart from `shopifyTableErrors`: this is a
+    /// normal outcome, not a failure.
+    @Published var shopifyTableNone: Set<String> = []
     /// Outcome of the last SAVE_PHOTO command as reported by the Mac.
     var onSavePhotoStatus: ((_ message: String, _ ok: Bool) -> Void)?
     /// Outcome of the last SCREENSHOT CHROME command as reported by the Mac.
@@ -205,29 +227,58 @@ final class ClickyClient: ObservableObject {
         }
         connection.start(queue: .main)
         self.connection = connection
-        receive(on: connection, buffer: "")
+        receive(on: connection, buffer: Data())
     }
 
     /// Fires for each line the Mac sends back that isn't handled here (e.g. "STOP").
     var onMacMessage: ((String) -> Void)?
 
-    private func receive(on connection: NWConnection, buffer: String) {
+    /// Buffers raw bytes rather than decoded text: a long line — the Shopify
+    /// tables run to tens of kilobytes — can arrive split mid-character, and
+    /// decoding each chunk on its own would drop the whole chunk.
+    private func receive(on connection: NWConnection, buffer: Data) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
             Task { @MainActor in
                 guard let self else { return }
                 var buffer = buffer
-                if let data, let chunk = String(data: data, encoding: .utf8) {
-                    buffer += chunk
-                    while let newline = buffer.firstIndex(of: "\n") {
-                        let line = String(buffer[..<newline]).trimmingCharacters(in: .whitespacesAndNewlines)
-                        buffer = String(buffer[buffer.index(after: newline)...])
-                        if line.hasPrefix("WHATSAPP_UNREAD ") {
-                            self.whatsappUnread = Int(line.dropFirst(16).trimmingCharacters(in: .whitespaces)) ?? 0
-                        } else if line.hasPrefix("GMAIL_UNREAD ") {
+                if let data {
+                    buffer.append(data)
+                    while let newline = buffer.firstIndex(of: UInt8(ascii: "\n")) {
+                        let lineData = buffer[buffer.startIndex..<newline]
+                        buffer = Data(buffer[buffer.index(after: newline)...])
+                        let line = String(decoding: lineData, as: UTF8.self)
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                        if line.hasPrefix("GMAIL_UNREAD ") {
                             self.gmailUnread = Int(line.dropFirst(13).trimmingCharacters(in: .whitespaces)) ?? 0
-                        } else if line.hasPrefix("WHATSAPP_STATUS ") {
-                            let parts = line.dropFirst(16).split(separator: "\t", maxSplits: 1).map(String.init)
-                            if parts.count == 2 { self.onWhatsAppStatus?(parts[1], parts[0] == "OK") }
+                        } else if line.hasPrefix("SHOPIFY_TABLE_NONE ") {
+                            // SHOPIFY_TABLE_NONE <section>; the page opened in
+                            // Chrome but holds no grid to mirror.
+                            let section = String(line.dropFirst(19))
+                                .trimmingCharacters(in: .whitespaces)
+                            if !section.isEmpty {
+                                self.shopifyTableNone.insert(section)
+                                self.shopifyTables[section] = nil
+                                self.shopifyTableErrors[section] = nil
+                            }
+                        } else if line.hasPrefix("SHOPIFY_TABLE_FAIL ") {
+                            // SHOPIFY_TABLE_FAIL <section>\t<message>
+                            let parts = String(line.dropFirst(19))
+                                .split(separator: "\t", maxSplits: 1).map(String.init)
+                            if parts.count == 2 {
+                                self.shopifyTableErrors[parts[0]] = parts[1]
+                                self.shopifyTableNone.remove(parts[0])
+                            }
+                        } else if line.hasPrefix("SHOPIFY_TABLE ") {
+                            let base64 = String(line.dropFirst(14)).trimmingCharacters(in: .whitespaces)
+                            if let data = Data(base64Encoded: base64),
+                               let table = try? JSONDecoder().decode(ShopifyTable.self, from: data) {
+                                self.shopifyTables[table.section] = table
+                                self.shopifyTableErrors[table.section] = nil
+                                self.shopifyTableNone.remove(table.section)
+                            }
+                        } else if line.hasPrefix("SHOPIFY_STATUS ") {
+                            let parts = line.dropFirst(15).split(separator: "\t", maxSplits: 1).map(String.init)
+                            if parts.count == 2 { self.onShopifyStatus?(parts[1], parts[0] == "OK") }
                         } else if line.hasPrefix("SAVE_PHOTO_STATUS ") {
                             let parts = line.dropFirst(18).split(separator: "\t", maxSplits: 1).map(String.init)
                             if parts.count == 2 { self.onSavePhotoStatus?(parts[1], parts[0] == "OK") }
@@ -512,7 +563,15 @@ final class ClickyClient: ObservableObject {
     func youtube(_ action: String) { send("YOUTUBE \(action)") }
     /// Keynote clicker: play, next/previous, and the in-show toggles.
     func keynote(_ action: String) { send("KEYNOTE \(action)") }
-    func whatsapp(_ action: String) { send("WHATSAPP \(action)") }
+    /// Shopify admin: a sidebar section name (Home, Orders, Online Store, …)
+    /// or one of its sub-items (Drafts, Inventory, Segments, Payouts, …).
+    /// Clears that section's last read error and "not a table" line so its
+    /// panel can show the loading state instead of an old failure.
+    func shopify(_ section: String) {
+        shopifyTableErrors[section] = nil
+        shopifyTableNone.remove(section)
+        send("SHOPIFY \(section)")
+    }
     func savePhoto(_ base64JPEG: String) { send("SAVE_PHOTO \(base64JPEG)") }
     func browserReload() { send("BROWSER RELOAD") }
     func ask(_ question: String) { send("ASK \(question)") }

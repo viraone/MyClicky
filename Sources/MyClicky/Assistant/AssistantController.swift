@@ -1669,6 +1669,30 @@ final class AssistantController {
                 }
             }
         }
+        remote.onShopify = { [weak self] section in
+            guard let self else { return }
+            ShopifyActions.perform(section, status: { [weak self] message, ok in
+                self?.toast.show(message,
+                                 icon: ok ? "bag.fill" : "exclamationmark.triangle.fill",
+                                 tint: ok ? .green : .orange)
+                // Echo to the phone so its status line says what happened here.
+                self?.remote.broadcast("SHOPIFY_STATUS \(ok ? "OK" : "FAIL")\t\(message.replacingOccurrences(of: "\n", with: " "))")
+            }, tableReady: { [weak self] json in
+                // The phone's table panel is a mirror, so the page travels
+                // base64-encoded to keep it on one line.
+                self?.remote.broadcast("SHOPIFY_TABLE \(Data(json.utf8).base64EncodedString())")
+            }, tableNone: { [weak self] section in
+                // A dashboard, cards or a chart: the page opened fine, it just
+                // has no grid to mirror. The phone shows a calm line.
+                self?.remote.broadcast(
+                    RemoteControlService.shopifyTableNoneLine(for: section))
+            }, tableFailed: { [weak self] message in
+                self?.toast.show("Shopify — \(message)",
+                                 icon: "exclamationmark.triangle.fill", tint: .orange)
+                // Name the section so the phone shows this on the right tab.
+                self?.remote.broadcast("SHOPIFY_TABLE_FAIL \(section)\t\(message)")
+            })
+        }
         remote.onSavePhoto = { [weak self] imageData in
             guard let self else { return }
             self.toast.show("Saving photo to VIRADETH_RESUME…", icon: "photo", tint: .yellow)

@@ -90,6 +90,13 @@ import Network
 ///   WHATSAPP SEND_IN <chat>   – open the chat first, then as SEND
 ///   WHATSAPP PHOTO_IN <chat>\t<base64 JPEG> – open the chat, paste the photo into
 ///                    its compose box as an attachment (not sent; SEND sends it)
+///   SHOPIFY <section> – point the Shopify admin tab already open in Chrome
+///                    at one of the admin's sidebar sections (Home, Orders,
+///                    Products, Customers, Growth, Discounts, Content, Markets,
+///                    Finance, Analytics, Online Store, Apps, Settings) or any
+///                    of their sidebar sub-items (Drafts, Inventory, Segments,
+///                    Catalogs, Payouts, Live View, …). Every section also
+///                    makes the Mac read that page's table (below).
 ///   SAVE_PHOTO <base64 JPEG> – write the photo to Desktop/VIRADETH_RESUME on the Mac,
 ///                    no app relay needed
 ///   DO <utterance> – universal voice command: Claude plans and executes it
@@ -105,6 +112,13 @@ import Network
 ///   STOP                      – recording was stopped from the Mac panel; send nothing
 ///   WHATSAPP_UNREAD <n>       – WhatsApp's unread badge changed (0 = cleared)
 ///   WHATSAPP_STATUS OK|FAIL\t<message> – outcome of the last WHATSAPP command
+///   SHOPIFY_STATUS OK|FAIL\t<message> – outcome of the last SHOPIFY command
+///   SHOPIFY_TABLE <base64 JSON> – a page's table read from Chrome:
+///                    {"section":"Orders","headers":[…],
+///                     "rows":[{"cells":[…],"href":"…"},…]}
+///   SHOPIFY_TABLE_NONE <section> – that page opened in Chrome but has no
+///                    table to mirror (a dashboard, cards or a chart)
+///   SHOPIFY_TABLE_FAIL <section>\t<message> – that page could not be read
 ///   SAVE_PHOTO_STATUS OK|FAIL\t<message> – outcome of the last SAVE_PHOTO command
 ///   SCREENSHOT_STATUS OK|FAIL\t<message> – outcome of the last SCREENSHOT
 ///                    CHROME command; the phone shows it as a toast, unspoken
@@ -161,6 +175,7 @@ final class RemoteControlService {
     var onYouTube: ((String) -> Void)?
     var onKeynote: ((String) -> Void)?
     var onWhatsApp: ((String) -> Void)?
+    var onShopify: ((String) -> Void)?
     var onSavePhoto: ((Data) -> Void)?
     var onBrowserReload: (() -> Void)?
     var onCapture: (() -> Void)?
@@ -224,6 +239,11 @@ final class RemoteControlService {
         for line in greeting?() ?? [] {
             connection.send(content: Data((line + "\n").utf8), completion: .contentProcessed { _ in })
         }
+    }
+
+    /// The line the phone parses as "this page opened, but it isn't a table".
+    static func shopifyTableNoneLine(for section: String) -> String {
+        "SHOPIFY_TABLE_NONE \(section)"
     }
 
     /// Sends a line to every connected phone (e.g. "STOP" to end recording).
@@ -314,6 +334,8 @@ final class RemoteControlService {
             onKeynote?(String(line.dropFirst(8)).trimmingCharacters(in: .whitespaces))
         } else if line.hasPrefix("WHATSAPP ") {
             onWhatsApp?(String(line.dropFirst(9)))
+        } else if line.hasPrefix("SHOPIFY ") {
+            onShopify?(String(line.dropFirst(8)).trimmingCharacters(in: .whitespaces))
         } else if line.hasPrefix("DOC ") {
             onDocumentary?(String(line.dropFirst(4)).trimmingCharacters(in: .whitespaces))
         } else if line.hasPrefix("VIDEO ") {
