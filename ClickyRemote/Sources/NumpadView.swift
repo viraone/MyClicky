@@ -2659,27 +2659,14 @@ struct NumpadView: View {
             let isLandscape = geo.size.width > geo.size.height
             let gap: CGFloat = isLandscape ? 8 : 12
             let topInset: CGFloat = isLandscape ? 8 : 12
-            // Portrait keeps square hero keys. Landscape uses the full
-            // two-column width and lets height fit the available rows.
+            // Ten keys in a two-by-five grid, every key the same size, so
+            // the pad reads as one even block under the screen switch.
+            let rows: CGFloat = 5
             let columnW = (geo.size.width - gap) / 2
-            // ASK / CAPTURE / COLLAPSE sit three across, so that row is
-            // sized to thirds; the two-across rows below keep halves.
-            let trioW = (geo.size.width - gap * 2) / 3
-            let minimumPhotoH: CGFloat = isLandscape ? 40 : 56
-            let rowH = (geo.size.height - topInset - gap * 8) / 9.8
-            let chromeBudget = max(88, geo.size.height - topInset - gap * 6
-                                   - minimumPhotoH * 3 - min(120, columnW) * 2)
-            let calculatedSwitchH = min(max(64, rowH * 1.55), max(64, chromeBudget - max(64, rowH)))
-            let switchH = isLandscape ? min(82, max(52, geo.size.height * 0.15)) : calculatedSwitchH
-            let calculatedBannerH = min(max(64, rowH), max(36, chromeBudget - switchH))
-            let bannerH = isLandscape ? 44 : calculatedBannerH
-            let available = geo.size.height - topInset - gap * 6 - switchH - bannerH
-            let squareHeroSide = max(0, min(trioW, (available - minimumPhotoH * 3) / 2))
-            let landscapeKeyH = max(minimumPhotoH, available / 5)
-            let heroW = isLandscape ? columnW : squareHeroSide
-            let trioHeroW = isLandscape ? trioW : squareHeroSide
-            let heroH = isLandscape ? landscapeKeyH : squareHeroSide
-            let photoH = isLandscape ? landscapeKeyH : max(minimumPhotoH, (available - heroH * 2) / 3)
+            let switchH = isLandscape ? min(82, max(52, geo.size.height * 0.15))
+                                      : min(96, max(64, geo.size.height * 0.12))
+            let available = geo.size.height - topInset - switchH - gap * rows
+            let keyH = max(isLandscape ? 40 : 56, available / rows)
             VStack(spacing: gap) {
                 ScreenSwitch(count: client.screenCount, current: client.currentScreen) { n in
                     client.screen(n)
@@ -2688,27 +2675,16 @@ struct NumpadView: View {
                 .frame(width: geo.size.width, height: switchH)
                 HStack(spacing: gap) {
                     key("on", label: "ON", icon: "power", tint: Snes.blue, lit: true,
-                        h: bannerH, w: columnW, banner: true)
+                        h: keyH, w: columnW, banner: true)
                     // ENTIRE SCREEN: a full-resolution PNG of the whole display
                     // Chrome's front window is on, left on the Mac clipboard.
                     key("entire_screen", label: "ENTIRE SCREEN", icon: "display",
                         tint: Snes.purple, lit: true,
-                        h: bannerH, w: columnW, banner: true)
+                        h: keyH, w: columnW, banner: true)
                 }
-                HStack(alignment: .top, spacing: gap) {
-                    // ASK records on the phone and sends `ASK <text>`: the Mac
-                    // answers exactly as it does for ⌥⌘C (screenshot of the
-                    // display under the pointer, or the focused editor file).
-                    key("5", label: askRecording ? "STOP" : "ASK",
-                        icon: askRecording ? "stop.fill" : "questionmark.bubble.fill",
-                        tint: askRecording ? Snes.red : Snes.green, lit: true,
-                        h: heroH, w: trioHeroW, hero: !isLandscape, waveform: askRecording)
-                        // Temporarily off at the user's request; delete these
-                        // two lines to bring ASK back.
-                        .disabled(true)
-                        .opacity(0.35)
+                HStack(spacing: gap) {
                     key("2", label: "CAPTURE", icon: "camera.viewfinder", tint: Snes.blue, lit: true,
-                        h: heroH, w: trioHeroW, hero: !isLandscape)
+                        h: keyH, w: columnW)
                     // COLLAPSE is the panel header's "Minimize to corner"
                     // button: Peeky tucks into its corner dot. Once it is
                     // there the key reads EXPAND and brings it back.
@@ -2716,52 +2692,34 @@ struct NumpadView: View {
                         icon: client.peekyLayout == "COLLAPSED" ? "arrow.up.left.and.arrow.down.right"
                                                                 : "arrow.down.right.and.arrow.up.left",
                         tint: Snes.green, lit: true,
-                        h: heroH, w: trioHeroW, hero: !isLandscape)
+                        h: keyH, w: columnW)
                 }
-                HStack(alignment: .top, spacing: gap) {
+                HStack(spacing: gap) {
                     key("keynote", label: "KEYNOTE", icon: "play.rectangle.on.rectangle.fill",
                         tint: Snes.keynote, lit: true,
-                        h: heroH, w: heroW, hero: !isLandscape) { _ in selectMode(.keynote) }
+                        h: keyH, w: columnW) { _ in selectMode(.keynote) }
                         .accessibilityLabel("Open the Keynote clicker")
-                    key("talk", label: talkRecording ? "STOP" : "TALK",
-                        icon: talkRecording ? "stop.fill" : "mic.fill",
-                        tint: talkRecording ? Snes.red : Snes.talk, lit: true,
-                        h: heroH, w: heroW, hero: !isLandscape, waveform: talkRecording) { _ in talkTapped() }
-                        // Temporarily off at the user's request; delete these
-                        // two lines to bring TALK back.
-                        .disabled(true)
-                        .opacity(0.35)
-                }
-                HStack(alignment: .top, spacing: gap) {
-                    key("terminal", label: "TERMINAL", icon: "terminal",
-                        tint: Snes.red, lit: true, h: photoH, w: heroW)
-                        .accessibilityLabel("Open Terminal on Mac")
                     key("photos", label: savingToDesktop ? "SAVING…" : "PHOTOS",
                         icon: savingToDesktop ? "arrow.up.circle.dotted" : "photo.on.rectangle.angled",
                         tint: Snes.blue, lit: true,
-                        h: photoH, w: heroW) { _ in desktopPhotoTapped() }
+                        h: keyH, w: columnW) { _ in desktopPhotoTapped() }
                         .disabled(savingToDesktop)
                 }
-                HStack(alignment: .top, spacing: gap) {
-                    key("paste", label: "PASTE", icon: "doc.on.clipboard",
-                        tint: Snes.talk, lit: true, h: photoH, w: heroW)
-                        .accessibilityLabel("Paste on Mac")
+                HStack(spacing: gap) {
+                    key("terminal", label: "TERMINAL", icon: "terminal",
+                        tint: Snes.red, lit: true, h: keyH, w: columnW)
+                        .accessibilityLabel("Open Terminal on Mac")
                     key("camera", label: "CAMERA", icon: "camera.fill", tint: Snes.purple, lit: true,
-                        h: photoH, w: heroW) { _ in desktopCameraTapped() }
+                        h: keyH, w: columnW) { _ in desktopCameraTapped() }
                         .disabled(savingToDesktop)
                 }
-                HStack(alignment: .top, spacing: gap) {
+                HStack(spacing: gap) {
+                    key("paste", label: "PASTE", icon: "doc.on.clipboard",
+                        tint: Snes.talk, lit: true, h: keyH, w: columnW)
+                        .accessibilityLabel("Paste on Mac")
                     key("enter", label: "ENTER", icon: "return",
-                        tint: Snes.talk, lit: true, h: photoH, w: heroW)
+                        tint: Snes.talk, lit: true, h: keyH, w: columnW)
                         .accessibilityLabel("Press Enter on Mac")
-                    // Parked here and turned off at the user's request;
-                    // delete the `.disabled`/`.opacity` pair to bring
-                    // Peeky Code back.
-                    key("code", label: "PEEKY CODE", icon: "chevron.left.forwardslash.chevron.right",
-                        tint: Snes.red, lit: true, h: photoH, w: heroW) { _ in openPeekyCode() }
-                        .accessibilityLabel("Open Peeky Code on Mac")
-                        .disabled(true)
-                        .opacity(0.35)
                 }
             }
             .padding(.top, topInset)
