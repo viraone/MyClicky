@@ -1125,21 +1125,22 @@ struct NumpadView: View {
     }
 
     /// Home, Live View, Online Store, Autopilot and friends are dashboards,
-    /// cards or charts, not grids. That is a normal answer, so this reads as
-    /// plain text — no warning triangle, no "try again".
+    /// cards or charts, not grids. That is a normal answer, so this is a calm
+    /// "look at your Mac" card — no warning triangle, no "try again".
     private var shopifyTableNoneView: some View {
-        VStack(spacing: 8) {
-            Text("Opened in Chrome.")
-                .font(.system(size: 12, design: .monospaced).weight(.semibold))
-                .foregroundStyle(.white.opacity(0.8))
-            Text("This page isn't a table.")
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.55))
+        ShopifyOpenedCard(name: shopifySection, icon: shopifyIcon(for: shopifySection))
+    }
+
+    /// The sidebar icon for a section, or for the tile a sub-tab sits under.
+    private func shopifyIcon(for section: String) -> String {
+        if let match = Self.shopifySections.first(where: { $0.name == section }) {
+            return match.icon
         }
-        .multilineTextAlignment(.center)
-        .padding(20)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(white: 0.10))
+        if let parent = Self.shopifyTabSections.first(where: { $0.value.contains(section) })?.key,
+           let match = Self.shopifySections.first(where: { $0.name == parent }) {
+            return match.icon
+        }
+        return "macwindow"
     }
 
     private func shopifyTableErrorView(_ message: String) -> some View {
@@ -3039,6 +3040,81 @@ struct NumpadView: View {
         // SNES console grey, slightly darker at the bottom like moulded plastic.
         LinearGradient(colors: [Snes.body, Snes.bodyDark],
                        startPoint: .top, endPoint: .bottom)
+    }
+}
+
+/// The Shopify panel's answer for a page that opened in Chrome but has no
+/// table: a glowing section badge, the section's name, and a chip that says
+/// where to look. Pure presentation; the glow breathes slowly.
+private struct ShopifyOpenedCard: View {
+    let name: String
+    let icon: String
+    @State private var glow = false
+
+    var body: some View {
+        ZStack {
+            LinearGradient(colors: [Color(white: 0.13), Color(white: 0.07)],
+                           startPoint: .top, endPoint: .bottom)
+            // Soft green light behind the badge.
+            RadialGradient(colors: [Snes.shopify.opacity(glow ? 0.55 : 0.32), .clear],
+                           center: UnitPoint(x: 0.5, y: 0.40), startRadius: 4, endRadius: 230)
+                .blendMode(.plusLighter)
+
+            VStack(spacing: 14) {
+                ZStack {
+                    Circle()
+                        .stroke(Snes.shopify.opacity(glow ? 0.25 : 0.10), lineWidth: 1)
+                        .frame(width: glow ? 118 : 104, height: glow ? 118 : 104)
+                    Circle()
+                        .fill(LinearGradient(colors: [Snes.shopify.lighter(0.30), Snes.shopify.darker(0.20)],
+                                             startPoint: .topLeading, endPoint: .bottomTrailing))
+                        .frame(width: 84, height: 84)
+                        .overlay(Circle().strokeBorder(
+                            LinearGradient(colors: [.white.opacity(0.55), .white.opacity(0.05)],
+                                           startPoint: .top, endPoint: .bottom), lineWidth: 1.5))
+                        .shadow(color: Snes.shopify.opacity(0.65), radius: 18, y: 4)
+                    Image(systemName: icon)
+                        .font(.system(size: 34, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .shadow(color: .black.opacity(0.3), radius: 1, y: 1)
+                }
+                .frame(height: 122)
+
+                Text(name)
+                    .font(.system(size: 30, weight: .heavy, design: .rounded))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+
+                HStack(spacing: 7) {
+                    Circle().fill(Color(red: 0.35, green: 0.92, blue: 0.62))
+                        .frame(width: 7, height: 7)
+                        .shadow(color: Color(red: 0.35, green: 0.92, blue: 0.62), radius: 4)
+                    Text("OPEN IN CHROME ON YOUR MAC")
+                        .font(.system(size: 10, weight: .heavy, design: .monospaced))
+                        .tracking(1.2)
+                        .foregroundStyle(.white.opacity(0.85))
+                }
+                .padding(.horizontal, 14)
+                .frame(height: 28)
+                .background(Capsule().fill(.white.opacity(0.08)))
+                .overlay(Capsule().strokeBorder(.white.opacity(0.14), lineWidth: 1))
+
+                Text("This page is a dashboard, so there's no table to show here.")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.45))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 30)
+            }
+            .padding(20)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
+        .onAppear {
+            withAnimation(.easeInOut(duration: 2.6).repeatForever(autoreverses: true)) { glow = true }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(name) opened in Chrome on your Mac. This page isn't a table.")
     }
 }
 
