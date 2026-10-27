@@ -1014,15 +1014,14 @@ struct NumpadView: View {
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "chevron.left")
-                        .font(.system(size: 12, weight: .black))
+                        .font(.system(size: 10, weight: .heavy))
                     Text("Shopify")
-                        .font(.system(size: 12, design: .monospaced).weight(.heavy))
+                        .shopifyPillLabel()
                 }
-                .foregroundStyle(Snes.shopify.lighter(0.45))
+                .foregroundStyle(.white.opacity(0.85))
                 .padding(.horizontal, 10)
                 .frame(height: 30)
-                .background(Capsule().fill(.white.opacity(0.08)))
-                .overlay(Capsule().strokeBorder(.white.opacity(0.12), lineWidth: 1))
+                .background(ShopifyGlassCapsule())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Back to Shopify sections")
@@ -1048,8 +1047,7 @@ struct NumpadView: View {
                     .font(.system(size: 14, weight: .bold))
                     .foregroundStyle(.white.opacity(0.8))
                     .frame(width: 36, height: 30)
-                    .background(Capsule().fill(.white.opacity(0.08)))
-                    .overlay(Capsule().strokeBorder(.white.opacity(0.12), lineWidth: 1))
+                    .background(ShopifyGlassCapsule())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Refresh \(shopifySection)")
@@ -1071,14 +1069,19 @@ struct NumpadView: View {
                         client.shopify(name)
                         statusText = "Shopify — reading \(name) from Chrome"
                     } label: {
-                        Text(name)
-                            .font(.system(size: 11, design: .monospaced).weight(.heavy))
-                            .foregroundStyle(selected ? Color.white : Color.white.opacity(0.65))
-                            .padding(.horizontal, 12)
-                            .frame(height: 30)
-                            .background(Capsule().fill(selected ? Snes.shopify : Color.white.opacity(0.08)))
-                            .overlay(Capsule().strokeBorder(.white.opacity(selected ? 0.35 : 0.12),
-                                                            lineWidth: 1))
+                        HStack(spacing: 6) {
+                            if selected {
+                                Circle().fill(Color(red: 0.35, green: 0.92, blue: 0.62))
+                                    .frame(width: 7, height: 7)
+                                    .shadow(color: Color(red: 0.35, green: 0.92, blue: 0.62), radius: 4)
+                            }
+                            Text(name)
+                                .shopifyPillLabel()
+                                .foregroundStyle(selected ? Color.white : Color.white.opacity(0.85))
+                        }
+                        .padding(.horizontal, 12)
+                        .frame(height: 30)
+                        .background(ShopifyGlassCapsule(primary: selected))
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Show \(name)")
@@ -1157,11 +1160,11 @@ struct NumpadView: View {
                 client.shopify(shopifySection)
             } label: {
                 Text("Try again")
-                    .font(.system(size: 12, design: .monospaced).weight(.heavy))
+                    .font(.system(size: 12, weight: .heavy, design: .rounded))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 20)
                     .frame(height: 36)
-                    .background(Capsule().fill(Snes.shopify))
+                    .background(ShopifyGlassCapsule(primary: true))
             }
             .buttonStyle(.plain)
         }
@@ -3116,6 +3119,43 @@ private struct ShopifyOpenedCard: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(name) opened in Chrome on your Mac. This page isn't a table.")
     }
+}
+
+/// The opened card's material, shrunk to the panel's small controls. Primary
+/// fills with the badge's green gradient, rim and glow; the quiet state is
+/// plain glass with the card pill's flat edge.
+private struct ShopifyGlassCapsule: View {
+    var primary = false
+
+    var body: some View {
+        Capsule()
+            .fill(primary
+                  ? AnyShapeStyle(LinearGradient(colors: [Snes.shopify.lighter(0.30),
+                                                          Snes.shopify.darker(0.20)],
+                                                 startPoint: .top, endPoint: .bottom))
+                  : AnyShapeStyle(.white.opacity(0.08)))
+            .overlay(Capsule().strokeBorder(
+                primary
+                ? AnyShapeStyle(LinearGradient(colors: [.white.opacity(0.55), .white.opacity(0.05)],
+                                               startPoint: .top, endPoint: .bottom))
+                : AnyShapeStyle(.white.opacity(0.14)),
+                lineWidth: 1))
+            .shadow(color: primary ? Snes.shopify.opacity(0.65) : .clear, radius: 10, y: 3)
+    }
+}
+
+/// The card pill's small uppercase label, for the back chip and section tabs.
+private struct ShopifyPillLabel: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .font(.system(size: 10, weight: .heavy, design: .monospaced))
+            .tracking(1.2)
+            .textCase(.uppercase)
+    }
+}
+
+private extension View {
+    func shopifyPillLabel() -> some View { modifier(ShopifyPillLabel()) }
 }
 
 /// Super Nintendo palette.
