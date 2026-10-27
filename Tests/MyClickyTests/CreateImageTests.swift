@@ -1,3 +1,5 @@
+import ImageIO
+import UniformTypeIdentifiers
 import XCTest
 @testable import MyClicky
 
@@ -97,12 +99,109 @@ final class CreateImageTests: XCTestCase {
     // MARK: Sizes
 
     func testSizePresets() {
-        XCTAssertEqual(CreateImageModel.Size.allCases.count, 3)
+        XCTAssertEqual(CreateImageModel.Size.allCases.count, 5)
         XCTAssertEqual(CreateImageModel.Size.square.width, 1024)
         XCTAssertEqual(CreateImageModel.Size.square.height, 1024)
         XCTAssertEqual(CreateImageModel.Size.wide.width, 1344)
         XCTAssertEqual(CreateImageModel.Size.wide.height, 768)
         XCTAssertEqual(CreateImageModel.Size.tall.width, 768)
         XCTAssertEqual(CreateImageModel.Size.tall.height, 1344)
+    }
+
+    func testSquareStaysTheDefaultAndOldRawValuesStillLoad() {
+        XCTAssertEqual(CreateImageModel.Size(rawValue: "square"), .square)
+        XCTAssertEqual(CreateImageModel.Size(rawValue: "wide"), .wide)
+        XCTAssertEqual(CreateImageModel.Size(rawValue: "tall"), .tall)
+        XCTAssertNil(CreateImageModel.Size(rawValue: "something-else"))
+        // A remembered value from before Instagram sizes existed must load.
+        XCTAssertEqual(CreateImageModel.Size(rawValue: "tall") ?? .square, .tall)
+        XCTAssertEqual(CreateImageModel.Size(rawValue: "nonsense") ?? .square, .square)
+    }
+
+    func testInstagramPresetsDrawAtMultiplesOfSixteenAndTrimToFinalSize() {
+        let post = CreateImageModel.Size.instagramPost
+        XCTAssertEqual(post.drawSize.width, 1088)
+        XCTAssertEqual(post.drawSize.height, 1360)
+        XCTAssertEqual(post.finalSize?.width, 1080)
+        XCTAssertEqual(post.finalSize?.height, 1350)
+
+        let story = CreateImageModel.Size.instagramStory
+        XCTAssertEqual(story.drawSize.width, 1088)
+        XCTAssertEqual(story.drawSize.height, 1920)
+        XCTAssertEqual(story.finalSize?.width, 1080)
+        XCTAssertEqual(story.finalSize?.height, 1920)
+
+        for plain in [CreateImageModel.Size.square, .wide, .tall] {
+            XCTAssertNil(plain.finalSize)
+            XCTAssertEqual(plain.drawSize.width % 16, 0)
+            XCTAssertEqual(plain.drawSize.height % 16, 0)
+        }
+    }
+
+    func testInstagramCropRectsAreCentred() {
+        XCTAssertEqual(
+            CreateImageModel.cropRect(
+                drawn: CreateImageModel.PixelSize(width: 1088, height: 1360),
+                final: CreateImageModel.PixelSize(width: 1080, height: 1350)
+            ),
+            CGRect(x: 4, y: 5, width: 1080, height: 1350)
+        )
+        XCTAssertEqual(
+            CreateImageModel.cropRect(
+                drawn: CreateImageModel.PixelSize(width: 1088, height: 1920),
+                final: CreateImageModel.PixelSize(width: 1080, height: 1920)
+            ),
+            CGRect(x: 4, y: 0, width: 1080, height: 1920)
+        )
+    }
+
+    func testNoCropWhenTheDrawnSizeIsAlreadyFinalOrTooSmall() {
+        XCTAssertNil(CreateImageModel.cropRect(
+            drawn: CreateImageModel.PixelSize(width: 1024, height: 1024),
+            final: CreateImageModel.PixelSize(width: 1024, height: 1024)
+        ))
+        XCTAssertNil(CreateImageModel.cropRect(
+            drawn: CreateImageModel.PixelSize(width: 20, height: 20),
+            final: CreateImageModel.PixelSize(width: 24, height: 30)
+        ))
+    }
+
+    func testCropPNGTrimsTheFileInPlace() throws {
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CreateImageTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        let url = folder.appendingPathComponent("drawn.png")
+        let image = try XCTUnwrap(Self.makeTestImage(width: 32, height: 32))
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithURL(
+            url as CFURL, UTType.png.identifier as CFString, 1, nil
+        ))
+        CGImageDestinationAddImage(destination, image, nil)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+
+        XCTAssertTrue(CreateImageModel.cropPNG(
+            at: url, to: CGRect(x: 4, y: 1, width: 24, height: 30)
+        ))
+
+        let source = try XCTUnwrap(CGImageSourceCreateWithURL(url as CFURL, nil))
+        let cropped = try XCTUnwrap(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        XCTAssertEqual(cropped.width, 24)
+        XCTAssertEqual(cropped.height, 30)
+    }
+
+    private static func makeTestImage(width: Int, height: Int) -> CGImage? {
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        context.setFillColor(CGColor(red: 0.85, green: 0.4, blue: 0.2, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        return context.makeImage()
     }
 }

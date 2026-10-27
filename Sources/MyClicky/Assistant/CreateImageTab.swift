@@ -1,21 +1,35 @@
 import AppKit
+import ImageIO
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The create_image tab: a description typed (or dictated) into the prompt
 /// bar becomes a picture drawn on this Mac by mflux's Z-Image Turbo model.
 /// Local and free — the description never leaves the machine.
 @MainActor
 final class CreateImageModel: ObservableObject {
+    /// A whole-pixel size, so it compares directly with the model's
+    /// multiples of 16.
+    struct PixelSize: Equatable {
+        let width: Int
+        let height: Int
+    }
+
     enum Size: String, CaseIterable, Identifiable {
         case square, wide, tall
+        case instagramPost, instagramStory
 
         var id: String { rawValue }
 
+        /// What the model is asked to draw. Z-Image Turbo only accepts
+        /// multiples of 16, which is why Instagram sizes are drawn a little
+        /// larger and trimmed afterwards.
         var width: Int {
             switch self {
             case .square: 1024
             case .wide: 1344
             case .tall: 768
+            case .instagramPost, .instagramStory: 1088
             }
         }
 
@@ -24,6 +38,20 @@ final class CreateImageModel: ObservableObject {
             case .square: 1024
             case .wide: 768
             case .tall: 1344
+            case .instagramPost: 1360
+            case .instagramStory: 1920
+            }
+        }
+
+        var drawSize: PixelSize { PixelSize(width: width, height: height) }
+
+        /// The exact size saved to disk, for presets that need a centre
+        /// crop after drawing. Nil means the drawn file is the final file.
+        var finalSize: PixelSize? {
+            switch self {
+            case .square, .wide, .tall: nil
+            case .instagramPost: PixelSize(width: 1080, height: 1350)
+            case .instagramStory: PixelSize(width: 1080, height: 1920)
             }
         }
 
@@ -32,6 +60,8 @@ final class CreateImageModel: ObservableObject {
             case .square: "Square 1024×1024"
             case .wide: "Wide 1344×768"
             case .tall: "Tall 768×1344"
+            case .instagramPost: "Instagram Post"
+            case .instagramStory: "Instagram Story"
             }
         }
 
@@ -40,6 +70,8 @@ final class CreateImageModel: ObservableObject {
             case .square: "Square"
             case .wide: "Wide"
             case .tall: "Tall"
+            case .instagramPost: "Instagram Post"
+            case .instagramStory: "Instagram Story"
             }
         }
 
@@ -48,6 +80,8 @@ final class CreateImageModel: ObservableObject {
             case .square: "square"
             case .wide: "rectangle"
             case .tall: "rectangle.portrait"
+            case .instagramPost: "rectangle.portrait"
+            case .instagramStory: "rectangle.portrait"
             }
         }
     }
@@ -107,6 +141,9 @@ final class CreateImageModel: ObservableObject {
     private var stopped = false
     private var stderrTail = ""
     private var outputURL: URL?
+    /// The size the in-flight picture was started with, so changing the
+    /// picker mid-draw can't trim it to the wrong aspect ratio.
+    private var activeSize: Size = .square
 
     init() {
         size = Size(rawValue: UserDefaults.standard.string(forKey: Self.sizeKey) ?? "") ?? .square
@@ -184,6 +221,49 @@ final class CreateImageModel: ObservableObject {
             }
     }
 
+    /// The centred crop that turns a drawn PNG into the exact Instagram
+    /// size, or nil when the drawn size is already final (or too small to
+    /// crop). Pure, so the geometry can be tested on its own.
+    static func cropRect(drawn: PixelSize, final: PixelSize) -> CGRect? {
+        guard drawn != final,
+              drawn.width >= final.width,
+              drawn.height >= final.height else { return nil }
+        return CGRect(
+            x: (drawn.width - final.width) / 2,
+            y: (drawn.height - final.height) / 2,
+            width: final.width,
+            height: final.height
+        )
+    }
+
+    /// Crops the PNG at `url` in place to `rect`, preserving pixels rather
+    /// than scaling. Returns false and leaves the original file untouched if
+    /// anything goes wrong.
+    static func cropPNG(at url: URL, to rect: CGRect) -> Bool {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
+              let cropped = image.cropping(to: rect) else { return false }
+
+        // Write beside the original so replaceItemAt stays on one volume.
+        let temporary = url.deletingLastPathComponent()
+            .appendingPathComponent(".peeky-cropping-\(UUID().uuidString).png")
+        guard let destination = CGImageDestinationCreateWithURL(
+            temporary as CFURL, UTType.png.identifier as CFString, 1, nil
+        ) else { return false }
+        CGImageDestinationAddImage(destination, cropped, nil)
+        guard CGImageDestinationFinalize(destination) else {
+            try? FileManager.default.removeItem(at: temporary)
+            return false
+        }
+        do {
+            _ = try FileManager.default.replaceItemAt(url, withItemAt: temporary)
+            return true
+        } catch {
+            try? FileManager.default.removeItem(at: temporary)
+            return false
+        }
+    }
+
     /// Exit code plus the last handful of lines so the panel can say why.
     static func failureMessage(exit: Int32, stderr: String) -> String {
         let lines = stderr.replacingOccurrences(of: "\r", with: "\n")
@@ -220,6 +300,7 @@ final class CreateImageModel: ObservableObject {
 
         generation += 1
         let activeGeneration = generation
+        activeSize = size
         stopped = false
         stderrTail = ""
         progressStep = nil
@@ -341,6 +422,16 @@ final class CreateImageModel: ObservableObject {
 
         if exit == 0, let output, FileManager.default.fileExists(atPath: output.path) {
             let description = lastDescription
+
+            // Trim to the exact Instagram size before anything reads the
+            // file: the preview, the clipboard and Recent all see the crop.
+            var cropped = true
+            let finalSize = activeSize.finalSize
+            if let finalSize {
+                cropped = Self.cropRect(drawn: activeSize.drawSize, final: finalSize)
+                    .map { Self.cropPNG(at: output, to: $0) } ?? false
+            }
+
             try? description.write(to: Self.sidecarURL(for: output), atomically: true, encoding: .utf8)
             let image = NSImage(contentsOf: output)
             if let image {
@@ -350,9 +441,14 @@ final class CreateImageModel: ObservableObject {
             }
             current = Picture(url: output, description: description, image: image)
             phase = .done
-            notice = image == nil
-                ? "Saved to \(Self.imagesFolderDisplay)"
-                : "Saved to \(Self.imagesFolderDisplay) · on your clipboard"
+            var summary = ["Saved to \(Self.imagesFolderDisplay)"]
+            if image != nil { summary.append("on your clipboard") }
+            if !cropped {
+                summary.append("couldn't trim to exact Instagram size")
+            } else if let finalSize {
+                summary.append("\(finalSize.width)×\(finalSize.height) \(activeSize.shortLabel)")
+            }
+            notice = summary.joined(separator: " · ")
             refreshRecent()
         } else {
             // A failed run can leave a truncated PNG behind.
@@ -473,6 +569,7 @@ struct CreateImageView: View {
     private var sizePicker: some View {
         Menu {
             ForEach(CreateImageModel.Size.allCases) { option in
+                if option == .instagramPost { Divider() }
                 Button {
                     model.size = option
                 } label: {
@@ -527,12 +624,19 @@ struct CreateImageView: View {
         }
     }
 
+    private var emptyHintText: String {
+        let base = "Describe a picture below and press Enter. The first one takes longer while the model loads."
+        return model.size == .instagramStory
+            ? base + " (Story size takes about 40 seconds)"
+            : base
+    }
+
     private var emptyHint: some View {
         VStack(spacing: 10) {
             Image(systemName: "photo.badge.plus")
                 .font(.system(size: 26, weight: .light))
                 .foregroundStyle(.white.opacity(0.22))
-            Text("Describe a picture below and press Enter. The first one takes longer while the model loads.")
+            Text(emptyHintText)
                 .font(.system(size: 13, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.45))
                 .multilineTextAlignment(.center)
