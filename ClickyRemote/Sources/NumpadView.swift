@@ -68,6 +68,8 @@ struct NumpadView: View {
         case shopify = "SHOPIFY"
         case youtube = "YOUTUBE"
         case keynote = "KEYNOTE"
+        /// Records the class mic that is plugged into the Mac.
+        case classRec = "CLASS"
 
         var icon: String {
             switch self {
@@ -78,6 +80,7 @@ struct NumpadView: View {
             case .shopify: "storefront.fill"
             case .youtube: "play.rectangle.fill"
             case .keynote: "play.rectangle.on.rectangle.fill"
+            case .classRec: "waveform.circle.fill"
             }
         }
 
@@ -102,6 +105,7 @@ struct NumpadView: View {
             case .shopify: Snes.shopify
             case .youtube: Snes.youtube
             case .keynote: Snes.keynote
+            case .classRec: Snes.red
             }
         }
 
@@ -114,6 +118,7 @@ struct NumpadView: View {
             case .shopify: "Shopify mode — tap a section to open it in the admin tab in Chrome on your Mac"
             case .youtube: "YouTube mode — buttons control the YouTube tab open in your browser"
             case .keynote: "Keynote clicker — the ring steps through slides, the centre plays / advances, Home brings Keynote up on your Mac"
+            case .classRec: "Class recorder — tap the red button to record the mic plugged into your Mac, tap again to save"
             }
         }
     }
@@ -237,6 +242,7 @@ struct NumpadView: View {
         [
             RemoteMode.remote.rawValue,
             RemoteMode.keynote.rawValue,
+            RemoteMode.classRec.rawValue,
             RemoteMode.shopify.rawValue,
             "REFRESH",
             RemoteMode.video.rawValue,
@@ -258,6 +264,7 @@ struct NumpadView: View {
             case .shopify: shopifyPad
             case .youtube: youtubePad
             case .keynote: keynotePad
+            case .classRec: classRecPad
             }
         }
         // Talk rides along in the corner of the remaining pads — the keypad
@@ -271,7 +278,7 @@ struct NumpadView: View {
             // edge — raise it to move Talk further left, lower it to
             // push it back toward the corner.
             if mode != .remote && mode != .code && mode != .doc && mode != .video
-                && mode != .keynote && mode != .shopify {
+                && mode != .keynote && mode != .classRec && mode != .shopify {
                 cornerTalkButton.padding(.trailing, 44)
             }
         }
@@ -2194,6 +2201,134 @@ struct NumpadView: View {
         case "COLLAPSE": statusText = "YouTube — toggling the browser window…"
         default: break
         }
+    }
+
+    // MARK: - Class recorder pad
+
+    /// One big button. The Mac records its own input (the wireless-mic
+    /// receiver); the phone only starts and stops it, so it can sit in a
+    /// pocket or lock without cutting the recording.
+    private var classRecPad: some View {
+        VStack(spacing: 14) {
+            HStack(spacing: 8) {
+                Circle().fill(Snes.red).frame(width: 8, height: 8)
+                Text("Class recorder")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                Text("on your Mac")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.45))
+                Spacer()
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(client.classRecording ? Snes.red : .white.opacity(0.3))
+                        .frame(width: 7, height: 7)
+                    Text(client.classRecording ? "RECORDING" : "READY")
+                        .font(.system(size: 10, weight: .black, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.8))
+                }
+                .padding(.horizontal, 9).padding(.vertical, 4)
+                .background(Capsule().fill(.white.opacity(0.08)))
+            }
+            .padding(.horizontal, 4)
+
+            // Which input the Mac is listening to — so you can see the mic
+            // receiver is the one, not the laptop's own microphone.
+            HStack(spacing: 8) {
+                Image(systemName: "mic.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.6))
+                Text(client.classDevice.isEmpty ? "Waiting for your Mac…" : client.classDevice)
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                Spacer()
+            }
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            .background(RoundedRectangle(cornerRadius: 12).fill(.white.opacity(0.08)))
+
+            Spacer(minLength: 0)
+
+            Text(classClock(client.classRecording ? client.classElapsed : 0))
+                .font(.system(size: 56, weight: .bold, design: .monospaced))
+                .foregroundStyle(client.classRecording ? .white : .white.opacity(0.35))
+                .minimumScaleFactor(0.6)
+
+            classLevelMeter
+
+            Button {
+                UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
+                if client.classRecording {
+                    client.classRec("STOP")
+                    statusText = "Saving the recording on your Mac"
+                } else {
+                    client.classElapsed = 0
+                    client.classRec("START")
+                    statusText = "Recording the class mic on your Mac"
+                }
+            } label: {
+                ZStack {
+                    Circle().fill(Snes.red)
+                        .frame(width: 128, height: 128)
+                        .shadow(color: Snes.red.opacity(client.classRecording ? 0.7 : 0.35), radius: 16, y: 4)
+                    Circle().strokeBorder(.white.opacity(0.9), lineWidth: 4)
+                        .frame(width: 144, height: 144)
+                    if client.classRecording {
+                        RoundedRectangle(cornerRadius: 8).fill(.white).frame(width: 44, height: 44)
+                    } else {
+                        Circle().fill(.white).frame(width: 52, height: 52)
+                    }
+                }
+            }
+            .buttonStyle(SpotifyPressStyle())
+            .accessibilityLabel(client.classRecording ? "Stop and save the recording" : "Start recording")
+
+            Text(client.classRecording ? "TAP TO STOP AND SAVE" : "TAP TO RECORD")
+                .font(.system(size: 11, weight: .black, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.5))
+
+            Spacer(minLength: 0)
+
+            if let error = client.classError {
+                Text(error)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.orange)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 8)
+            } else if !client.classLastFile.isEmpty {
+                VStack(spacing: 2) {
+                    Text(client.classRecording ? "SAVING TO" : "LAST SAVED")
+                        .font(.system(size: 10, weight: .black, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.4))
+                    Text("Desktop / Class Recordings / \(client.classLastFile)")
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.65))
+                        .multilineTextAlignment(.center)
+                }
+                .padding(.horizontal, 8)
+            }
+        }
+        .padding(.bottom, 8)
+    }
+
+    private func classClock(_ seconds: Int) -> String {
+        let h = seconds / 3600, m = (seconds % 3600) / 60, s = seconds % 60
+        return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%02d:%02d", m, s)
+    }
+
+    /// Twenty bars that light up with the mic's level, so you can tell at a
+    /// glance the wireless mic is actually being heard.
+    private var classLevelMeter: some View {
+        HStack(spacing: 3) {
+            ForEach(0..<20, id: \.self) { i in
+                let lit = client.classRecording && client.classLevel * 20 / 100 > i
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(lit ? (i >= 16 ? Snes.red : Snes.green) : .white.opacity(0.12))
+                    .frame(height: 16)
+            }
+        }
+        .padding(.horizontal, 20)
+        .animation(.easeOut(duration: 0.12), value: client.classLevel)
     }
 
     // MARK: - Keynote pad (a TV-remote clicker)

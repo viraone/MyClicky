@@ -82,6 +82,9 @@ import Network
 ///                    VIDEO_RESTART, VIDEO_REWIND, VIDEO_FORWARD, VIDEO_END
 ///                    (Keynote's in-show movie keys K, I, J, L, O); the Mac
 ///                    replies with KEYNOTE_STATE after each one
+///   CLASSREC <action> – the CLASS tab: START or STOP recording whatever the
+///                    Mac's input hears (the class mic) to Desktop/Class
+///                    Recordings; STATUS asks for the current state
 ///   GMAIL TRASH_OPEN – trash the email open in the browser (confirm on Mac)
 ///   WHATSAPP OPEN_CHAT <name> – open the named chat in the WhatsApp desktop app
 ///   WHATSAPP TYPE_TEXT <text> – tidy the text and type it into the open chat (does not send)
@@ -110,6 +113,8 @@ import Network
 ///
 /// Lines the Mac sends to the phone:
 ///   STOP                      – recording was stopped from the Mac panel; send nothing
+///   CLASSREC_STATE RECORDING\t<device> | IDLE\t<device>\t<last file> | FAIL\t<message>
+///   CLASSREC_LEVEL <0-100>\t<elapsed seconds> – input level while recording
 ///   WHATSAPP_UNREAD <n>       – WhatsApp's unread badge changed (0 = cleared)
 ///   WHATSAPP_STATUS OK|FAIL\t<message> – outcome of the last WHATSAPP command
 ///   SHOPIFY_STATUS OK|FAIL\t<message> – outcome of the last SHOPIFY command
@@ -174,6 +179,7 @@ final class RemoteControlService {
     var onSpotify: ((String) -> Void)?
     var onYouTube: ((String) -> Void)?
     var onKeynote: ((String) -> Void)?
+    var onClassRec: ((String) -> Void)?
     var onWhatsApp: ((String) -> Void)?
     var onShopify: ((String) -> Void)?
     var onSavePhoto: ((Data) -> Void)?
@@ -332,6 +338,8 @@ final class RemoteControlService {
             onYouTube?(String(line.dropFirst(8)))
         } else if line.hasPrefix("KEYNOTE ") {
             onKeynote?(String(line.dropFirst(8)).trimmingCharacters(in: .whitespaces))
+        } else if line.hasPrefix("CLASSREC ") {
+            onClassRec?(String(line.dropFirst(9)).trimmingCharacters(in: .whitespaces))
         } else if line.hasPrefix("WHATSAPP ") {
             onWhatsApp?(String(line.dropFirst(9)))
         } else if line.hasPrefix("SHOPIFY ") {

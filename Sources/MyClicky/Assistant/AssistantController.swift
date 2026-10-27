@@ -23,6 +23,7 @@ final class AssistantController {
     private let toast = ToastController()
     private let hud = HUDController()
     private let remote = RemoteControlService()
+    private let classRecorder = ClassRecorder()
     private let whatsappUnread = WhatsAppUnreadWatcher()
     private let gmailUnread = GmailUnreadWatcher()
     private let captureFileWatcher = CaptureFileWatcher()
@@ -1595,6 +1596,13 @@ final class AssistantController {
                                  tint: ok ? .red : .orange)
             }
         }
+        classRecorder.send = { [weak self] line in self?.remote.broadcast(line) }
+        classRecorder.toast = { [weak self] message, ok in
+            self?.toast.show(message,
+                             icon: ok ? "waveform.circle.fill" : "exclamationmark.triangle.fill",
+                             tint: ok ? .red : .orange)
+        }
+        remote.onClassRec = { [weak self] action in self?.classRecorder.handle(action) }
         remote.onKeynote = { [weak self] action in
             KeynoteActions.perform(action) { [weak self] message, ok, playing in
                 self?.toast.show(message,
@@ -1812,7 +1820,8 @@ final class AssistantController {
             ["WHATSAPP_UNREAD \(self?.whatsappUnread.count ?? 0)",
              "GMAIL_UNREAD \(self?.gmailUnread.count ?? 0)",
              self?.screensLine() ?? "SCREENS 1 1",
-             self?.peekyLayoutLine() ?? "PEEKY_LAYOUT HIDDEN"]
+             self?.peekyLayoutLine() ?? "PEEKY_LAYOUT HIDDEN",
+             self?.classRecorder.stateLine() ?? "CLASSREC_STATE IDLE\t\t"]
             + (self?.panel.state.documentary.remoteGreeting() ?? [])
         }
         remote.onScreen = { [weak self] index in self?.switchScreen(to: index) }

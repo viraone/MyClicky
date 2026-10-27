@@ -26,6 +26,23 @@ final class RemoteControlServiceTests: XCTestCase {
         XCTAssertEqual(commands, ["JOG -3", "PLAYPAUSE"])
     }
 
+    func testClassRecordingCommandsAreForwardedTrimmed() {
+        let service = RemoteControlService()
+        var actions: [String] = []
+        service.onClassRec = { actions.append($0) }
+
+        service.handle("CLASSREC START")
+        service.handle("CLASSREC STOP ")
+
+        XCTAssertEqual(actions, ["START", "STOP"])
+    }
+
+    func testClassRecorderFileStampHasNoSlashesOrColons() {
+        let stamp = ClassRecorder.fileStamp(Date(timeIntervalSince1970: 1_792_000_000))
+        XCTAssertFalse(stamp.contains("/"))
+        XCTAssertFalse(stamp.contains(":"))
+    }
+
     func testEnterIsForwardedExactlyOnce() {
         let service = RemoteControlService()
         var presses = 0

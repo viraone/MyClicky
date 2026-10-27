@@ -52,6 +52,14 @@ final class ClickyClient: ObservableObject {
     /// Whether a Keynote slideshow is running on the Mac — flips the
     /// Keynote pad's centre button between PLAY and NEXT.
     @Published var keynotePlaying = false
+    /// The CLASS tab: the Mac records its own input (the class mic); the
+    /// phone only starts and stops it and shows what the Mac reports.
+    @Published var classRecording = false
+    @Published var classLevel = 0          // 0-100, while recording
+    @Published var classElapsed = 0        // seconds, while recording
+    @Published var classDevice = ""        // the Mac's current input, e.g. the mic receiver
+    @Published var classLastFile = ""      // last saved recording's file name
+    @Published var classError: String?     // why the last START failed
     /// Displays attached to the Mac, and which one (1-based) Peeky is on —
     /// 0 when its panel is hidden. Straight from the Mac's `SCREENS` line.
     @Published var screenCount = 1
@@ -340,6 +348,28 @@ final class ClickyClient: ObservableObject {
                             self.youtubeCollapsed = line.dropFirst(14).trimmingCharacters(in: .whitespaces) == "COLLAPSED"
                         } else if line.hasPrefix("KEYNOTE_STATE ") {
                             self.keynotePlaying = line.dropFirst(14).trimmingCharacters(in: .whitespaces) == "PLAYING"
+                        } else if line.hasPrefix("CLASSREC_STATE ") {
+                            let f = line.dropFirst(15).components(separatedBy: "\t")
+                            switch f.first ?? "" {
+                            case "RECORDING":
+                                self.classRecording = true
+                                self.classError = nil
+                                if f.count > 1 { self.classDevice = f[1] }
+                            case "IDLE":
+                                self.classRecording = false
+                                self.classLevel = 0
+                                self.classError = nil
+                                if f.count > 1 { self.classDevice = f[1] }
+                                if f.count > 2, !f[2].isEmpty { self.classLastFile = f[2] }
+                            default:
+                                self.classRecording = false
+                                self.classLevel = 0
+                                self.classError = f.count > 1 ? f[1] : "Couldn't record"
+                            }
+                        } else if line.hasPrefix("CLASSREC_LEVEL ") {
+                            let f = line.dropFirst(15).components(separatedBy: "\t")
+                            self.classLevel = Int(f.first ?? "") ?? 0
+                            if f.count > 1 { self.classElapsed = Int(f[1]) ?? self.classElapsed }
                         } else if line.hasPrefix("STATUS ") {
                             let text = String(line.dropFirst(7))
                             self.talkMessage = text
@@ -563,6 +593,8 @@ final class ClickyClient: ObservableObject {
     func youtube(_ action: String) { send("YOUTUBE \(action)") }
     /// Keynote clicker: play, next/previous, and the in-show toggles.
     func keynote(_ action: String) { send("KEYNOTE \(action)") }
+    /// Class recording on the Mac: START, STOP, or STATUS.
+    func classRec(_ action: String) { send("CLASSREC \(action)") }
     /// Shopify admin: a sidebar section name (Home, Orders, Online Store, …)
     /// or one of its sub-items (Drafts, Inventory, Segments, Payouts, …).
     /// Clears that section's last read error and "not a table" line so its
