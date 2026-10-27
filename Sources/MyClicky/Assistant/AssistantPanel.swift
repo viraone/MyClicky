@@ -97,6 +97,9 @@ enum AssistantTab: String, CaseIterable {
     /// A real shell, started in the Peeky Code project's folder. Local
     /// only — never talks to Claude.
     case terminal = "Terminal"
+    /// Describe a picture → Z-Image Turbo draws it right here on this Mac.
+    /// Free and local: the description never leaves the machine.
+    case createImage = "create_image"
     /// Pick a code file → Claude writes a documentary script → Manim +
     /// Kokoro render a narrated film locally. Only the script step is paid.
     case documentary = "Peeky Code Doc"
@@ -111,6 +114,7 @@ enum AssistantTab: String, CaseIterable {
         case .talk: "bolt.fill"
         case .code: "chevron.left.forwardslash.chevron.right"
         case .terminal: "terminal"
+        case .createImage: "photo.badge.plus"
         case .documentary: "film.stack"
         case .extensions: "puzzlepiece.extension"
         }
@@ -128,6 +132,7 @@ enum AssistantTab: String, CaseIterable {
         case .talk: "Talk"
         case .code: "Code"
         case .terminal: "Term"
+        case .createImage: "Image"
         case .documentary: "Doc"
         case .extensions: "Ext"
         }
@@ -645,6 +650,7 @@ final class AssistantState: ObservableObject {
     /// so switching tabs doesn't lose your session.
     let terminal = TerminalSession()
     let documentary = CodeDocumentaryModel()
+    let createImage = CreateImageModel()
     var onRestartTerminal: (() -> Void)?
 
     /// The file as it currently is on disk (after any Peeky saves).
@@ -2283,6 +2289,8 @@ struct AssistantPanelView: View {
                     codeWorkspace
                 case .terminal:
                     terminalTab
+                case .createImage:
+                    CreateImageView(model: state.createImage, accent: state.accent)
                 case .documentary:
                     CodeDocumentaryView(model: state.documentary, accent: state.accent)
                 case .extensions:
@@ -4349,6 +4357,7 @@ struct AssistantPanelView: View {
         switch state.tab {
         case .talk: ""
         case .terminal: "Type a command…"
+        case .createImage: "Describe the picture…"
         case .documentary: state.documentary.isShowingFilm ? "Ask about this moment…" : "Paste a file path, or drop a file above…"
         case .extensions: "Search the marketplace…"
         case .code: state.codeProject == nil ? "Drop a project folder here, then ask…"
@@ -4374,6 +4383,7 @@ struct AssistantPanelView: View {
         case .captureDictate: "Start dictation"
         case .code: "Ask about your code by voice"
         case .documentary: state.documentary.isShowingFilm ? "Ask about this moment by voice" : "Play a documentary first, then ask about it"
+        case .createImage: "Describe a picture by voice"
         case .terminal, .extensions: "Switch to a tab with a mic"
         }
         return Button {
@@ -4449,7 +4459,8 @@ struct AssistantPanelView: View {
                     } else if state.tab == .code {
                         codeProviderMenu
                     }
-                    if state.tab == .code || state.tab == .terminal || state.tab == .documentary {
+                    if state.tab == .code || state.tab == .terminal || state.tab == .documentary
+                        || state.tab == .createImage {
                         bottomInputField
                     } else {
                         promptReadout
@@ -5473,6 +5484,7 @@ struct AssistantPanelView: View {
         case .talk: state.onDo?(text)
         case .code: state.onAskCode?(text)
         case .terminal: state.terminal.view.send(txt: text + "\n")
+        case .createImage: state.createImage.generate(text)
         case .documentary:
             if state.documentary.isShowingFilm { state.documentary.ask(text) }
             else { _ = state.documentary.setSource(path: text) }
@@ -5489,6 +5501,7 @@ struct AssistantPanelView: View {
         case .talk: "talk"
         case .code: "code"
         case .terminal: "terminal"
+        case .createImage: "image"
         case .documentary: "doc"
         case .extensions: "ext"
         }

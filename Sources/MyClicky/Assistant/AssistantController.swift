@@ -1151,7 +1151,7 @@ final class AssistantController {
     }
 
     /// What the current listening session will do with what it hears.
-    private enum RecordKind { case ask, dictate, talk, code, documentary }
+    private enum RecordKind { case ask, dictate, talk, code, documentary, createImage }
     private var recordKind: RecordKind = .ask
     /// A film is up on Peeky Code Doc: Ask, from either device, is about it.
     private var documentaryShowing: Bool {
@@ -2034,6 +2034,7 @@ final class AssistantController {
         case .talk: .talk
         case .code: .code
         case .documentary: .documentary
+        case .createImage: .createImage
         }
         panel.state.status = .listening
         panel.state.transcript = ""
@@ -2072,6 +2073,8 @@ final class AssistantController {
         panel.state.status = .idle
         if kind == .documentary {
             panel.state.documentary.askPhase = .failed(message)
+        } else if kind == .createImage {
+            panel.state.createImage.note(message)
         } else {
             panel.state.errorText = message
         }
@@ -2096,6 +2099,11 @@ final class AssistantController {
                     panel.state.documentary.askPhase = .failed("Didn't catch that — press Ask and try again, or type your question below.")
                     return
                 }
+                if kind == .createImage {
+                    panel.state.status = .idle
+                    panel.state.createImage.note("Didn't catch that — try again, or type below.")
+                    return
+                }
                 if panel.state.errorText == nil {
                     panel.state.status = .idle
                     // Goes in errorText, not transcript: the Capture + Dictate
@@ -2117,6 +2125,9 @@ final class AssistantController {
             case .documentary:
                 panel.state.status = .idle
                 panel.state.documentary.ask(heard)
+            case .createImage:
+                panel.state.status = .idle
+                panel.state.createImage.generate(heard)
             }
         }
     }
@@ -2412,6 +2423,7 @@ final class AssistantController {
         case .captureDictate: .dictate
         case .talk: .talk
         case .documentary: .documentary
+        case .createImage: .createImage
         case .code, .terminal, .extensions: .code
         }
         if kind == .documentary {
