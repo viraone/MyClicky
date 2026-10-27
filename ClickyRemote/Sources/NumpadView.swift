@@ -125,7 +125,7 @@ struct NumpadView: View {
 
     var body: some View {
         GeometryReader { geo in
-            // The app is locked to portrait, but the layout still keys off
+            // The app is locked to landscape, but the layout still keys off
             // the actual shape so it degrades sensibly on iPad split view.
             if geo.size.height > geo.size.width {
                 VStack(spacing: 10) {
