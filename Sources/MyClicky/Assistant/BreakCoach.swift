@@ -3,8 +3,7 @@ import CoreGraphics
 import Foundation
 
 /// Counts the time spent at the computer and, every 30 minutes of it, asks
-/// for a break. Exists because the person using it will otherwise sit for
-/// hours.
+/// for a break. Off unless turned on from the panel's bottom bar.
 ///
 /// Two rules that make it fair rather than nagging:
 /// - Time away doesn't count. If the keyboard and mouse go quiet for
@@ -25,8 +24,9 @@ final class BreakCoach {
     private static let awayAfter: TimeInterval = 5 * 60
     private static let enabledKey = "breakCoachEnabled"
 
-    /// On by default: the point is that it runs without being remembered.
-    var enabled: Bool = UserDefaults.standard.object(forKey: BreakCoach.enabledKey) as? Bool ?? true {
+    /// Off by default: the cup button in the panel's bottom bar turns it on,
+    /// and the choice is remembered.
+    var enabled: Bool = UserDefaults.standard.object(forKey: BreakCoach.enabledKey) as? Bool ?? false {
         didSet {
             UserDefaults.standard.set(enabled, forKey: Self.enabledKey)
             if enabled { restart() } else { tick?.invalidate(); tick = nil }
