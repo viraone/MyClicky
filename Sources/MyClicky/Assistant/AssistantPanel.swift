@@ -2280,7 +2280,9 @@ struct AssistantPanelView: View {
             Group {
                 switch state.tab {
                 case .ask:
-                    topInputRow
+                    // Half width keeps the field at the top; every other size
+                    // moves it into the composer card at the foot of the tab.
+                    if state.size == .half { topInputRow }
                     if state.showingAskHistory {
                         askHistoryView
                     } else {
@@ -4447,13 +4449,48 @@ struct AssistantPanelView: View {
               : "Reading replies aloud — click to read them as text instead")
     }
 
+    /// The Agent tab's chat composer for every size but the half column:
+    /// one rounded card docked at the foot of the tab, the field on top and
+    /// the panel's usual controls on a row inside it. The controls are the
+    /// same views the bottom bar uses, so nothing about them changes.
+    private var agentComposer: some View {
+        AgentComposer(
+            draft: draft,
+            placeholder: "Message Agent…",
+            fieldFocused: $fieldFocused,
+            submit: submit,
+            controls: agentComposerControls
+        )
+        // The top field used to sit inside the tab's drop/paste target, so
+        // the composer keeps accepting images dropped or pasted onto it.
+        .onDrop(of: [.fileURL, .image], isTargeted: nil) { providers in
+            handleAskDrop(providers)
+        }
+        .onPasteCommand(of: [.image, .fileURL, .png, .tiff]) { _ in
+            state.onPasteIntoAsk?()
+        }
+    }
+
+    private var agentComposerControls: some View {
+        HStack(spacing: 8) {
+            addMenu
+            historyButton
+            askProviderMenu(chip: true)
+            Spacer(minLength: 0)
+            coachButton
+            readAloudToggle
+            micIndicator
+            bottomActionControl(accentSend: true)
+        }
+    }
+
     private var bottomBar: some View {
         Group {
             if state.tab == .ask && state.size == .half {
                 VStack(spacing: 6) {
                     HStack(spacing: 10) {
                         addMenu
-                        askProviderMenu
+                        askProviderMenu()
                         Spacer(minLength: 0)
                         coachButton
                         readAloudToggle
@@ -4461,16 +4498,18 @@ struct AssistantPanelView: View {
                     HStack(spacing: 10) {
                         promptReadout
                         micIndicator
-                        bottomActionControl
+                        bottomActionControl()
                     }
                 }
+            } else if state.tab == .ask {
+                agentComposer
             } else {
                 HStack(spacing: 10) {
                     if state.tab == .captureDictate || state.tab == .ask || state.tab == .code {
                         addMenu
                     }
                     if state.tab == .ask {
-                        askProviderMenu
+                        askProviderMenu()
                     } else if state.tab == .code {
                         codeProviderMenu
                     }
@@ -4485,25 +4524,30 @@ struct AssistantPanelView: View {
                         readAloudToggle
                     }
                     micIndicator
-                    bottomActionControl
+                    bottomActionControl()
                 }
             }
         }
         .animation(.easeInOut(duration: 0.2), value: state.canStop)
     }
 
-    @ViewBuilder private var bottomActionControl: some View {
+    @ViewBuilder private func bottomActionControl(accentSend: Bool = false) -> some View {
         // While recording, the mic itself is the stop control.
         if state.status == .listening {
             EmptyView()
         } else if state.canStop {
             stopButton
+        } else if accentSend {
+            SendButton(draft: draft, action: submit, accent: state.accent)
         } else {
             sendButton
         }
     }
 
-    private var askProviderMenu: some View {
+    /// `chip` draws the compact capsule the Agent composer uses, showing just
+    /// the model name; the default label stays the one the half column and
+    /// other tabs have always used.
+    private func askProviderMenu(chip: Bool = false) -> some View {
         Menu {
             Button {
                 state.askAIProvider = .claude
@@ -4539,34 +4583,10 @@ struct AssistantPanelView: View {
                 state.onRefreshAskOllamaModels?()
             }
         } label: {
-            HStack(spacing: 5) {
-                Image(systemName: state.askAIProvider == .ollama ? "desktopcomputer" : "cloud")
-                    .foregroundStyle(.white)
-                Text(askProviderLabel)
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(.white)
-            }
-            .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
-            .padding(.horizontal, 9)
-            .padding(.vertical, 6)
-            .background(
-                Capsule().fill(
-                    state.askAIProvider == .ollama
-                        ? AssistantPhase.done.color.opacity(0.35)
-                        : Color.white.opacity(0.15)
-                )
-            )
-            .overlay {
-                Capsule().stroke(
-                    state.askAIProvider == .ollama
-                        ? AssistantPhase.done.color.opacity(0.75)
-                        : Color.white.opacity(0.25),
-                    lineWidth: 1
-                )
+            if chip {
+                askProviderChip
+            } else {
+                askProviderMenuLabel
             }
         }
         .menuStyle(.button)
@@ -4577,6 +4597,62 @@ struct AssistantPanelView: View {
         .help(askProviderHelp)
         .onAppear {
             if state.askAIProvider == .ollama { state.onRefreshAskOllamaModels?() }
+        }
+    }
+
+    private var askProviderMenuLabel: some View {
+        HStack(spacing: 5) {
+            Image(systemName: state.askAIProvider == .ollama ? "desktopcomputer" : "cloud")
+                .foregroundStyle(.white)
+            Text(askProviderLabel)
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Image(systemName: "chevron.down")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(.white)
+        }
+        .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .background(
+            Capsule().fill(
+                state.askAIProvider == .ollama
+                    ? AssistantPhase.done.color.opacity(0.35)
+                    : Color.white.opacity(0.15)
+            )
+        )
+        .overlay {
+            Capsule().stroke(
+                state.askAIProvider == .ollama
+                    ? AssistantPhase.done.color.opacity(0.75)
+                    : Color.white.opacity(0.25),
+                lineWidth: 1
+            )
+        }
+    }
+
+    /// The composer's model chip: a quiet capsule naming the model itself.
+    private var askProviderChip: some View {
+        HStack(spacing: 4) {
+            Text(askProviderChipLabel)
+                .lineLimit(1)
+            Image(systemName: "chevron.down")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(.white.opacity(0.6))
+        }
+        .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .background(Capsule().fill(Color.white.opacity(0.08)))
+    }
+
+    private var askProviderChipLabel: String {
+        switch state.askAIProvider {
+        case .claude: "Claude · Cloud"
+        case .ollama: AssistantState.ollamaDisplayName(state.askOllamaModel)
+        case .deepseek: DeepSeekService.displayName
         }
     }
 
@@ -5644,32 +5720,127 @@ private struct BottomInputField: View {
     }
 }
 
-/// The ↑ send button: lit while there is something to send.
+/// The ↑ send button: lit while there is something to send. With `accent`
+/// it draws the Agent composer's 30pt rounded square in the panel colour;
+/// without one it keeps the round gradient button the other tabs use.
 private struct SendButton: View {
     @ObservedObject var draft: QuestionDraft
     let action: () -> Void
+    var accent: Color? = nil
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: "arrow.up")
-                .font(.system(size: 14, weight: .heavy))
-                .foregroundStyle(.black)
-                .frame(width: 26, height: 26)
-                .background(
-                    Circle().fill(
-                        draft.text.isEmpty
-                            ? AnyShapeStyle(Color.white.opacity(0.14))
-                            : AnyShapeStyle(LinearGradient(
-                                colors: [.cyan, Color(red: 0.2, green: 0.55, blue: 0.95)],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            ))
+            if let accent {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 15, weight: .heavy))
+                    .foregroundStyle(.white.opacity(draft.text.isEmpty ? 0.45 : 1))
+                    .frame(width: 30, height: 30)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(accent.opacity(draft.text.isEmpty ? 0.25 : 1))
                     )
-                )
+            } else {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 14, weight: .heavy))
+                    .foregroundStyle(.black)
+                    .frame(width: 26, height: 26)
+                    .background(
+                        Circle().fill(
+                            draft.text.isEmpty
+                                ? AnyShapeStyle(Color.white.opacity(0.14))
+                                : AnyShapeStyle(LinearGradient(
+                                    colors: [.cyan, Color(red: 0.2, green: 0.55, blue: 0.95)],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                ))
+                        )
+                    )
+            }
         }
         .buttonStyle(.plain)
         .disabled(draft.text.isEmpty)
         .help("Send")
+    }
+}
+
+/// The Agent tab's chat card, drawn the way the Claude Code panel draws its
+/// composer: the question field on top, a row of controls inside the card
+/// underneath, and the hotkey hint on a quiet line below it. The controls
+/// are handed in, so the panel keeps using its one set of buttons.
+private struct AgentComposer<Controls: View>: View {
+    @ObservedObject var draft: QuestionDraft
+    let placeholder: String
+    let fieldFocused: FocusState<Bool>.Binding
+    let submit: () -> Void
+    let controls: Controls
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 8) {
+                AgentComposerField(
+                    draft: draft,
+                    placeholder: placeholder,
+                    fieldFocused: fieldFocused,
+                    submit: submit
+                )
+                controls
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(Color.white.opacity(0.05))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+            )
+            // The one bit of the old prompt readout worth keeping: the two
+            // shortcuts you cannot see anywhere else in this layout.
+            Text("⌥⌘C open · ⌥⌘V dictate")
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.28))
+                .padding(.leading, 4)
+        }
+    }
+}
+
+/// The composer's multi-line question field. Grows with the draft up to six
+/// lines; ↩ sends, ⇧↩ adds a line, just like the Code tab's box.
+private struct AgentComposerField: View {
+    @ObservedObject var draft: QuestionDraft
+    let placeholder: String
+    let fieldFocused: FocusState<Bool>.Binding
+    let submit: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            if draft.text.isEmpty {
+                Text(placeholder)
+                    .font(.system(size: 17, design: .monospaced))
+                    .foregroundStyle(.white)
+                    .allowsHitTesting(false)
+            }
+            TextField("", text: $draft.text, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.system(size: 17, design: .monospaced))
+                .foregroundStyle(.white)
+                .lineLimit(1...6)
+                .focused(fieldFocused)
+                .onKeyPress(.return, phases: .down) { press in
+                    if press.modifiers.contains(.shift) {
+                        if let fieldEditor = NSApp.keyWindow?.firstResponder as? NSTextView {
+                            fieldEditor.insertNewlineIgnoringFieldEditor(nil)
+                        } else {
+                            draft.text.append("\n")
+                        }
+                    } else {
+                        submit()
+                    }
+                    return .handled
+                }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
