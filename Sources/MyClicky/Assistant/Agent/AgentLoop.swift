@@ -69,7 +69,9 @@ final class AgentLoop {
 
     For anything that sends, buys, posts, deletes or submits, say what you are about to do; the app will also ask the user.
 
-    When finished, say plainly what you did and what you saw, in a few sentences, plain text.
+    Do only what the user asked, in as few steps as possible. After a click, type or navigation, one browser_snapshot is enough to confirm it worked; then stop and reply in one or two short sentences of plain text (for example: "Opened the Samsung T9 1TB product page.").
+
+    Do not scroll, call browser_get_text or explore further unless the user asked for information from the page (a price, stock, a summary, what something says) or the task cannot be done without it. If the user asked a question about the page, read only as much as needed to answer it.
     """
 
     private let client: any AgentModelClient
