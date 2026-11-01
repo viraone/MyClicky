@@ -16,6 +16,9 @@ final class GmailUnreadWatcher {
     private(set) var count = 0
 
     private var timer: Timer?
+    /// A tick is skipped while the previous title read is still in flight,
+    /// so a slow browser can't cause overlapping polls.
+    private var pollInFlight = false
 
     /// Scanning every open tab in every browser window is heavier than the
     /// WhatsApp Dock-badge read, so this polls less often.
@@ -33,19 +36,25 @@ final class GmailUnreadWatcher {
     }
 
     private func poll() {
-        let new = Self.unreadCount()
-        guard new != count else { return }
-        Self.log.notice("unread \(self.count) -> \(new)")
-        count = new
-        onChange?(new)
+        guard !pollInFlight else { return }
+        pollInFlight = true
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let new = await Self.unreadCount()
+            self.pollInFlight = false
+            guard new != self.count else { return }
+            Self.log.notice("unread \(self.count) -> \(new)")
+            self.count = new
+            self.onChange?(new)
+        }
     }
 
     /// The number in the first "(N)" found in Gmail's tab title, or 0 if no
     /// Gmail tab is open, or its title has no unread count in it right now
     /// (e.g. a compose window or an open thread is showing instead of the
     /// inbox list).
-    static func unreadCount() -> Int {
-        guard let title = BrowserTabReader.firstTabTitle(urlContains: "mail.google.com"),
+    static func unreadCount() async -> Int {
+        guard let title = await BrowserTabReader.firstTabTitleAsync(urlContains: "mail.google.com"),
               let open = title.firstIndex(of: "("),
               let close = title[open...].firstIndex(of: ")") else { return 0 }
         return Int(title[title.index(after: open)..<close]) ?? 0

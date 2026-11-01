@@ -189,7 +189,7 @@ enum SiteEditActions {
 
 
     // Explicit Done/Insert requests from this project's hosted page only.
-    private static func isSavePage(_ value: String) -> Bool {
+    nonisolated private static func isSavePage(_ value: String) -> Bool {
         guard let url = URL(string: value) else { return false }
         return url.scheme == "https" && url.host == "viraone.github.io"
             && url.path == "/sdet-master-clicky/cs198-analogy.html"
@@ -197,7 +197,10 @@ enum SiteEditActions {
 
     static func savePendingPageEdit() async {
         guard !publishing else { return }
-        guard let raw = BrowserTabReader.runJavaScript("JSON.stringify(window.clickyEdit?.pendingSave?.() ?? null)", inTabMatching: isSavePage),
+        // Nothing to save unless a supported browser is in front; skip the
+        // AppleScript entirely when it isn't.
+        guard BrowserTabReader.frontmostAppIsBrowser() else { return }
+        guard let raw = await BrowserTabReader.runJavaScriptAsync("JSON.stringify(window.clickyEdit?.pendingSave?.() ?? null)", inTabMatching: isSavePage),
               let data = raw.data(using: .utf8),
               let request = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let token = request["token"] as? String,
@@ -205,7 +208,7 @@ enum SiteEditActions {
               id.range(of: "^(ins|code)-[0-9]+$", options: .regularExpression) != nil,
               let html = request["html"] as? String,
               let original = request["original"] as? String else { return }
-        guard BrowserTabReader.runJavaScript("String(window.clickyEdit?.claimSave?.(\(jsString(token))) === true)", inTabMatching: isSavePage) == "true" else { return }
+        guard await BrowserTabReader.runJavaScriptAsync("String(window.clickyEdit?.claimSave?.(\(jsString(token))) === true)", inTabMatching: isSavePage) == "true" else { return }
         let file = repoURL.appendingPathComponent("cs198-analogy.html")
         var ok = false
         var message = ""
@@ -219,7 +222,7 @@ enum SiteEditActions {
               return String(value === \(jsString(original)) || value === \(jsString(html)));
             })()
             """
-            guard BrowserTabReader.runJavaScript(compare, inTabMatching: isSavePage) == "true" else {
+            guard await BrowserTabReader.runJavaScriptAsync(compare, inTabMatching: isSavePage) == "true" else {
                 throw SaveError.conflict
             }
             try writeBoxToFile(id, html: html, in: file)
@@ -227,7 +230,7 @@ enum SiteEditActions {
             ok = result.ok
             message = result.message
         } catch { message = error.localizedDescription }
-        _ = BrowserTabReader.runJavaScript("String(window.clickyEdit?.finishSave?.(\(jsString(token)), \(ok ? "true" : "false"), \(jsString(message))))", inTabMatching: isSavePage)
+        _ = await BrowserTabReader.runJavaScriptAsync("String(window.clickyEdit?.finishSave?.(\(jsString(token)), \(ok ? "true" : "false"), \(jsString(message))))", inTabMatching: isSavePage)
         ActivityLog.recordAction("site-browser-save", ["box": id, "ok": ok ? "yes" : "no"])
     }
 

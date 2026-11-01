@@ -1,24 +1,25 @@
 import AppKit
 
+/// One supported browser and the AppleScripts that drive it.
+private struct Browser: Sendable {
+    let bundleID: String
+    let script: String
+    /// AppleScript that navigates the active tab; `%@` is replaced by the URL.
+    var setScript: String? = nil
+    /// AppleScript returning the active tab's page title.
+    var titleScript: String? = nil
+    /// AppleScript that reloads the active tab.
+    var reloadScript: String? = nil
+    /// AppleScript that runs JavaScript in the active tab; `%@` is replaced
+    /// by the (AppleScript-escaped) source and the result is returned.
+    var jsScript: String? = nil
+}
+
 /// Reads the URL of the active tab in the frontmost supported browser via
 /// Apple Events (requires the Automation permission, prompted on first use).
 @MainActor
 enum BrowserTabReader {
-    private struct Browser {
-        let bundleID: String
-        let script: String
-        /// AppleScript that navigates the active tab; `%@` is replaced by the URL.
-        var setScript: String? = nil
-        /// AppleScript returning the active tab's page title.
-        var titleScript: String? = nil
-        /// AppleScript that reloads the active tab.
-        var reloadScript: String? = nil
-        /// AppleScript that runs JavaScript in the active tab; `%@` is replaced
-        /// by the (AppleScript-escaped) source and the result is returned.
-        var jsScript: String? = nil
-    }
-
-    private static let browsers: [Browser] = [
+    nonisolated private static let browsers: [Browser] = [
         Browser(
             bundleID: "com.google.Chrome",
             script: #"tell application "Google Chrome" to return URL of active tab of front window"#,
@@ -451,6 +452,88 @@ enum BrowserTabReader {
             ("com.microsoft.edgemac", chromiumScript("Microsoft Edge")),
             ("com.brave.Browser", chromiumScript("Brave Browser")),
         ]
+    }
+
+    // MARK: - Off the main thread
+
+    /// The same reads as `activeTabURL()`, `firstTabTitle(urlContains:)` and
+    /// `runJavaScript(_:inTabMatching:)`, but each AppleScript runs on one
+    /// serial background queue instead of the main thread, so a browser slow
+    /// to answer can't freeze the UI. Same scripts, same parsing, same values.
+
+    static func activeTabURLAsync() async -> String? {
+        let running = runningBundleIDs()
+        let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        for browser in orderedBrowsers(running: running, frontmost: frontmost) {
+            if let url = await runOffMain(script: browser.script), !url.isEmpty {
+                return url
+            }
+        }
+        return nil
+    }
+
+    /// Nil when no tab matches, like `firstTabTitle(urlContains:)`.
+    static func firstTabTitleAsync(urlContains needle: String) async -> String? {
+        let running = runningBundleIDs()
+        for (bundleID, script) in tabScanScripts(urlContains: needle) where running.contains(bundleID) {
+            if let title = await runOffMain(script: script), !title.isEmpty { return title }
+        }
+        return nil
+    }
+
+    static func runJavaScriptAsync(_ js: String, inTabMatching predicate: @escaping @Sendable (String) -> Bool) async -> String? {
+        let running = runningBundleIDs()
+        let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        let escaped = escapedForAppleScript(js)
+        for browser in orderedBrowsers(running: running, frontmost: frontmost) {
+            guard let jsScript = browser.jsScript,
+                  let current = await runOffMain(script: browser.script),
+                  predicate(current) else { continue }
+            return await runOffMain(script: jsScript.replacingOccurrences(of: "%@", with: escaped))
+        }
+        return nil
+    }
+
+    /// Whether the app in front is one of the browsers read here, so callers
+    /// that only save page edits can skip the AppleScript when it isn't.
+    static func frontmostAppIsBrowser() -> Bool {
+        guard let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier else { return false }
+        return supportedBundleIDs.contains(bundleID)
+    }
+
+    /// Every AppleScript run here goes through this one serial queue: one
+    /// script at a time, never on the main thread.
+    nonisolated private static let appleScriptQueue = DispatchQueue(
+        label: "com.myclicky.applescript", qos: .userInitiated)
+
+    private static func runningBundleIDs() -> Set<String> {
+        Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
+    }
+
+    nonisolated private static func orderedBrowsers(running: Set<String>, frontmost: String?) -> [Browser] {
+        browsers.sorted { a, _ in a.bundleID == frontmost }.filter { running.contains($0.bundleID) }
+    }
+
+    nonisolated private static func escapedForAppleScript(_ js: String) -> String {
+        js.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+
+    nonisolated private static func runOffMain(script source: String) async -> String? {
+        await withCheckedContinuation { continuation in
+            appleScriptQueue.async {
+                continuation.resume(returning: runOnQueue(script: source))
+            }
+        }
+    }
+
+    /// The body of `run(script:)`, callable from the queue.
+    nonisolated private static func runOnQueue(script source: String) -> String? {
+        var error: NSDictionary?
+        guard let script = NSAppleScript(source: source) else { return nil }
+        let result = script.executeAndReturnError(&error)
+        guard error == nil else { return nil }
+        return result.stringValue
     }
 
     private static func run(script source: String) -> String? {

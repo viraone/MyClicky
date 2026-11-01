@@ -87,14 +87,20 @@ enum ActivityLog {
     /// automatically attaches the frontmost app and, when a browser is open,
     /// the site the user was on when they used Peeky.
     static func recordAction(_ type: String, _ details: [String: String] = [:]) {
-        var payload = details
-        if let app = NSWorkspace.shared.frontmostApplication?.localizedName {
-            payload["app"] = app
+        let app = NSWorkspace.shared.frontmostApplication?.localizedName
+        // Reading the tab means AppleScript, which can block while the
+        // browser answers; do it off the main thread and write the line back
+        // on the main actor.
+        Task { @MainActor in
+            var payload = details
+            if let app {
+                payload["app"] = app
+            }
+            if let url = await BrowserTabReader.activeTabURLAsync() {
+                payload["url"] = url
+            }
+            record(type, payload)
         }
-        if let url = BrowserTabReader.activeTabURL() {
-            payload["url"] = url
-        }
-        record(type, payload)
     }
 
     /// Samples the frontmost app (and the active site when a browser is
@@ -111,18 +117,28 @@ enum ActivityLog {
         takeSample()
     }
 
+    /// True while a sample is awaiting the browser, so the next tick is
+    /// skipped rather than piling up overlapping reads.
+    private static var sampleInFlight = false
+
     private static func takeSample() {
-        guard let app = NSWorkspace.shared.frontmostApplication else { return }
-        var details: [String: String] = ["app": app.localizedName ?? app.bundleIdentifier ?? "Unknown"]
-        if let bundleID = app.bundleIdentifier, browserBundleIDs.contains(bundleID),
-           let url = BrowserTabReader.activeTabURL() {
-            details["url"] = url
+        guard !sampleInFlight, let app = NSWorkspace.shared.frontmostApplication else { return }
+        sampleInFlight = true
+        let appName = app.localizedName ?? app.bundleIdentifier ?? "Unknown"
+        let bundleID = app.bundleIdentifier
+        Task { @MainActor in
+            defer { sampleInFlight = false }
+            var details: [String: String] = ["app": appName]
+            if let bundleID, browserBundleIDs.contains(bundleID),
+               let url = await BrowserTabReader.activeTabURLAsync() {
+                details["url"] = url
+            }
+            // Skip repeats so idle time on one screen doesn't flood the log,
+            // but still counts once per minute for "time spent" stats.
+            let key = "\(details["app"] ?? "")|\(details["url"] ?? "")"
+            details["repeat"] = key == lastSampleKey ? "1" : "0"
+            lastSampleKey = key
+            record("sample", details)
         }
-        // Skip repeats so idle time on one screen doesn't flood the log,
-        // but still counts once per minute for "time spent" stats.
-        let key = "\(details["app"] ?? "")|\(details["url"] ?? "")"
-        details["repeat"] = key == lastSampleKey ? "1" : "0"
-        lastSampleKey = key
-        record("sample", details)
     }
 }
