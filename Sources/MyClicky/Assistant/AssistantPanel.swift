@@ -1131,8 +1131,6 @@ final class AssistantState: ObservableObject {
     var onLintCode: ((_ linterID: String, _ path: String) -> Void)?
     /// Extensions tab: fire an extension verb by hand (no planner).
     var onRunExtensionAction: ((_ verb: String, _ params: [String: String]) -> Void)?
-    /// Reads the current answer aloud on demand, regardless of `textOnlyMode`.
-    var onReadAloud: (() -> Void)?
     /// Mic button: starts recording (a question on the Ask tab, a dictation
     /// on Capture + Dictate), or stops and finishes it if already recording.
     var onToggleRecording: (() -> Void)?
@@ -5560,12 +5558,6 @@ struct AssistantPanelView: View {
             }
         } else if !state.answer.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
-                if state.status == .answering {
-                    HStack {
-                        Spacer()
-                        replayButton
-                    }
-                }
                 // "Read Response" on means the user reads the text — Peeky
                 // stays silent. Off means Peeky speaks it, so showing the
                 // text too would defeat the point of the toggle. Talk is
@@ -5637,20 +5629,6 @@ struct AssistantPanelView: View {
         .font(.system(size: 14.5, weight: .medium, design: .monospaced))
         .foregroundStyle(.white.opacity(0.6))
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    /// Lets the user hear the current answer again — the only way to hear it
-    /// at all when "Read Response" (text-only mode) is switched on.
-    private var replayButton: some View {
-        Button {
-            state.onReadAloud?()
-        } label: {
-            Label(state.isSpeaking ? "Reading…" : "Read aloud", systemImage: state.isSpeaking ? "waveform" : "speaker.wave.2")
-                .font(.system(size: 12, weight: .semibold, design: .monospaced))
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.cyan)
-        .help("Read this answer aloud")
     }
 
     private func submit() {

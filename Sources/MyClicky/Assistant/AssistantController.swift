@@ -1321,7 +1321,6 @@ final class AssistantController {
         panel.state.onAskCode = { [weak self] text in self?.handleCodeQuestion(text) }
         panel.state.onPasteIntoAsk = { [weak self] in self?.pasteIntoAsk() }
         captureFileWatcher.onChange = { [weak self] image in self?.handleCaptureEdited(image) }
-        panel.state.onReadAloud = { [weak self] in self?.replayAnswer() }
         panel.state.onToggleRecording = { [weak self] in self?.toggleRecording() }
         // Peeky Code Doc: Ask about the paused frame, on the Mac and mirrored to the phone.
         let documentary = panel.state.documentary
@@ -5224,15 +5223,6 @@ final class AssistantController {
     private func fail(_ message: String) {
         panel.state.status = .idle
         panel.state.errorText = message
-    }
-
-    /// Reads the current answer aloud on tap of the "Read aloud" button —
-    /// works regardless of `textOnlyMode`, so text-only users can still hear
-    /// a specific reply on demand.
-    private func replayAnswer() {
-        guard !panel.state.answer.isEmpty else { return }
-        synthesizer.stopSpeaking(at: .immediate)
-        speak(panel.state.answer)
     }
 
     private func speak(_ text: String) {
