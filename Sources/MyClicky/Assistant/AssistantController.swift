@@ -2561,6 +2561,7 @@ final class AssistantController {
         ring.hide()
         panel.state.status = .thinking
         panel.state.answer = ""
+        panel.state.agentSteps = []
         panel.state.errorText = nil
         panel.state.showingAskHistory = false
         panel.state.restoredFromHistory = false
@@ -2655,12 +2656,26 @@ final class AssistantController {
                     let history = panel.state.askHistory.reversed().map {
                         (question: $0.question, answer: $0.answer)
                     }
-                    answerText = try await DeepSeekService().ask(
-                        question: question, history: history
-                    ) { [weak self] status in
-                        guard let self, id == self.requestID else { return }
-                        self.panel.state.answer = status
-                    }
+                    let tools = BrowserAgentTools(confirm: { [weak self] prompt in
+                        guard let self else { return false }
+                        return await self.requestConfirm(question: prompt, screen: screen)
+                    })
+                    let loop = AgentLoop(
+                        client: DeepSeekAgentClient(),
+                        tools: tools,
+                        onStep: { [weak self] step in
+                            guard let self, id == self.requestID else { return }
+                            if let index = self.panel.state.agentSteps.firstIndex(where: { $0.id == step.id }) {
+                                self.panel.state.agentSteps[index] = step
+                            } else {
+                                self.panel.state.agentSteps.append(step)
+                            }
+                            if step.status == .running {
+                                self.panel.state.answer = "working… step \(step.id): \(step.title)"
+                            }
+                        }
+                    )
+                    answerText = try await loop.run(task: question, history: history)
                     highlight = nil
                 } else {
                     let attachments = askAttachmentJPEGs()

@@ -877,6 +877,8 @@ final class AssistantState: ObservableObject {
     }
     var accent: Color { phase.color }
     @Published var answer = ""
+    /// One row per browser-agent tool call, live while the Agent runs.
+    @Published var agentSteps: [AgentStep] = []
     /// A passage copied off the screen by voice. Deliberately NOT `answer`:
     /// the planner writes a running commentary there and finishes every plan
     /// with "Done.", which would wipe the text the moment it appeared. This
@@ -2288,6 +2290,7 @@ struct AssistantPanelView: View {
                     } else {
                         askAttachmentsStrip
                         transcriptView
+                        agentStepsView
                         answerView
                     }
                 case .talk:
@@ -5476,6 +5479,72 @@ struct AssistantPanelView: View {
                             .strokeBorder(Color.white.opacity(0.06), lineWidth: 1)
                     )
             )
+        }
+    }
+
+    @ViewBuilder
+    private var agentStepsView: some View {
+        if !state.agentSteps.isEmpty {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(state.agentSteps) { step in
+                            agentStepRow(step).id(step.id)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 180)
+                .onChange(of: state.agentSteps.count) { _ in
+                    if let last = state.agentSteps.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                }
+                .onAppear {
+                    if let last = state.agentSteps.last { proxy.scrollTo(last.id, anchor: .bottom) }
+                }
+            }
+        }
+    }
+
+    private func agentStepRow(_ step: AgentStep) -> some View {
+        HStack(spacing: 8) {
+            agentStepGlyph(step.status)
+            Text(step.title)
+                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.85))
+                .lineLimit(1)
+            Text(step.detail)
+                .font(.system(size: 12.5, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.4))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func agentStepGlyph(_ status: AgentStep.Status) -> some View {
+        switch status {
+        case .running:
+            ProgressView()
+                .controlSize(.small)
+                .scaleEffect(0.7)
+                .frame(width: 14, height: 14)
+        case .done:
+            Image(systemName: "checkmark.circle")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(.green)
+                .frame(width: 14)
+        case .failed:
+            Image(systemName: "xmark.circle")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(.red)
+                .frame(width: 14)
+        case .skipped:
+            Image(systemName: "minus.circle")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(.gray)
+                .frame(width: 14)
         }
     }
 
