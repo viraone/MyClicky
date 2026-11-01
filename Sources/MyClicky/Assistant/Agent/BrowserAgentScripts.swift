@@ -94,15 +94,7 @@ enum BrowserAgentScripts {
               return id;
             };
 
-            const textOf = (el, sensitive) => {
-              const label = clean(el.getAttribute("aria-label"));
-              if (label) return label.slice(0, 80);
-              let text = sensitive ? "" : clean(el.innerText);
-              if (!text && !sensitive && typeof el.value === "string") text = clean(el.value);
-              if (!text) text = clean(el.getAttribute("title"));
-              if (!text) text = clean(el.getAttribute("alt"));
-              return text.slice(0, 80);
-            };
+        \#(labelJS)
 
             const record = (el) => {
               const tag = el.tagName.toLowerCase();
@@ -172,6 +164,7 @@ enum BrowserAgentScripts {
           try {
         \#(cleanJS)
         \#(sensitiveJS)
+        \#(labelJS)
         \#(findJS)
         \#(describeInfoJS)
 
@@ -194,6 +187,7 @@ enum BrowserAgentScripts {
           try {
         \#(cleanJS)
         \#(sensitiveJS)
+        \#(labelJS)
         \#(describeInfoJS)
 
             let el = document.activeElement;
@@ -221,6 +215,7 @@ enum BrowserAgentScripts {
           try {
         \#(cleanJS)
         \#(sensitiveJS)
+        \#(labelJS)
         \#(findJS)
 
             const el = find(\#(id));
@@ -237,10 +232,7 @@ enum BrowserAgentScripts {
             el.dispatchEvent(new MouseEvent("mouseup", detail));
             el.dispatchEvent(new MouseEvent("click", detail));
             const sensitive = isSensitive(el);
-            const label = clean(el.getAttribute("aria-label"))
-              || (sensitive ? "" : clean(el.innerText))
-              || clean(el.getAttribute("title"))
-              || clean(el.getAttribute("alt"));
+            const label = textOf(el, sensitive);
             return out({ok: true, clicked: (el.tagName.toLowerCase() + " " + label).trim().slice(0, 100)});
           } catch (err) {
             return out({error: String((err && err.message) || err)});
@@ -471,6 +463,57 @@ enum BrowserAgentScripts {
     };
 """#
 
+    /// The label rule shared by snapshot, describe, describeActive and click.
+    /// Icon-only controls have no visible text, so after aria-label and
+    /// innerText it reads the labelledby targets and descendant labels before
+    /// falling back to textContent, which may be visually hidden. Relies on
+    /// `clean` already being defined; `sensitive` fields never expose their
+    /// text or value.
+    private static let labelJS = #"""
+    const labelledByText = (el) => {
+      const ids = clean(el.getAttribute("aria-labelledby"));
+      if (!ids) return "";
+      const root = typeof el.getRootNode === "function" ? el.getRootNode() : document;
+      const parts = [];
+      const list = ids.split(/\s+/);
+      for (let i = 0; i < list.length; i += 1) {
+        const target = root && root.getElementById ? root.getElementById(list[i]) : null;
+        if (target) parts.push(target.textContent || "");
+      }
+      return clean(parts.join(" "));
+    };
+
+    const descendantLabel = (el) => {
+      if (!el.querySelector) return "";
+      const labelled = el.querySelector("[aria-label]");
+      const labelledText = labelled ? clean(labelled.getAttribute("aria-label")) : "";
+      if (labelledText) return labelledText;
+      const title = el.querySelector("svg title");
+      const titleText = title ? clean(title.textContent) : "";
+      if (titleText) return titleText;
+      const image = el.querySelector("img[alt]");
+      return image ? clean(image.getAttribute("alt")) : "";
+    };
+
+    const textOf = (el, sensitive) => {
+      const label = clean(el.getAttribute("aria-label"));
+      if (label) return label.slice(0, 80);
+      let text = sensitive ? "" : clean(el.innerText);
+      if (!text && !sensitive && typeof el.value === "string") text = clean(el.value);
+      if (text) return text.slice(0, 80);
+      const referenced = labelledByText(el);
+      if (referenced) return referenced.slice(0, 80);
+      const title = clean(el.getAttribute("title"));
+      if (title) return title.slice(0, 80);
+      const child = descendantLabel(el);
+      if (child) return child.slice(0, 80);
+      const alt = clean(el.getAttribute("alt"));
+      if (alt) return alt.slice(0, 80);
+      if (sensitive) return "";
+      return clean(el.textContent).slice(0, 80);
+    };
+"""#
+
     /// Finds a snapshotted element by its id, crossing open shadow roots.
     private static let findJS = #"""
     const find = (id) => {
@@ -495,18 +538,8 @@ enum BrowserAgentScripts {
 """#
 
     /// `info(el)` and the not-found shape shared by both describe scripts.
-    /// Relies on `clean` and `isSensitive` already being defined.
+    /// Relies on `clean`, `isSensitive` and `textOf` already being defined.
     private static let describeInfoJS = #"""
-    const textOf = (el, sensitive) => {
-      const label = clean(el.getAttribute("aria-label"));
-      if (label) return label.slice(0, 80);
-      let text = sensitive ? "" : clean(el.innerText);
-      if (!text && !sensitive && typeof el.value === "string") text = clean(el.value);
-      if (!text) text = clean(el.getAttribute("title"));
-      if (!text) text = clean(el.getAttribute("alt"));
-      return text.slice(0, 80);
-    };
-
     const isSubmit = (el) => {
       const tag = el.tagName.toLowerCase();
       const type = (el.getAttribute("type") || "").toLowerCase();

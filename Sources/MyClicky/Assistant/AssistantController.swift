@@ -2521,7 +2521,10 @@ final class AssistantController {
         guard !busy else { return }
         // Keep the displayed question current for every input path, including typing.
         panel.state.transcript = question
-        if Self.isClickIntent(question) {
+        let provider = panel.state.askAIProvider
+        // DeepSeek questions are handled by the browser agent, so the
+        // screenshot-based click shortcut must not intercept them.
+        if provider != .deepseek, Self.isClickIntent(question) {
             ActivityLog.recordAction("click", ["text": question])
             handleClickCommand(question)
             return
@@ -2536,7 +2539,6 @@ final class AssistantController {
             }
             return
         }
-        let provider = panel.state.askAIProvider
         let apiKey = provider == .claude ? KeychainService.anthropicAPIKey() : nil
         if provider == .claude, apiKey == nil {
             panel.state.errorText = "No Anthropic API key found in Keychain.\n\nRun this once in Terminal:\n\(KeychainService.setupCommand)"
