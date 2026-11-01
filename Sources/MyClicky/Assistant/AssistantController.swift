@@ -2557,12 +2557,6 @@ final class AssistantController {
         panel.state.errorText = nil
         panel.state.showingAskHistory = false
         panel.state.restoredFromHistory = false
-        // With the study site open, the answer is also rendered in the page
-        // (under the box being edited) so it can be read there.
-        let siteBox = SiteEditActions.editContext()
-        let siteOpen = siteBox != nil || SiteEditActions.siteTabURL() != nil
-        if siteOpen { SiteEditActions.showThinking(question) }
-
         requestID += 1
         let id = requestID
         currentTask = Task {
@@ -2577,7 +2571,24 @@ final class AssistantController {
                     }
                 }
             }
+            // Held outside the `do` so the catch can dismiss a reply that was
+            // already rendered into the page.
+            var siteOpen = false
             do {
+                // With the study site open, the answer is also rendered in the
+                // page (under the box being edited) so it can be read there.
+                // The browser reads run off the main thread, so the panel has
+                // painted its thinking state before they answer.
+                let siteBox = await SiteEditActions.editContextAsync()
+                if siteBox != nil {
+                    siteOpen = true
+                } else {
+                    siteOpen = await SiteEditActions.siteTabURLAsync() != nil
+                }
+                // Stopped while the browser was answering: don't paint a
+                // thinking card for a request nobody is waiting on.
+                guard id == requestID else { return }
+                if siteOpen { await SiteEditActions.showThinkingAsync(question) }
                 let image: Data?
                 if provider == .claude {
                     image = try await capture.captureDisplayJPEG(screen: screen, maxDimension: 1600,
@@ -2698,32 +2709,57 @@ final class AssistantController {
         // A live preview of these words may already be in the Messages
         // compose box. It stays only if this segment becomes the message.
         let ghost = takeGhostDraft()
-        // A box in edit mode on the study site takes whatever is said as an
-        // edit to that box — checked before the Messages matchers so "delete
-        // the last sentence" edits the box rather than erasing a draft.
-        if let context = SiteEditActions.editContext() {
-            ghost?.clear()
-            if Self.isQuestionAboutBox(utterance) {
-                // "Explain TCP to me with an analogy" while a box is in edit
-                // mode is a question to read there, not a rewrite of the box.
-                handleQuestion(utterance)
-            } else if Self.isPublishIt(utterance) {
-                publishSite()
-            } else if Self.isDoneEditing(utterance) {
-                SiteEditActions.finishEditOnPage()
-                finishSiteEdit("Done editing — say “publish it” to push, or click another pencil.", ok: true)
-            } else if let apiKey = KeychainService.anthropicAPIKey() {
-                editSiteBox(context, instruction: utterance, apiKey: apiKey)
-            } else {
-                finishSiteEdit("No Anthropic API key found in Keychain.", ok: false)
+        // No supported browser is running, so neither study-site check below
+        // could find anything: skip the task and its main-actor hop, and run
+        // the rest of the command here as before.
+        guard BrowserTabReader.anySupportedBrowserRunning() else {
+            handleDoAfterSiteCheck(utterance, targetApp: targetApp, ghost: ghost)
+            return
+        }
+        // The study-site checks below read the browser via AppleScript, which
+        // can be slow. Do them off the main thread in a task, so this returns
+        // and the panel paints before the browser answers.
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            // A box in edit mode on the study site takes whatever is said as
+            // an edit to that box — checked before the Messages matchers so
+            // "delete the last sentence" edits the box rather than erasing a
+            // draft.
+            if let context = await SiteEditActions.editContextAsync() {
+                ghost?.clear()
+                if Self.isQuestionAboutBox(utterance) {
+                    // "Explain TCP to me with an analogy" while a box is in
+                    // edit mode is a question to read there, not a rewrite of
+                    // the box.
+                    self.handleQuestion(utterance)
+                } else if Self.isPublishIt(utterance) {
+                    self.publishSite()
+                } else if Self.isDoneEditing(utterance) {
+                    SiteEditActions.finishEditOnPage()
+                    self.finishSiteEdit("Done editing — say “publish it” to push, or click another pencil.", ok: true)
+                } else if let apiKey = KeychainService.anthropicAPIKey() {
+                    self.editSiteBox(context, instruction: utterance, apiKey: apiKey)
+                } else {
+                    self.finishSiteEdit("No Anthropic API key found in Keychain.", ok: false)
+                }
+                return
             }
-            return
+            if Self.isPublishIt(utterance) {
+                let siteURL = await SiteEditActions.siteTabURLAsync()
+                if siteURL != nil {
+                    ghost?.clear()
+                    self.publishSite()
+                    return
+                }
+            }
+            self.handleDoAfterSiteCheck(utterance, targetApp: targetApp, ghost: ghost)
         }
-        if Self.isPublishIt(utterance), SiteEditActions.siteTabURL() != nil {
-            ghost?.clear()
-            publishSite()
-            return
-        }
+    }
+
+    /// The rest of `handleDo`, run after the study-site checks have answered
+    /// off the main thread. Split out so those checks can be awaited.
+    private func handleDoAfterSiteCheck(_ utterance: String, targetApp: NSRunningApplication?,
+                                        ghost: MessagesActions.ComposeStream?) {
         if Self.isSendIt(utterance) {
             ghost?.clear()
             sendOpenDraft()

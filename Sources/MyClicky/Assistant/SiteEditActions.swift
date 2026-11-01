@@ -34,7 +34,7 @@ enum SiteEditActions {
 
     /// True for the study site's pages, hosted or opened from disk (the main
     /// checkout or any worktree of it).
-    static func isSite(_ url: String) -> Bool {
+    nonisolated static func isSite(_ url: String) -> Bool {
         url.contains("sdet-master-clicky") || url.contains("/SDET_MASTER_CLICKY/")
             || url.contains("sdet-master-tracker") || url.contains("/SDET_MASTER/")
     }
@@ -50,9 +50,27 @@ enum SiteEditActions {
         return Context(tabURL: tab.url, boxID: id, file: file)
     }
 
+    /// The async twin of `editContext()`: same tab read, but the AppleScript
+    /// runs on the background queue so callers that must paint first
+    /// (Send/Talk) can await it.
+    static func editContextAsync() async -> Context? {
+        guard let tab = await BrowserTabReader.activeTabAsync(), isSite(tab.url) else { return nil }
+        guard let hash = tab.url.range(of: "#edit="),
+              case let id = String(tab.url[hash.upperBound...]).components(separatedBy: "&")[0],
+              !id.isEmpty else { return nil }
+        guard let file = fileURL(for: tab.url) else { return nil }
+        return Context(tabURL: tab.url, boxID: id, file: file)
+    }
+
     /// The site is open in a browser tab (whether or not a box is in edit mode).
     static func siteTabURL() -> String? {
         guard let tab = BrowserTabReader.activeTab(), isSite(tab.url) else { return nil }
+        return tab.url
+    }
+
+    /// The async twin of `siteTabURL()`.
+    static func siteTabURLAsync() async -> String? {
+        guard let tab = await BrowserTabReader.activeTabAsync(), isSite(tab.url) else { return nil }
         return tab.url
     }
 
@@ -112,6 +130,14 @@ enum SiteEditActions {
     /// Shows the "Peeky is thinking" card on the site tab, quoting the question.
     static func showThinking(_ question: String) {
         _ = BrowserTabReader.runJavaScript(
+            "window.clickyEdit && window.clickyEdit.thinking && window.clickyEdit.thinking(\(jsString(question)))",
+            inTabMatching: isSite)
+    }
+
+    /// The async twin of `showThinking`, using the background AppleScript
+    /// queue so the panel isn't held while the page draws its card.
+    static func showThinkingAsync(_ question: String) async {
+        _ = await BrowserTabReader.runJavaScriptAsync(
             "window.clickyEdit && window.clickyEdit.thinking && window.clickyEdit.thinking(\(jsString(question)))",
             inTabMatching: isSite)
     }

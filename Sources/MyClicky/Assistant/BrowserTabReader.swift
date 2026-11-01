@@ -69,6 +69,14 @@ enum BrowserTabReader {
     /// front window).
     static let supportedBundleIDs: [String] = browsers.map(\.bundleID)
 
+    /// Whether any supported browser is running at all. A cheap, synchronous
+    /// check — no AppleScript — so callers can skip browser work entirely
+    /// when none of them is open.
+    static func anySupportedBrowserRunning() -> Bool {
+        let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
+        return supportedBundleIDs.contains { running.contains($0) }
+    }
+
     static func activeTabURL() -> String? {
         let running = Set(NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier))
         let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
@@ -467,6 +475,24 @@ enum BrowserTabReader {
         for browser in orderedBrowsers(running: running, frontmost: frontmost) {
             if let url = await runOffMain(script: browser.script), !url.isEmpty {
                 return url
+            }
+        }
+        return nil
+    }
+
+    /// URL and title of the active tab, like `activeTab()`, with the
+    /// AppleScript run off the main thread.
+    static func activeTabAsync() async -> (url: String, title: String)? {
+        let running = runningBundleIDs()
+        let frontmost = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        for browser in orderedBrowsers(running: running, frontmost: frontmost) {
+            if let url = await runOffMain(script: browser.script), !url.isEmpty {
+                var title = ""
+                if let titleScript = browser.titleScript,
+                   let value = await runOffMain(script: titleScript) {
+                    title = value
+                }
+                return (url, title)
             }
         }
         return nil
