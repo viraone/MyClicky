@@ -270,26 +270,106 @@ final class AgentLoopTests: XCTestCase {
         XCTAssertEqual(steps[3].detail, "Couldn't do it")
     }
 
-    func testPolicyFlagsRiskyActionsOnly() {
-        XCTAssertNotNil(AgentPolicy.riskReason(action: "click",
-                                                element: ElementInfo(tag: "button", text: "Buy now")))
-        XCTAssertNil(AgentPolicy.riskReason(action: "click",
-                                            element: ElementInfo(tag: "button", text: "Save draft")))
-        XCTAssertNotNil(AgentPolicy.riskReason(action: "click",
-                                                element: ElementInfo(tag: "button", text: "Save draft", isSubmit: true)))
-        XCTAssertNotNil(AgentPolicy.riskReason(action: "click",
-                                                element: ElementInfo(tag: "input", type: "submit", text: "Go", isSubmit: true)))
-        XCTAssertNotNil(AgentPolicy.riskReason(action: "press_key Enter",
-                                                element: ElementInfo(tag: "input", type: "text", formSubmitText: "Submit")))
-        XCTAssertNil(AgentPolicy.riskReason(action: "click",
-                                            element: ElementInfo(tag: "a", text: "Read more", href: "https://example.com/story")))
-        XCTAssertNil(AgentPolicy.riskReason(action: "click",
-                                            element: ElementInfo(tag: "a", text: "Buyer's guide")))
-        XCTAssertNotNil(AgentPolicy.riskReason(action: "click",
-                                                element: ElementInfo(tag: "button", text: "Save and continue")))
-        XCTAssertNotNil(AgentPolicy.riskReason(action: "press_key Enter",
-                                                element: ElementInfo(tag: "a", text: "Delete account")))
+    func testPolicyFlagsOnlyShortLabelsStartingWithASeriousPhrase() {
+        let riskyLabels = [
+            "Buy", "Purchase", "Pay", "Checkout", "Check out", "Place order",
+            "Order now", "Complete order", "Complete purchase", "Donate",
+            "Transfer", "Withdraw", "Send money", "Send", "Post", "Publish",
+            "Share", "Tweet", "Submit", "Subscribe", "Delete", "Remove",
+            "Deactivate", "Close account", "Cancel subscription", "Block",
+            "Unsubscribe", "Confirm", "Yes delete", "Yes remove",
+            "Post", "Send", "Buy now", "Delete account", "Place order", "Confirm",
+            "Remove filter",
+        ]
+        for label in riskyLabels {
+            for action in ["click", "real_click"] {
+                XCTAssertNotNil(AgentPolicy.riskReason(
+                    action: action, element: ElementInfo(tag: "button", text: label)),
+                                "\(action) \(label) should be risky")
+            }
+        }
+
+        let safeLabels = [
+            "New post", "Posts", "Save draft", "Search", "Create",
+            "Share your thoughts in this long caption field here",
+            "Buyer's guide", "Read more", "Delete my account right now please",
+        ]
+        for label in safeLabels {
+            for action in ["click", "real_click"] {
+                XCTAssertNil(AgentPolicy.riskReason(
+                    action: action, element: ElementInfo(tag: "button", text: label)),
+                             "\(action) \(label) should not be risky")
+            }
+        }
+
+        // Case, punctuation and spacing are normalized before matching.
+        for label in ["  POST!!!  ", "BUY   NOW", "Check-out", "Yes, delete"] {
+            XCTAssertNotNil(AgentPolicy.riskReason(
+                action: "click", element: ElementInfo(tag: "button", text: label)), label)
+        }
+
+        XCTAssertNil(AgentPolicy.riskReason(action: "click", element: nil))
+        XCTAssertNil(AgentPolicy.riskReason(
+            action: "click", element: ElementInfo(found: false, text: "Delete")))
         XCTAssertTrue(AgentPolicy.sensitiveTypingRefusal().lowercased().contains("ask the user"))
+    }
+
+    func testSubmitButtonsAreJudgedByTheirOwnLabel() {
+        XCTAssertNil(AgentPolicy.riskReason(
+            action: "click", element: ElementInfo(tag: "button", text: "Save draft", isSubmit: true)))
+        XCTAssertNil(AgentPolicy.riskReason(
+            action: "click", element: ElementInfo(tag: "input", type: "submit", text: "Go", isSubmit: true)))
+        XCTAssertNotNil(AgentPolicy.riskReason(
+            action: "click", element: ElementInfo(tag: "input", type: "submit", text: "Submit", isSubmit: true)))
+    }
+
+    func testEnterIsFlaggedOnlyForARiskyFormSubmitOrFocusedLabel() {
+        // Enter in a search box whose submit button says Search: not risky.
+        XCTAssertNil(AgentPolicy.riskReason(
+            action: "press_key Enter",
+            element: ElementInfo(tag: "input", type: "search", text: "Search",
+                                 formSubmitText: "Search", editable: true)))
+
+        // Enter in a form with no submit button: not risky.
+        XCTAssertNil(AgentPolicy.riskReason(
+            action: "press_key Enter",
+            element: ElementInfo(tag: "input", type: "text", text: "", editable: true)))
+
+        // Enter in a form whose submit button says Buy now: risky.
+        XCTAssertEqual(AgentPolicy.riskReason(
+            action: "press_key Enter",
+            element: ElementInfo(tag: "input", type: "text", text: "",
+                                 formSubmitText: "Buy now", editable: true)),
+                       "This looks like a purchase")
+
+        // Enter on a focused link or button with a risky label: risky.
+        XCTAssertNotNil(AgentPolicy.riskReason(
+            action: "press_key Enter", element: ElementInfo(tag: "a", text: "Delete account")))
+
+        // An editable field's text is what the user typed, so it is ignored.
+        XCTAssertNil(AgentPolicy.riskReason(
+            action: "press_key Enter",
+            element: ElementInfo(tag: "input", type: "text", text: "Send",
+                                 formSubmitText: "Search", editable: true)))
+    }
+
+    func testPolicyReasonsFollowThePhraseGroup() {
+        let cases: [(label: String, reason: String)] = [
+            ("Buy now", "This looks like a purchase"),
+            ("Send money", "This looks like a purchase"),
+            ("Post", "This looks like it will post"),
+            ("Tweet", "This looks like it will post"),
+            ("Delete account", "This looks like it will delete something"),
+            ("Unsubscribe", "This looks like it will delete something"),
+            ("Send", "This looks like it will send"),
+            ("Submit", "This looks like it will send"),
+            ("Confirm", "This needs a confirmation"),
+        ]
+        for testCase in cases {
+            XCTAssertEqual(AgentPolicy.riskReason(
+                action: "click", element: ElementInfo(tag: "button", text: testCase.label)),
+                           testCase.reason, testCase.label)
+        }
     }
 
     func testNormalizedURLAcceptsHTTPAndRefusesOtherSchemes() {

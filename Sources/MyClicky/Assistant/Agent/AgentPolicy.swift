@@ -64,20 +64,25 @@ struct ElementInfo: Equatable {
 /// which actions need a confirmation, which fields must not be typed into,
 /// and which URLs may be opened.
 struct AgentPolicy {
-    /// Words and phrases that make an action worth a confirmation. Matching is
-    /// case-insensitive and whole-word, so "Buyer's guide" is not a purchase
-    /// and "Save draft" is not "Save and continue".
-    private static let riskyPhrases: [String] = [
-        "buy", "purchase", "pay", "checkout", "place order", "order now",
-        "subscribe", "donate", "send", "submit", "post", "publish",
-        "delete", "remove", "confirm", "transfer", "withdraw",
-        "sign out", "log out", "unsubscribe", "apply", "book", "reserve",
-        "accept", "agree", "authorize", "allow", "save and continue", "complete",
+    /// Serious actions that are worth a confirmation when a short label starts
+    /// with them. Matching is whole-word, so "Posts" is not "post" and
+    /// "Buyer's guide" is not "buy".
+    private static let riskyPrefixes: [String] = [
+        "buy", "purchase", "pay", "checkout", "check out", "place order",
+        "order now", "complete order", "complete purchase", "donate",
+        "transfer", "withdraw", "send money", "send", "post", "publish",
+        "share", "tweet", "submit", "subscribe", "delete", "remove",
+        "deactivate", "close account", "cancel subscription", "block",
+        "unsubscribe", "confirm", "yes delete", "yes remove",
     ]
 
     /// A short human reason the user must confirm before the action, or nil
     /// when the action looks harmless. `action` is the tool name; for a key
     /// press it may contain the key name, e.g. "press_key Enter".
+    ///
+    /// Clicks are judged only by the element's own label. Enter is judged by
+    /// the form's submit button label, or by the focused non-editable
+    /// element's label. Being a submit button does not trigger anything.
     static func riskReason(action: String, element: ElementInfo?) -> String? {
         guard let element = element, element.found else { return nil }
         let normalized = action.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -87,28 +92,21 @@ struct AgentPolicy {
             || (normalized.contains("press") && normalized.contains("enter"))
 
         if pressesEnter {
-            if element.isSubmit || !element.formSubmitText.isEmpty {
-                if let phrase = riskyPhrase(in: element.formSubmitText) {
-                    return reason(for: phrase)
-                }
-                return "Pressing Enter may submit this form"
+            if let phrase = riskyPrefix(in: element.formSubmitText) {
+                return reason(for: phrase)
             }
             // Enter also activates a focused link or button. Text fields are
             // skipped here because their "text" is what the user typed.
-            if !element.editable, let phrase = riskyPhrase(in: element.text) {
+            if !element.editable, let phrase = riskyPrefix(in: element.text) {
                 return reason(for: phrase)
             }
             return nil
         }
 
-        if let phrase = riskyPhrase(in: element.text) {
-            return reason(for: phrase)
-        }
-        if element.isSubmit {
-            if let phrase = riskyPhrase(in: element.formSubmitText) {
+        if normalized == "click" || normalized == "real_click" {
+            if let phrase = riskyPrefix(in: element.text) {
                 return reason(for: phrase)
             }
-            return "This button submits a form"
         }
         return nil
     }
@@ -155,11 +153,25 @@ struct AgentPolicy {
         return url
     }
 
-    private static func riskyPhrase(in text: String) -> String? {
-        guard !text.isEmpty else { return nil }
-        for phrase in riskyPhrases {
-            let pattern = "\\b" + NSRegularExpression.escapedPattern(for: phrase) + "\\b"
-            if text.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil {
+    /// Lowercases the label, turns punctuation and symbols into spaces, and
+    /// collapses runs of whitespace, so "Check-out!" becomes "check out" and
+    /// "  BUY   NOW " becomes "buy now".
+    private static func normalizedLabel(_ text: String) -> String {
+        let separated = text.lowercased()
+            .components(separatedBy: CharacterSet.punctuationCharacters.union(.symbols))
+            .joined(separator: " ")
+        return separated.split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+    }
+
+    /// The serious phrase a label starts with, or nil when the label is empty,
+    /// longer than five words, or does not begin with one of the phrases.
+    private static func riskyPrefix(in text: String) -> String? {
+        let label = normalizedLabel(text)
+        guard !label.isEmpty, label.split(separator: " ").count <= 5 else { return nil }
+        // Longer phrases first, so "send money" wins over "send".
+        for phrase in riskyPrefixes.sorted(by: { $0.count > $1.count }) {
+            if label == phrase || label.hasPrefix(phrase + " ") {
                 return phrase
             }
         }
@@ -167,35 +179,20 @@ struct AgentPolicy {
     }
 
     private static func reason(for phrase: String) -> String {
-        "This looks like it will \(humanAction(for: phrase))"
-    }
-
-    private static func humanAction(for phrase: String) -> String {
         switch phrase {
-        case "buy": return "buy something"
-        case "purchase": return "make a purchase"
-        case "pay": return "take a payment"
-        case "checkout": return "start checkout"
-        case "place order", "order now": return "place an order"
-        case "subscribe": return "subscribe"
-        case "donate": return "donate"
-        case "send": return "send something"
-        case "submit": return "submit a form"
-        case "post": return "post something"
-        case "publish": return "publish something"
-        case "delete": return "delete something"
-        case "remove": return "remove something"
-        case "confirm": return "confirm something"
-        case "transfer", "withdraw": return "move money"
-        case "sign out", "log out": return "sign you out"
-        case "unsubscribe": return "unsubscribe"
-        case "apply": return "apply"
-        case "book", "reserve": return "book or reserve something"
-        case "accept", "agree": return "accept something"
-        case "authorize", "allow": return "grant permission"
-        case "save and continue": return "save and continue"
-        case "complete": return "complete an action"
-        default: return phrase
+        case "buy", "purchase", "pay", "checkout", "check out", "place order",
+             "order now", "complete order", "complete purchase", "donate",
+             "transfer", "withdraw", "send money":
+            return "This looks like a purchase"
+        case "post", "publish", "share", "tweet":
+            return "This looks like it will post"
+        case "delete", "remove", "deactivate", "close account", "cancel subscription",
+             "block", "unsubscribe", "yes delete", "yes remove":
+            return "This looks like it will delete something"
+        case "send", "submit", "subscribe":
+            return "This looks like it will send"
+        default:
+            return "This needs a confirmation"
         }
     }
 }
