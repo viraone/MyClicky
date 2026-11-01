@@ -1,0 +1,18 @@
+# Drop this file in the root of each project you want Claude to delegate work on.
+
+[studio]
+base_url   = "http://localhost:8080/v1"           # MLX: mlx_lm.server --port 8080 ; Ollama: :11434/v1
+model      = "mlx-community/Qwen3-Coder-Next-6bit" # Ollama users: "qwen3-coder-next"
+api_key    = "local"
+temperature = 0.2
+max_tokens = 16000
+timeout_s  = 600
+
+[gate]
+# Run in order; first non-zero exit = fail. About 12 seconds with a warm build cache (2026-10-31).
+commands = ["swift build --build-system native --disable-sandbox", "swift test --build-system native --disable-sandbox"]
+
+[limits]
+max_retries    = 2        # Qwen retries before Claude hears about a failure
+max_file_bytes = 200000   # skip files bigger than this when sending context to Qwen
+tail_lines     = 60       # how many lines of test output Claude sees
