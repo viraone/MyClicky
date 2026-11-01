@@ -998,8 +998,10 @@ final class AssistantController {
             return
         }
         let provider = panel.state.codeAIProvider
-        let apiKey = provider == .claude ? KeychainService.anthropicAPIKey() : nil
-        if provider == .claude, apiKey == nil {
+        // DeepSeek is not wired into the Code tab yet: use Claude, exactly
+        // like the safest fallback, rather than sending it this project.
+        let apiKey = provider.usesClaudeService ? KeychainService.anthropicAPIKey() : nil
+        if provider.usesClaudeService, apiKey == nil {
             panel.state.logCode(.error, "No Anthropic API key found in Keychain.\n\nRun this once in Terminal:\n\(KeychainService.setupCommand)")
             return
         }
@@ -2415,7 +2417,7 @@ final class AssistantController {
     /// a dictation on Capture + Dictate, a command to carry out on Talk.
     private func toggleRecording() {
         guard panel.state.tab.takesVoice else {
-            hud.report("The \(panel.state.tab.rawValue) tab has no mic — switch to Peeky Ask or Peeky Code to talk.", ok: false)
+            hud.report("The \(panel.state.tab.rawValue) tab has no mic — switch to Peeky Agent or Peeky Code to talk.", ok: false)
             return
         }
         let kind: RecordKind = switch panel.state.tab {
@@ -2546,6 +2548,11 @@ final class AssistantController {
             panel.state.status = .idle
             return
         }
+        if provider == .deepseek, !panel.state.askAttachments.isEmpty {
+            panel.state.errorText = "DeepSeek is text-only. Remove attached images or switch to Claude."
+            panel.state.status = .idle
+            return
+        }
         ActivityLog.recordAction("ask", ["text": question, "provider": provider.rawValue])
         let screen = workingScreen
 
@@ -2639,6 +2646,17 @@ final class AssistantController {
                     answerText = try await ollama.ask(
                         question: question, context: context, history: history,
                         model: panel.state.askOllamaModel
+                    ) { [weak self] status in
+                        guard let self, id == self.requestID else { return }
+                        self.panel.state.answer = status
+                    }
+                    highlight = nil
+                } else if provider == .deepseek {
+                    let history = panel.state.askHistory.reversed().map {
+                        (question: $0.question, answer: $0.answer)
+                    }
+                    answerText = try await DeepSeekService().ask(
+                        question: question, history: history
                     ) { [weak self] status in
                         guard let self, id == self.requestID else { return }
                         self.panel.state.answer = status

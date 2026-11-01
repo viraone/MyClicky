@@ -84,7 +84,7 @@ enum PanelSize: Int, CaseIterable, Comparable {
 enum AssistantTab: String, CaseIterable {
     /// Listed first so it's the leftmost tab: asking is what the panel is
     /// for most of the time.
-    case ask = "Peeky Ask"
+    case ask = "Peeky Agent"
     /// Region captures and dictation share one tab; both land on the clipboard together.
     case captureDictate = "Peeky Capture"
     /// Voice/typed commands Peeky *acts on* (e.g. "create a calendar event
@@ -127,7 +127,7 @@ enum AssistantTab: String, CaseIterable {
     /// One-word name for the half-width column's tab bar.
     var shortName: String {
         switch self {
-        case .ask: "Ask"
+        case .ask: "Agent"
         case .captureDictate: "Capture"
         case .talk: "Talk"
         case .code: "Code"
@@ -137,18 +137,32 @@ enum AssistantTab: String, CaseIterable {
         case .extensions: "Ext"
         }
     }
+
+    /// Restores a tab from its persisted raw value. Older builds saved the
+    /// Ask tab as "Peeky Ask"; it is the same tab as "Peeky Agent" today.
+    static func fromStoredRawValue(_ raw: String) -> AssistantTab? {
+        if raw == "Peeky Ask" { return .ask }
+        return AssistantTab(rawValue: raw)
+    }
 }
 
 enum CodeAIProvider: String, CaseIterable {
     case claude
     case ollama
+    case deepseek
 
     var label: String {
         switch self {
         case .claude: return "Claude"
         case .ollama: return "Local"
+        case .deepseek: return "DeepSeek"
         }
     }
+
+    /// Whether this path uses the Claude service. DeepSeek is only wired
+    /// into the Agent tab so far; Code and Doc fall back to Claude rather
+    /// than inventing a new behavior.
+    var usesClaudeService: Bool { self != .ollama }
 }
 
 /// One line of the Peeky Code tab's conversation.
@@ -763,8 +777,9 @@ final class AssistantState: ObservableObject {
     /// every code question until removed. Listed by name only.
     @Published var codeImages: [AskAttachment] = []
     static let maxCodeImages = 5
-    /// Only Claude sends images with code questions; the Local path is text-only.
-    var codeAcceptsImages: Bool { codeAIProvider == .claude }
+    /// Only the Claude service sends images with code questions; the Local
+    /// path is text-only, and DeepSeek falls back to Claude here.
+    var codeAcceptsImages: Bool { codeAIProvider.usesClaudeService }
     /// Estimated dollars spent on code questions since install, from the
     /// token counts each answer reports. Persisted so it survives relaunch.
     @Published var codeSpentUSD: Double = UserDefaults.standard.double(forKey: codeSpentKey) {
@@ -914,7 +929,7 @@ final class AssistantState: ObservableObject {
     }
     static func loadHiddenTabs(defaults: UserDefaults = .standard) -> Set<AssistantTab> {
         let raw = defaults.stringArray(forKey: hiddenTabsKey) ?? []
-        var hidden = Set(raw.compactMap(AssistantTab.init(rawValue:)))
+        var hidden = Set(raw.compactMap { AssistantTab.fromStoredRawValue($0) })
         // A stale or hand-edited default must never leave the bar empty.
         if hidden.count >= AssistantTab.allCases.count { hidden.remove(.ask) }
         return hidden
@@ -4495,6 +4510,11 @@ struct AssistantPanelView: View {
             } label: {
                 Label("Claude (cloud)", systemImage: state.askAIProvider == .claude ? "checkmark" : "cloud")
             }
+            Button {
+                state.askAIProvider = .deepseek
+            } label: {
+                Label("DeepSeek (cloud)", systemImage: state.askAIProvider == .deepseek ? "checkmark" : "cloud")
+            }
             Divider()
             Button {
                 state.askAIProvider = .ollama
@@ -4554,18 +4574,30 @@ struct AssistantPanelView: View {
         .menuIndicator(.hidden)
         .frame(maxWidth: state.size == .half ? 180 : nil)
         .fixedSize(horizontal: state.size != .half, vertical: true)
-        .help(state.askAIProvider == .ollama
-              ? "\(state.askOllamaModel) on this Mac · text only · no API charge"
-                + (state.askOllamaStatus.map { "\n\($0)" } ?? "")
-              : "Claude cloud API · includes the current screen and attached images")
+        .help(askProviderHelp)
         .onAppear {
             if state.askAIProvider == .ollama { state.onRefreshAskOllamaModels?() }
         }
     }
 
     private var askProviderLabel: String {
-        guard state.askAIProvider == .ollama else { return "Claude · Cloud" }
-        return "Ollama · \(AssistantState.ollamaDisplayName(state.askOllamaModel))"
+        switch state.askAIProvider {
+        case .claude: "Claude · Cloud"
+        case .ollama: "Ollama · \(AssistantState.ollamaDisplayName(state.askOllamaModel))"
+        case .deepseek: "DeepSeek · \(DeepSeekService.displayName)"
+        }
+    }
+
+    private var askProviderHelp: String {
+        switch state.askAIProvider {
+        case .claude:
+            return "Claude cloud API · includes the current screen and attached images"
+        case .ollama:
+            return "\(state.askOllamaModel) on this Mac · text only · no API charge"
+                + (state.askOllamaStatus.map { "\n\($0)" } ?? "")
+        case .deepseek:
+            return "DeepSeek cloud API · text only · no screen capture"
+        }
     }
 
     private var codeProviderMenu: some View {
@@ -4573,7 +4605,7 @@ struct AssistantPanelView: View {
             Button {
                 state.codeAIProvider = .claude
             } label: {
-                Label("Claude (cloud)", systemImage: state.codeAIProvider == .claude ? "checkmark" : "cloud")
+                Label("Claude (cloud)", systemImage: state.codeAIProvider.usesClaudeService ? "checkmark" : "cloud")
             }
             Divider()
             Button {
@@ -5497,7 +5529,7 @@ struct AssistantPanelView: View {
     private var promptTabName: String {
         switch state.tab {
         case .captureDictate: "capture"
-        case .ask: "ask"
+        case .ask: "agent"
         case .talk: "talk"
         case .code: "code"
         case .terminal: "terminal"

@@ -115,7 +115,7 @@ final class CodeDocumentaryModel: ObservableObject {
 
     /// One tag for the picker: `"claude"` or `"ollama:<model>"`.
     var scriptEngine: String {
-        get { scriptProvider == .claude ? "claude" : "ollama:\(ollamaModel)" }
+        get { scriptProvider.usesClaudeService ? "claude" : "ollama:\(ollamaModel)" }
         set {
             if newValue == "claude" {
                 scriptProvider = .claude
@@ -138,7 +138,7 @@ final class CodeDocumentaryModel: ObservableObject {
     }
 
     var scriptWriterLabel: String {
-        scriptProvider == .claude ? "Claude" : AssistantState.ollamaDisplayName(ollamaModel)
+        scriptProvider.usesClaudeService ? "Claude" : AssistantState.ollamaDisplayName(ollamaModel)
     }
 
     let ollama = OllamaService()
@@ -268,13 +268,13 @@ final class CodeDocumentaryModel: ObservableObject {
         phase = .writingScript
         ActivityLog.recordAction("code-documentary", ["file": source.lastPathComponent,
                                                       "kind": kind.rawValue,
-                                                      "writer": scriptProvider == .claude ? "claude" : ollamaModel])
+                                                      "writer": scriptProvider.usesClaudeService ? "claude" : ollamaModel])
 
         Task {
             do {
                 let code = try String(contentsOf: source, encoding: .utf8)
                 append("Reading \(source.lastPathComponent) (\(code.split(separator: "\n", omittingEmptySubsequences: false).count) lines)")
-                append(scriptProvider == .claude
+                append(scriptProvider.usesClaudeService
                        ? "Asking Claude for a documentary script…"
                        : "Asking \(scriptWriterLabel) on this Mac for a documentary script — nothing leaves the machine…")
                 var script = try await Self.writeScript(for: code, at: source, kind: kind, using: requester)
@@ -333,7 +333,7 @@ final class CodeDocumentaryModel: ObservableObject {
     /// isn't usable — today that only means Claude without a key.
     private func makeRequester(purpose: RequestPurpose) -> JSONRequester? {
         switch scriptProvider {
-        case .claude:
+        case .claude, .deepseek:
             guard let apiKey = KeychainService.anthropicAPIKey(), !apiKey.isEmpty else {
                 let message = purpose == .script
                     ? "No Anthropic API key in Keychain. Run once in Terminal:\n\(KeychainService.setupCommand)\nOr switch Script to Local."
@@ -578,7 +578,7 @@ final class CodeDocumentaryModel: ObservableObject {
     var onCancelMic: (() -> Void)?
     /// Words heard so far while the Mac mic is open for a question.
     @Published var liveTranscript = ""
-    /// Hand the moment over to the full Peeky Ask tab.
+    /// Hand the moment over to the full Peeky Agent tab.
     var onGoDeeper: ((String) -> Void)?
     /// A protocol line for the phone (DOC_STATE / DOC_ANSWER / DOC_RECENT).
     var onRemoteLine: ((String) -> Void)?
@@ -2143,11 +2143,11 @@ struct CodeDocumentaryView: View {
                 Text("Choose a code file or written document, then pick how it should sound.")
                     .font(.system(size: 11.5))
                     .foregroundStyle(.white.opacity(0.55))
-                Text(model.scriptProvider == .claude
+                Text(model.scriptProvider.usesClaudeService
                      ? "Claude writes the script · narration and animation render on this Mac · nothing else leaves it"
                      : "\(model.scriptWriterLabel) writes the script on this Mac · narration and animation render here too · nothing leaves it · no API charge")
                     .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(model.scriptProvider == .claude
+                    .foregroundStyle(model.scriptProvider.usesClaudeService
                                      ? Color.cyan.opacity(0.9)
                                      : Color.green.opacity(0.95))
             }
@@ -2407,8 +2407,8 @@ struct CodeDocumentaryView: View {
 
     /// Claude in the cloud, or any installed Ollama model on this Mac.
     private var scriptPicker: some View {
-        option("Script", icon: model.scriptProvider == .claude ? "cloud" : "desktopcomputer",
-               tint: model.scriptProvider == .claude ? .cyan : .green, maxWidth: 340) {
+        option("Script", icon: model.scriptProvider.usesClaudeService ? "cloud" : "desktopcomputer",
+               tint: model.scriptProvider.usesClaudeService ? .cyan : .green, maxWidth: 340) {
             Menu {
                 ForEach(model.ollamaChoices, id: \.self) { tag in
                     Button {
@@ -2422,14 +2422,14 @@ struct CodeDocumentaryView: View {
                 Button {
                     model.scriptEngine = "claude"
                 } label: {
-                    Label("Claude · Cloud", systemImage: model.scriptProvider == .claude ? "checkmark" : "cloud")
+                    Label("Claude · Cloud", systemImage: model.scriptProvider.usesClaudeService ? "checkmark" : "cloud")
                 }
             } label: {
                 selectedOptionLabel(
-                    model.scriptProvider == .claude
+                    model.scriptProvider.usesClaudeService
                         ? "Claude · Cloud"
                         : "Local · \(model.scriptWriterLabel)",
-                    tint: model.scriptProvider == .claude ? .cyan : .green
+                    tint: model.scriptProvider.usesClaudeService ? .cyan : .green
                 )
             }
             .menuStyle(.button)
@@ -2437,7 +2437,7 @@ struct CodeDocumentaryView: View {
             .menuIndicator(.hidden)
             .fixedSize()
         }
-        .help(model.scriptProvider == .claude
+        .help(model.scriptProvider.usesClaudeService
               ? "Claude Sonnet writes the script · billed to your Anthropic key"
               : "\(model.ollamaModel) runs through Ollama on this Mac · no API charge")
     }

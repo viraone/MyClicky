@@ -2056,7 +2056,7 @@ struct NumpadView: View {
         case "PLAYPAUSE": statusText = client.doc.playing ? "Paused on your Mac" : "Playing on your Mac"
         case "RESUME": statusText = "Resuming the documentary from \(client.doc.timecode)"
         case "SHOW_ME": statusText = "Peeky is drawing it out step by step…"
-        case "DEEPER": statusText = "Opened in Peeky Ask on your Mac — the film stays parked here"
+        case "DEEPER": statusText = "Opened in Peeky Agent on your Mac — the film stays parked here"
         case "RESTART": statusText = "From the top"
         case "STOP": statusText = "Stopped — back to the Peeky Code Doc home screen"
         default: break

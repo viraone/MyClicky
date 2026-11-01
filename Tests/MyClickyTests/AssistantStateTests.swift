@@ -288,6 +288,20 @@ final class HiddenTabsTests: XCTestCase {
         XCTAssertFalse(hidden.contains(.ask))
         XCTAssertEqual(hidden.count, AssistantTab.allCases.count - 1)
     }
+
+    func testTheAskTabIsNowCalledAgent() {
+        XCTAssertEqual(AssistantTab.ask.rawValue, "Peeky Agent")
+        XCTAssertEqual(AssistantTab.ask.shortName, "Agent")
+        XCTAssertEqual(AssistantTab.fromStoredRawValue("Peeky Ask"), .ask)
+    }
+
+    func testLegacyAskTabNameStillHidesTheRenamedAgentTab() throws {
+        let suiteName = "HiddenTabsTests.\(UUID().uuidString)"
+        let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { suite.removePersistentDomain(forName: suiteName) }
+        suite.set(["Peeky Ask"], forKey: AssistantState.hiddenTabsKey)
+        XCTAssertTrue(AssistantState.loadHiddenTabs(defaults: suite).contains(.ask))
+    }
 }
 
 @MainActor

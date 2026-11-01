@@ -293,7 +293,7 @@ without line numbers while the narrator unpacks what they mean. Dropping or
 typing a path to a `.txt` anywhere on the tab lands in this section
 automatically; the code drop zone itself is unchanged.
 
-**Ask about this moment.** While a film is up, Peeky Ask is about the frame you're
+**Ask about this moment.** While a film is up, Peeky Agent is about the frame you're
 on. Press **Ask** (⌘/), the mic, or type in the box — the film pauses, the
 status line reads `Ask about 2:14 · The helper`, and Peeky answers from the exact
 code on screen (the pipeline writes a `timeline.json` so a timestamp maps back
@@ -301,7 +301,7 @@ to the chapter, its lines and narration). The answer is spoken and shown under
 the film with the lines it's about lit up, and it says plainly when it's
 inferring rather than reading the code. Follow-ups: **Show me** (the same
 answer as an animated step walkthrough), **Go deeper** (hands the moment to the
-full Peeky Ask tab; the film stays parked), **Ask another**, and **Resume
+full Peeky Agent tab; the film stays parked), **Ask another**, and **Resume
 documentary**, which continues from the same timestamp. Suggested questions for
 the current chapter appear as chips.
 
