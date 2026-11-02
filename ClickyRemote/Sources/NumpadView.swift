@@ -2676,12 +2676,12 @@ struct NumpadView: View {
             let keyH = max(isLandscape ? 40 : 56, available / rows)
             VStack(spacing: gap) {
                 HStack(spacing: gap) {
-                    key("on", label: "ON", icon: "power", tint: Snes.blue, lit: true,
-                        h: keyH, w: columnW, banner: true)
                     // ENTIRE SCREEN: a full-resolution PNG of the whole display
                     // Chrome's front window is on, left on the Mac clipboard.
                     key("entire_screen", label: "ENTIRE SCREEN", icon: "display",
                         tint: Snes.purple, lit: true,
+                        h: keyH, w: columnW, banner: true)
+                    key("on", label: "ON", icon: "power", tint: Snes.blue, lit: true,
                         h: keyH, w: columnW, banner: true)
                 }
                 HStack(spacing: gap) {
