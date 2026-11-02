@@ -507,8 +507,18 @@ final class ClickyClient: ObservableObject {
         }
     }
 
+    /// Bumped each time a key is tapped while the Mac isn't linked, so the
+    /// view can buzz and say so. Left alone the tap just vanished — the
+    /// remote sat "linked" to a Mac that had been rebuilt hours earlier and
+    /// every button looked dead, with nothing to say why.
+    @Published var unlinkedSends = 0
+    private var lastUnlinkedNudge = Date.distantPast
+
     func send(_ command: String) {
-        guard let connection else { return }
+        guard let connection, status == .connected else {
+            if command != "PING" { reportUnlinkedSend() }
+            return
+        }
         let data = Data((command + "\n").utf8)
         connection.send(content: data, completion: .contentProcessed { [weak self] error in
             if error != nil {
@@ -517,6 +527,18 @@ final class ClickyClient: ObservableObject {
                 }
             }
         })
+    }
+
+    /// A key tapped with no Mac on the line: tell the view, and give the link
+    /// a fresh start — the same reset as coming back from the background,
+    /// at most once every few seconds however fast the keys are tapped.
+    private func reportUnlinkedSend() {
+        unlinkedSends += 1
+        // An attempt already under way is left to finish; restarting it
+        // on every tap would only push the link further out.
+        guard connection == nil, Date().timeIntervalSince(lastUnlinkedNudge) > 3 else { return }
+        lastUnlinkedNudge = Date()
+        resume()
     }
 
     /// Speaks a STATUS/READ/CONFIRM message aloud for low-vision users.

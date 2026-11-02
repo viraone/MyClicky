@@ -221,6 +221,11 @@ struct NumpadView: View {
                 UINotificationFeedbackGenerator().notificationOccurred(.warning)
             }
         }
+        .onChange(of: client.unlinkedSends) { _, _ in
+            // The tap went nowhere. Say so instead of looking dead; the
+            // client is already trying to find the Mac again.
+            showNotice("Not linked to the Mac — reconnecting…", ok: false, seconds: 2.5)
+        }
         .onChange(of: client.talkMessage) { _, message in
             // The Mac's replies to a spoken command show up in the status line.
             guard !message.isEmpty else { return }
