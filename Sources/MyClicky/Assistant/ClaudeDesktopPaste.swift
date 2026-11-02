@@ -65,7 +65,9 @@ enum ClaudeDesktopPaste {
 
     // MARK: - The whole run
 
-    static func run() async -> Result {
+    /// `send: false` stops once the picture is in the chat box, leaving the
+    /// cursor there so the user can type a message before sending it.
+    static func run(send: Bool = true) async -> Result {
         guard !inFlight else {
             return fail("Already pasting into Claude — give it a moment")
         }
@@ -148,6 +150,11 @@ enum ClaudeDesktopPaste {
             return Result(ok: true, message: "Dry run: pasted the image into Claude, then took it back out")
         }
 
+        if !send {
+            ActivityLog.recordAction("claude-paste", ["coldStart": coldStart ? "yes" : "no", "sent": "no"])
+            return Result(ok: true, message: "Image pasted into Claude — type your message, then send it")
+        }
+
         guard isFrontmost() else {
             return fail("Claude lost focus after the paste — the image is in its chat box, not sent")
         }
@@ -170,7 +177,7 @@ enum ClaudeDesktopPaste {
             return fail("The image is in Claude's chat box but Return didn't send it")
         }
 
-        ActivityLog.recordAction("claude-paste", ["coldStart": coldStart ? "yes" : "no"])
+        ActivityLog.recordAction("claude-paste", ["coldStart": coldStart ? "yes" : "no", "sent": "yes"])
         return Result(ok: true, message: "Image sent to Claude")
     }
 

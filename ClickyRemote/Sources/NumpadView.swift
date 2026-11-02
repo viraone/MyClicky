@@ -38,6 +38,9 @@ struct NumpadView: View {
     @State private var mode: RemoteMode = .remote
     /// Documentary answers are silent on the phone unless the user opts in.
     @AppStorage("documentaryReadoutEnabled") private var documentaryReadoutEnabled = false
+    /// CLAUDE PASTE presses Return after pasting (on), or leaves the picture in
+    /// Claude's chat box for the user to type with (off).
+    @AppStorage("claudePasteAutoSend") private var claudePasteAutoSend = true
     /// What the Peeky Video dial moves: the playhead, or one edge of the selected clip.
     enum JogMode: String, CaseIterable {
         case scrub = "Playhead", trimStart = "Trim start", trimEnd = "Trim end"
@@ -2716,9 +2719,16 @@ struct NumpadView: View {
                         .disabled(savingToDesktop)
                 }
                 HStack(spacing: gap) {
-                    key("terminal", label: "TERMINAL", icon: "terminal",
-                        tint: Snes.red, lit: true, h: keyH, w: columnW)
-                        .accessibilityLabel("Open Terminal on Mac")
+                    // AUTO-SEND: a toggle for CLAUDE PASTE above. On, the picture goes in
+                    // Claude's chat box and Return is pressed; off, it stays there
+                    // unsent so a message can be typed first.
+                    key("claude_autosend", label: claudePasteAutoSend ? "AUTO-SEND ON" : "AUTO-SEND OFF",
+                        icon: claudePasteAutoSend ? "return" : "keyboard",
+                        tint: claudePasteAutoSend ? Snes.green : Snes.key, lit: true,
+                        h: keyH, w: columnW)
+                        .accessibilityLabel("Auto-send for Claude paste")
+                        .accessibilityValue(claudePasteAutoSend ? "On" : "Off")
+                        .accessibilityAddTraits(.isToggle)
                     key("camera", label: "CAMERA", icon: "camera.fill", tint: Snes.purple, lit: true,
                         h: keyH, w: columnW) { _ in desktopCameraTapped() }
                         .disabled(savingToDesktop)
@@ -2985,13 +2995,16 @@ struct NumpadView: View {
                 client.tab("DICTATE")
             }
             toggleListening()
-        case "terminal":
-            client.show()
-            client.tab("TERMINAL")
-            statusText = "Peeky Terminal opened on your Mac"
         case "claude_paste":
-            client.claudePaste()
-            statusText = "Sending the clipboard image into Claude on your Mac…"
+            client.claudePaste(autoSend: claudePasteAutoSend)
+            statusText = claudePasteAutoSend
+                ? "Sending the clipboard image into Claude on your Mac…"
+                : "Pasting the clipboard image into Claude on your Mac — not sending it…"
+        case "claude_autosend":
+            claudePasteAutoSend.toggle()
+            statusText = claudePasteAutoSend
+                ? "Auto-send ON — CLAUDE PASTE pastes the image and presses Enter"
+                : "Auto-send OFF — CLAUDE PASTE leaves the image in Claude's chat for you to type and send"
         case "enter":
             client.enter()
             statusText = "Enter pressed on your Mac"

@@ -616,7 +616,9 @@ final class ClickyClient: ObservableObject {
     /// is on, left on the Mac clipboard as a PNG.
     func entireScreen() { send("SCREENSHOT CHROME") }
     /// Sends the image on the Mac clipboard into the Claude desktop app's chat.
-    func claudePaste() { send("CLAUDE PASTE") }
+    /// With `autoSend` the Mac also presses Return; without it the picture is
+    /// left in the chat box for the user to add a message and send.
+    func claudePaste(autoSend: Bool) { send(autoSend ? "CLAUDE PASTE" : "CLAUDE PASTE ONLY") }
     func gmail(_ action: String) { send("GMAIL \(action)") }
     /// Peeky Video: transport, dial nudges and the editing buttons.
     func video(_ action: String) { send("VIDEO \(action)") }

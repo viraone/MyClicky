@@ -1526,10 +1526,10 @@ final class AssistantController {
             guard let self else { return }
             Task { await self.copyChromeScreenToClipboard() }
         }
-        remote.onClaudePaste = { [weak self] in
+        remote.onClaudePaste = { [weak self] send in
             Task { @MainActor in
                 guard let self else { return }
-                let result = await ClaudeDesktopPaste.run()
+                let result = await ClaudeDesktopPaste.run(send: send)
                 self.remote.broadcast("CLAUDE_PASTE_STATUS \(result.ok ? "OK" : "FAIL")\t"
                                       + result.message.replacingOccurrences(of: "\n", with: " "))
             }

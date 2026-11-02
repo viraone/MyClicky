@@ -45,6 +45,8 @@ import Network
 ///   CLAUDE PASTE   – put the image on the Mac clipboard (from CAPTURE or
 ///                    SCREENSHOT CHROME) into the Claude desktop app's chat
 ///                    box and send it; the Mac replies with CLAUDE_PASTE_STATUS
+///   CLAUDE PASTE ONLY – the same, but leave the image in the chat box
+///                    unsent so the user can type before sending
 ///   GMAIL COMPOSE  – open a new Gmail compose window in the browser
 ///   GMAIL INBOX    – go back to the inbox list
 ///   GMAIL OPEN_LATEST – open the newest Primary-inbox email
@@ -193,8 +195,9 @@ final class RemoteControlService {
     /// `SCREENSHOT CHROME` — full-resolution PNG of the display Chrome's
     /// front window is on, onto the clipboard.
     var onScreenshotChrome: (() -> Void)?
-    /// `CLAUDE PASTE`: paste the clipboard image into the Claude desktop app and send it.
-    var onClaudePaste: (() -> Void)?
+    /// `CLAUDE PASTE` (send: true) / `CLAUDE PASTE ONLY` (send: false): paste the
+    /// clipboard image into the Claude desktop app, and press Return only if `send`.
+    var onClaudePaste: ((_ send: Bool) -> Void)?
     var onAsk: ((String) -> Void)?
     var onDictate: ((String) -> Void)?
     var onPartial: ((String) -> Void)?
@@ -330,7 +333,9 @@ final class RemoteControlService {
         } else if line == "SCREENSHOT CHROME" {
             onScreenshotChrome?()
         } else if line == "CLAUDE PASTE" {
-            onClaudePaste?()
+            onClaudePaste?(true)
+        } else if line == "CLAUDE PASTE ONLY" {
+            onClaudePaste?(false)
         } else if line.hasPrefix("TAB ") {
             onTab?(String(line.dropFirst(4)))
         } else if line == "KEY ENTER" {
