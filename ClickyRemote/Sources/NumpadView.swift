@@ -2701,22 +2701,17 @@ struct NumpadView: View {
                 HStack(spacing: gap) {
                     key("2", label: "CAPTURE", icon: "camera.viewfinder", tint: Snes.blue, lit: true,
                         h: keyH, w: columnW)
-                    // COLLAPSE is the panel header's "Minimize to corner"
-                    // button: Peeky tucks into its corner dot. Once it is
-                    // there the key reads EXPAND and brings it back.
-                    key("minimize", label: client.peekyLayout == "COLLAPSED" ? "EXPAND" : "COLLAPSE",
-                        icon: client.peekyLayout == "COLLAPSED" ? "arrow.up.left.and.arrow.down.right"
-                                                                : "arrow.down.right.and.arrow.up.left",
-                        tint: Snes.green, lit: true,
-                        h: keyH, w: columnW)
-                }
-                HStack(spacing: gap) {
-                    key("on", label: "ON", icon: "power", tint: Snes.blue, lit: true,
-                        h: keyH, w: columnW)
                     key("photos", label: savingToDesktop ? "SAVING…" : "PHOTOS",
                         icon: savingToDesktop ? "arrow.up.circle.dotted" : "photo.on.rectangle.angled",
                         tint: Snes.blue, lit: true,
                         h: keyH, w: columnW) { _ in desktopPhotoTapped() }
+                        .disabled(savingToDesktop)
+                }
+                HStack(spacing: gap) {
+                    key("on", label: "ON", icon: "power", tint: Snes.blue, lit: true,
+                        h: keyH, w: columnW)
+                    key("camera", label: "CAMERA", icon: "camera.fill", tint: Snes.purple, lit: true,
+                        h: keyH, w: columnW) { _ in desktopCameraTapped() }
                         .disabled(savingToDesktop)
                 }
                 HStack(spacing: gap) {
@@ -2730,17 +2725,22 @@ struct NumpadView: View {
                         .accessibilityLabel("Auto-send for Claude paste")
                         .accessibilityValue(claudePasteAutoSend ? "On" : "Off")
                         .accessibilityAddTraits(.isToggle)
-                    key("camera", label: "CAMERA", icon: "camera.fill", tint: Snes.purple, lit: true,
-                        h: keyH, w: columnW) { _ in desktopCameraTapped() }
-                        .disabled(savingToDesktop)
+                    key("enter", label: "ENTER", icon: "return",
+                        tint: Snes.talk, lit: true, h: keyH, w: columnW)
+                        .accessibilityLabel("Press Enter on Mac")
                 }
                 HStack(spacing: gap) {
                     key("paste", label: "PASTE", icon: "doc.on.clipboard",
                         tint: Snes.talk, lit: true, h: keyH, w: columnW)
                         .accessibilityLabel("Paste on Mac")
-                    key("enter", label: "ENTER", icon: "return",
-                        tint: Snes.talk, lit: true, h: keyH, w: columnW)
-                        .accessibilityLabel("Press Enter on Mac")
+                    // COLLAPSE is the panel header's "Minimize to corner"
+                    // button: Peeky tucks into its corner dot. Once it is
+                    // there the key reads EXPAND and brings it back.
+                    key("minimize", label: client.peekyLayout == "COLLAPSED" ? "EXPAND" : "COLLAPSE",
+                        icon: client.peekyLayout == "COLLAPSED" ? "arrow.up.left.and.arrow.down.right"
+                                                                : "arrow.down.right.and.arrow.up.left",
+                        tint: Snes.green, lit: true,
+                        h: keyH, w: columnW)
                 }
             }
             .padding(.top, topInset)
