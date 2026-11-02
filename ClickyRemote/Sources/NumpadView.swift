@@ -2677,62 +2677,58 @@ struct NumpadView: View {
             let isLandscape = geo.size.width > geo.size.height
             let gap: CGFloat = isLandscape ? 8 : 12
             let topInset: CGFloat = isLandscape ? 8 : 12
-            // Ten keys in a two-by-five grid, every key the same size, so
-            // the pad reads as one even block.
-            let rows: CGFloat = 5
+            // Five small keys across the top, then two rows of two filling
+            // the rest of the pad.
+            let topGap: CGFloat = isLandscape ? 8 : 6
+            let topW = (geo.size.width - topGap * 4) / 5
+            let topH: CGFloat = isLandscape ? max(56, (geo.size.height - topInset - gap * 2) / 3) : 116
             let columnW = (geo.size.width - gap) / 2
-            let available = geo.size.height - topInset - gap * (rows - 1)
-            let keyH = max(isLandscape ? 40 : 56, available / rows)
+            let available = geo.size.height - topInset - gap * 2 - topH
+            let keyH = max(isLandscape ? 40 : 56, available / 2)
             VStack(spacing: gap) {
-                HStack(spacing: gap) {
+                HStack(spacing: topGap) {
+                    // AUTO-SEND: a toggle for CLAUDE PASTE. On, the picture goes in
+                    // Claude's chat box and Return is pressed; off, it stays there
+                    // unsent so a message can be typed first.
+                    key("claude_autosend", label: claudePasteAutoSend ? "AUTO-SEND\nON" : "AUTO-SEND\nOFF",
+                        icon: claudePasteAutoSend ? "return" : "keyboard",
+                        tint: claudePasteAutoSend ? Snes.green : Snes.key, lit: true,
+                        h: topH, w: topW, compact: true)
+                        .accessibilityLabel("Auto-send for Claude paste")
+                        .accessibilityValue(claudePasteAutoSend ? "On" : "Off")
+                        .accessibilityAddTraits(.isToggle)
+                    key("on", label: "ON", icon: "power", tint: Snes.blue, lit: true,
+                        h: topH, w: topW, compact: true)
+                    key("2", label: "CAPTURE", icon: "camera.viewfinder", tint: Snes.blue, lit: true,
+                        h: topH, w: topW, compact: true)
                     // ENTIRE SCREEN: a full-resolution PNG of the whole display
                     // Chrome's front window is on, left on the Mac clipboard.
-                    key("entire_screen", label: "ENTIRE SCREEN", icon: "display",
+                    key("entire_screen", label: "ENTIRE\nSCREEN", icon: "display",
                         tint: Snes.purple, lit: true,
-                        h: keyH, w: columnW, banner: true)
+                        h: topH, w: topW, compact: true)
+                        .accessibilityLabel("Entire screen")
                     // CLAUDE PASTE: the picture CAPTURE or ENTIRE SCREEN left on the
                     // Mac clipboard goes into the Claude desktop app's chat; the AUTO-SEND
                     // key decides whether Return is pressed after it.
-                    key("claude_paste", label: "CLAUDE PASTE", icon: "paperplane.fill",
+                    key("claude_paste", label: "CLAUDE\nPASTE", icon: "paperplane.fill",
                         tint: Snes.claude, lit: true,
-                        h: keyH, w: columnW, banner: true)
+                        h: topH, w: topW, compact: true)
                         .accessibilityLabel("Paste the clipboard image into Claude on the Mac")
                 }
                 HStack(spacing: gap) {
-                    key("2", label: "CAPTURE", icon: "camera.viewfinder", tint: Snes.blue, lit: true,
-                        h: keyH, w: columnW)
                     key("photos", label: savingToDesktop ? "SAVING…" : "PHOTOS",
                         icon: savingToDesktop ? "arrow.up.circle.dotted" : "photo.on.rectangle.angled",
                         tint: Snes.blue, lit: true,
                         h: keyH, w: columnW) { _ in desktopPhotoTapped() }
                         .disabled(savingToDesktop)
-                }
-                HStack(spacing: gap) {
-                    key("on", label: "ON", icon: "power", tint: Snes.blue, lit: true,
-                        h: keyH, w: columnW)
                     key("camera", label: "CAMERA", icon: "camera.fill", tint: Snes.purple, lit: true,
                         h: keyH, w: columnW) { _ in desktopCameraTapped() }
                         .disabled(savingToDesktop)
                 }
                 HStack(spacing: gap) {
-                    // AUTO-SEND: a toggle for CLAUDE PASTE. On, the picture goes in
-                    // Claude's chat box and Return is pressed; off, it stays there
-                    // unsent so a message can be typed first.
-                    key("claude_autosend", label: claudePasteAutoSend ? "AUTO-SEND ON" : "AUTO-SEND OFF",
-                        icon: claudePasteAutoSend ? "return" : "keyboard",
-                        tint: claudePasteAutoSend ? Snes.green : Snes.key, lit: true,
-                        h: keyH, w: columnW)
-                        .accessibilityLabel("Auto-send for Claude paste")
-                        .accessibilityValue(claudePasteAutoSend ? "On" : "Off")
-                        .accessibilityAddTraits(.isToggle)
                     key("enter", label: "ENTER", icon: "return",
                         tint: Snes.talk, lit: true, h: keyH, w: columnW)
                         .accessibilityLabel("Press Enter on Mac")
-                }
-                HStack(spacing: gap) {
-                    key("paste", label: "PASTE", icon: "doc.on.clipboard",
-                        tint: Snes.talk, lit: true, h: keyH, w: columnW)
-                        .accessibilityLabel("Paste on Mac")
                     // COLLAPSE is the panel header's "Minimize to corner"
                     // button: Peeky tucks into its corner dot. Once it is
                     // there the key reads EXPAND and brings it back.
@@ -2775,7 +2771,7 @@ struct NumpadView: View {
     /// Saturated tiles match the banner; active tiles gain a brighter face and rim.
     private func key(_ id: String, label: String? = nil, icon: String? = nil, tint: Color? = nil, lit: Bool = false,
                      h: CGFloat? = nil, w: CGFloat? = nil, small: Bool = false, hero: Bool = false,
-                     banner: Bool = false, waveform: Bool = false,
+                     compact: Bool = false, waveform: Bool = false,
                      action: ((String) -> Void)? = nil) -> some View {
         let face = tint ?? Snes.key
         let active = waveform || (id == "photos" && savingToDesktop)
@@ -2793,18 +2789,20 @@ struct NumpadView: View {
                         .frame(width: max(0, (w ?? 121) - 28))
                         .allowsHitTesting(false)
                 }
-                if banner {
-                    HStack(spacing: 10) {
+                if compact {
+                    // A narrow key: the icon sits above a label of up to two lines.
+                    VStack(spacing: 8) {
                         Image(systemName: icon ?? "")
-                            .font(.system(size: 22, weight: .bold))
+                            .font(.system(size: 22, weight: .semibold))
                         Text(label ?? id)
-                            .font(.system(size: 18, weight: .semibold, design: .rounded))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.6)
-                            .allowsTightening(true)
-                            .layoutPriority(1)
+                            .font(.system(size: 11, weight: .heavy, design: .rounded))
+                            .multilineTextAlignment(.center)
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.7)
                     }
-                    .padding(.horizontal, 10)
+                    .padding(.horizontal, 3)
+                    .contentTransition(.opacity)
+                    .animation(.easeInOut(duration: 0.2), value: label)
                 } else if !hero, let label {
                     HStack(spacing: 10) {
                         Image(systemName: icon ?? "")
@@ -2836,10 +2834,7 @@ struct NumpadView: View {
             .shadow(color: .black.opacity(0.35), radius: 1, y: 1)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background {
-                if banner {
-                    shape.fill(LinearGradient(colors: [face.lighter(0.18), face],
-                                              startPoint: .top, endPoint: .bottom))
-                } else if active {
+                if active {
                     shape.fill(id == "3" || id == "photos" ? face.lighter(0.1) : Snes.red)
                 } else {
                     shape.fill(LinearGradient(colors: [face.lighter(0.12), face.darker(0.06)],
@@ -3009,11 +3004,6 @@ struct NumpadView: View {
         case "enter":
             client.enter()
             statusText = "Enter pressed on your Mac"
-        case "paste":
-            client.show()
-            client.tab("TERMINAL")
-            client.paste()
-            statusText = "Pasted into Peeky Terminal on your Mac"
         default:
             break
         }

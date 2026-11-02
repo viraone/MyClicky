@@ -610,7 +610,6 @@ final class ClickyClient: ObservableObject {
     func screen(_ n: Int) { send("SCREEN \(n)") }
     func tab(_ name: String) { send("TAB \(name)") }
     func enter() { send("KEY ENTER") }
-    func paste() { send("KEY PASTE") }
     func capture() { send("CAPTURE") }
     /// Full-resolution screenshot of the whole display Chrome's front window
     /// is on, left on the Mac clipboard as a PNG.
