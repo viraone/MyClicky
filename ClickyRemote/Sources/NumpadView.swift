@@ -2721,14 +2721,14 @@ struct NumpadView: View {
                         tint: Snes.blue, lit: true,
                         h: keyH, w: columnW) { _ in desktopPhotoTapped() }
                         .disabled(savingToDesktop)
-                    key("camera", label: "CAMERA", icon: "camera.fill", tint: Snes.purple, lit: true,
-                        h: keyH, w: columnW) { _ in desktopCameraTapped() }
-                        .disabled(savingToDesktop)
-                }
-                HStack(spacing: gap) {
                     key("enter", label: "ENTER", icon: "return",
                         tint: Snes.talk, lit: true, h: keyH, w: columnW)
                         .accessibilityLabel("Press Enter on Mac")
+                }
+                HStack(spacing: gap) {
+                    key("camera", label: "CAMERA", icon: "camera.fill", tint: Snes.purple, lit: true,
+                        h: keyH, w: columnW) { _ in desktopCameraTapped() }
+                        .disabled(savingToDesktop)
                     // COLLAPSE is the panel header's "Minimize to corner"
                     // button: Peeky tucks into its corner dot. Once it is
                     // there the key reads EXPAND and brings it back.
