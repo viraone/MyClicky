@@ -46,6 +46,9 @@ final class ClickyClient: ObservableObject {
     /// Outcome of the last SCREENSHOT CHROME command as reported by the Mac.
     /// Shown as a toast rather than spoken.
     var onScreenshotStatus: ((_ message: String, _ ok: Bool) -> Void)?
+    /// Outcome of the last CLAUDE PASTE command as reported by the Mac:
+    /// the clipboard image sent into the Claude desktop app, or why not.
+    var onClaudePasteStatus: ((_ message: String, _ ok: Bool) -> Void)?
     /// Whether the browser window playing YouTube is currently minimized —
     /// drives the Collapse/Expand label on the YouTube pad.
     @Published var youtubeCollapsed = false
@@ -293,6 +296,9 @@ final class ClickyClient: ObservableObject {
                         } else if line.hasPrefix("SCREENSHOT_STATUS ") {
                             let parts = line.dropFirst(18).split(separator: "\t", maxSplits: 1).map(String.init)
                             if parts.count == 2 { self.onScreenshotStatus?(parts[1], parts[0] == "OK") }
+                        } else if line.hasPrefix("CLAUDE_PASTE_STATUS ") {
+                            let parts = line.dropFirst(20).split(separator: "\t", maxSplits: 1).map(String.init)
+                            if parts.count == 2 { self.onClaudePasteStatus?(parts[1], parts[0] == "OK") }
                         } else if line.hasPrefix("SCREENS ") {
                             let parts = line.dropFirst(8).split(separator: " ").compactMap { Int($0) }
                             if parts.count == 2 {
@@ -609,6 +615,8 @@ final class ClickyClient: ObservableObject {
     /// Full-resolution screenshot of the whole display Chrome's front window
     /// is on, left on the Mac clipboard as a PNG.
     func entireScreen() { send("SCREENSHOT CHROME") }
+    /// Sends the image on the Mac clipboard into the Claude desktop app's chat.
+    func claudePaste() { send("CLAUDE PASTE") }
     func gmail(_ action: String) { send("GMAIL \(action)") }
     /// Peeky Video: transport, dial nudges and the editing buttons.
     func video(_ action: String) { send("VIDEO \(action)") }

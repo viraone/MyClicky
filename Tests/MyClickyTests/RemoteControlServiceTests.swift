@@ -43,6 +43,17 @@ final class RemoteControlServiceTests: XCTestCase {
         XCTAssertFalse(stamp.contains(":"))
     }
 
+    func testClaudePasteIsForwardedExactlyOnce() {
+        let service = RemoteControlService()
+        var pastes = 0
+        service.onClaudePaste = { pastes += 1 }
+
+        service.handle("CLAUDE PASTE")
+        service.handle("KEY PASTE")
+
+        XCTAssertEqual(pastes, 1)
+    }
+
     func testEnterIsForwardedExactlyOnce() {
         let service = RemoteControlService()
         var presses = 0

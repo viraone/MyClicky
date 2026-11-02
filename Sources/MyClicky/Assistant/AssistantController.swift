@@ -1526,6 +1526,14 @@ final class AssistantController {
             guard let self else { return }
             Task { await self.copyChromeScreenToClipboard() }
         }
+        remote.onClaudePaste = { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                let result = await ClaudeDesktopPaste.run()
+                self.remote.broadcast("CLAUDE_PASTE_STATUS \(result.ok ? "OK" : "FAIL")\t"
+                                      + result.message.replacingOccurrences(of: "\n", with: " "))
+            }
+        }
         remote.onBrowserReload = { [weak self] in
             ActivityLog.recordAction("browser-reload")
             if !BrowserTabReader.reloadActiveTab() {

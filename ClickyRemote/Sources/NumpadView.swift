@@ -187,6 +187,12 @@ struct NumpadView: View {
                 showNotice(ok ? "Added to VIRADETH_RESUME on your Desktop" : message,
                            ok: ok, seconds: ok ? 2.4 : 3.5)
             }
+            // CLAUDE PASTE: the Mac reports whether the picture was sent, or why
+            // it wasn't (no image yet, Claude not found, …).
+            client.onClaudePasteStatus = { message, ok in
+                statusText = (ok ? "✓ " : "⚠︎ ") + message
+                showNotice(message, ok: ok, seconds: ok ? 2.4 : 4)
+            }
             // ENTIRE SCREEN: a black toast, not a spoken status — the shot is
             // already described by the key and the toast is enough.
             client.onScreenshotStatus = { message, ok in
@@ -2697,10 +2703,12 @@ struct NumpadView: View {
                         h: keyH, w: columnW)
                 }
                 HStack(spacing: gap) {
-                    key("keynote", label: "KEYNOTE", icon: "play.rectangle.on.rectangle.fill",
-                        tint: Snes.keynote, lit: true,
-                        h: keyH, w: columnW) { _ in selectMode(.keynote) }
-                        .accessibilityLabel("Open the Keynote clicker")
+                    // CLAUDE PASTE: the picture CAPTURE or ENTIRE SCREEN left on the
+                    // Mac clipboard goes into the Claude desktop app's chat and is sent.
+                    key("claude_paste", label: "CLAUDE PASTE", icon: "paperplane.fill",
+                        tint: Snes.claude, lit: true,
+                        h: keyH, w: columnW)
+                        .accessibilityLabel("Paste the clipboard image into Claude on the Mac and send it")
                     key("photos", label: savingToDesktop ? "SAVING…" : "PHOTOS",
                         icon: savingToDesktop ? "arrow.up.circle.dotted" : "photo.on.rectangle.angled",
                         tint: Snes.blue, lit: true,
@@ -2981,6 +2989,9 @@ struct NumpadView: View {
             client.show()
             client.tab("TERMINAL")
             statusText = "Peeky Terminal opened on your Mac"
+        case "claude_paste":
+            client.claudePaste()
+            statusText = "Sending the clipboard image into Claude on your Mac…"
         case "enter":
             client.enter()
             statusText = "Enter pressed on your Mac"
@@ -3186,6 +3197,8 @@ enum Snes {
     static let talk = Color(red: 0.98, green: 0.55, blue: 0.05)
     /// Keynote's app-icon blue.
     static let keynote = Color(red: 0.10, green: 0.50, blue: 0.95)
+    /// Claude's terracotta.
+    static let claude = Color(red: 0.85, green: 0.42, blue: 0.28)
 }
 
 /// Owns only presentation state, so stopping a recording also cancels its pulse.

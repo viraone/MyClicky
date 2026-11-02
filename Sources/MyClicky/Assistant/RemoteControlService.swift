@@ -42,6 +42,9 @@ import Network
 ///   BROWSER RELOAD – reload the active browser tab (like ⌘R)
 ///   SCREENSHOT CHROME – copy a full-resolution PNG of the whole display
 ///                    Chrome's front window is on to the Mac clipboard
+///   CLAUDE PASTE   – put the image on the Mac clipboard (from CAPTURE or
+///                    SCREENSHOT CHROME) into the Claude desktop app's chat
+///                    box and send it; the Mac replies with CLAUDE_PASTE_STATUS
 ///   GMAIL COMPOSE  – open a new Gmail compose window in the browser
 ///   GMAIL INBOX    – go back to the inbox list
 ///   GMAIL OPEN_LATEST – open the newest Primary-inbox email
@@ -127,6 +130,8 @@ import Network
 ///   SAVE_PHOTO_STATUS OK|FAIL\t<message> – outcome of the last SAVE_PHOTO command
 ///   SCREENSHOT_STATUS OK|FAIL\t<message> – outcome of the last SCREENSHOT
 ///                    CHROME command; the phone shows it as a toast, unspoken
+///   CLAUDE_PASTE_STATUS OK|FAIL\t<message> – outcome of the last CLAUDE PASTE
+///                    command; the phone shows it as a toast, unspoken
 ///   YOUTUBE_STATE COLLAPSED|EXPANDED – resulting state of the last
 ///                    YOUTUBE COLLAPSE toggle
 ///   KEYNOTE_STATE PLAYING|STOPPED – whether a slideshow is running after
@@ -188,6 +193,8 @@ final class RemoteControlService {
     /// `SCREENSHOT CHROME` — full-resolution PNG of the display Chrome's
     /// front window is on, onto the clipboard.
     var onScreenshotChrome: (() -> Void)?
+    /// `CLAUDE PASTE`: paste the clipboard image into the Claude desktop app and send it.
+    var onClaudePaste: (() -> Void)?
     var onAsk: ((String) -> Void)?
     var onDictate: ((String) -> Void)?
     var onPartial: ((String) -> Void)?
@@ -322,6 +329,8 @@ final class RemoteControlService {
             onCapture?()
         } else if line == "SCREENSHOT CHROME" {
             onScreenshotChrome?()
+        } else if line == "CLAUDE PASTE" {
+            onClaudePaste?()
         } else if line.hasPrefix("TAB ") {
             onTab?(String(line.dropFirst(4)))
         } else if line == "KEY ENTER" {
