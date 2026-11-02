@@ -2690,8 +2690,13 @@ struct NumpadView: View {
                     key("entire_screen", label: "ENTIRE SCREEN", icon: "display",
                         tint: Snes.purple, lit: true,
                         h: keyH, w: columnW, banner: true)
-                    key("on", label: "ON", icon: "power", tint: Snes.blue, lit: true,
+                    // CLAUDE PASTE: the picture CAPTURE or ENTIRE SCREEN left on the
+                    // Mac clipboard goes into the Claude desktop app's chat; the AUTO-SEND
+                    // key decides whether Return is pressed after it.
+                    key("claude_paste", label: "CLAUDE PASTE", icon: "paperplane.fill",
+                        tint: Snes.claude, lit: true,
                         h: keyH, w: columnW, banner: true)
+                        .accessibilityLabel("Paste the clipboard image into Claude on the Mac")
                 }
                 HStack(spacing: gap) {
                     key("2", label: "CAPTURE", icon: "camera.viewfinder", tint: Snes.blue, lit: true,
@@ -2706,12 +2711,8 @@ struct NumpadView: View {
                         h: keyH, w: columnW)
                 }
                 HStack(spacing: gap) {
-                    // CLAUDE PASTE: the picture CAPTURE or ENTIRE SCREEN left on the
-                    // Mac clipboard goes into the Claude desktop app's chat and is sent.
-                    key("claude_paste", label: "CLAUDE PASTE", icon: "paperplane.fill",
-                        tint: Snes.claude, lit: true,
+                    key("on", label: "ON", icon: "power", tint: Snes.blue, lit: true,
                         h: keyH, w: columnW)
-                        .accessibilityLabel("Paste the clipboard image into Claude on the Mac and send it")
                     key("photos", label: savingToDesktop ? "SAVING…" : "PHOTOS",
                         icon: savingToDesktop ? "arrow.up.circle.dotted" : "photo.on.rectangle.angled",
                         tint: Snes.blue, lit: true,
@@ -2719,7 +2720,7 @@ struct NumpadView: View {
                         .disabled(savingToDesktop)
                 }
                 HStack(spacing: gap) {
-                    // AUTO-SEND: a toggle for CLAUDE PASTE above. On, the picture goes in
+                    // AUTO-SEND: a toggle for CLAUDE PASTE. On, the picture goes in
                     // Claude's chat box and Return is pressed; off, it stays there
                     // unsent so a message can be typed first.
                     key("claude_autosend", label: claudePasteAutoSend ? "AUTO-SEND ON" : "AUTO-SEND OFF",
