@@ -114,7 +114,7 @@ struct NumpadView: View {
 
         var welcome: String {
             switch self {
-            case .remote: "Tap PEEKY to move it to the corner, or ON to bring it back"
+            case .remote: "Tap COLLAPSE to move Peeky to the corner, or EXPAND to bring it back"
             case .code: "Peeky Code mode — Terminal and Enter control Peeky on your Mac"
             case .doc: "Peeky Doc — play a documentary, then Ask Peeky about the moment on screen"
             case .video: "Peeky Video — play, cut and export the project open on your Mac; spin the dial to move frame by frame"
@@ -2672,15 +2672,22 @@ struct NumpadView: View {
 
     // MARK: - Keypad
 
+    /// Peeky's panel is on screen only when it is expanded or showing its
+    /// strip. HIDDEN, COLLAPSED, and the empty value before the first
+    /// PEEKY_LAYOUT line all mean there is nothing to collapse.
+    private var peekyIsOpen: Bool {
+        client.peekyLayout == "STRIP" || client.peekyLayout == "EXPANDED"
+    }
+
     private var keypad: some View {
         GeometryReader { geo in
             let isLandscape = geo.size.width > geo.size.height
             let gap: CGFloat = isLandscape ? 8 : 12
             let topInset: CGFloat = isLandscape ? 8 : 12
-            // Five small keys across the top, then two rows of two filling
+            // Four small keys across the top, then two rows of two filling
             // the rest of the pad.
             let topGap: CGFloat = isLandscape ? 8 : 6
-            let topW = (geo.size.width - topGap * 4) / 5
+            let topW = (geo.size.width - topGap * 3) / 4
             let topH: CGFloat = isLandscape ? max(56, (geo.size.height - topInset - gap * 2) / 3) : 116
             let columnW = (geo.size.width - gap) / 2
             let available = geo.size.height - topInset - gap * 2 - topH
@@ -2697,8 +2704,6 @@ struct NumpadView: View {
                         .accessibilityLabel("Auto-send for Claude paste")
                         .accessibilityValue(claudePasteAutoSend ? "On" : "Off")
                         .accessibilityAddTraits(.isToggle)
-                    key("on", label: "ON", icon: "power", tint: Snes.blue, lit: true,
-                        h: topH, w: topW, compact: true)
                     key("2", label: "CAPTURE", icon: "camera.viewfinder", tint: Snes.blue, lit: true,
                         h: topH, w: topW, compact: true)
                     // ENTIRE SCREEN: a full-resolution PNG of the whole display
@@ -2730,11 +2735,12 @@ struct NumpadView: View {
                         h: keyH, w: columnW) { _ in desktopCameraTapped() }
                         .disabled(savingToDesktop)
                     // COLLAPSE is the panel header's "Minimize to corner"
-                    // button: Peeky tucks into its corner dot. Once it is
-                    // there the key reads EXPAND and brings it back.
-                    key("minimize", label: client.peekyLayout == "COLLAPSED" ? "EXPAND" : "COLLAPSE",
-                        icon: client.peekyLayout == "COLLAPSED" ? "arrow.up.left.and.arrow.down.right"
-                                                                : "arrow.down.right.and.arrow.up.left",
+                    // button: Peeky tucks into its corner dot. When it is
+                    // collapsed, hidden, or not yet reported, the key reads
+                    // EXPAND and opens it.
+                    key("minimize", label: peekyIsOpen ? "COLLAPSE" : "EXPAND",
+                        icon: peekyIsOpen ? "arrow.down.right.and.arrow.up.left"
+                                          : "arrow.up.left.and.arrow.down.right",
                         tint: Snes.green, lit: true,
                         h: keyH, w: columnW)
                 }
@@ -2945,19 +2951,16 @@ struct NumpadView: View {
     private func tapped(_ label: String) {
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         switch label {
-        case "on":
-            client.show()
-            statusText = "Peeky is ON and visible on your Mac"
         case "entire_screen":
             client.entireScreen()
             statusText = "Copying your Chrome screen to the Mac clipboard…"
         case "minimize":
-            if client.peekyLayout == "COLLAPSED" {
-                client.expand()
-                statusText = "Peeky brought back from the corner on your Mac"
-            } else {
+            if peekyIsOpen {
                 client.minimize()
                 statusText = "Peeky minimized to the corner on your Mac — tap EXPAND to bring it back"
+            } else {
+                client.expand()
+                statusText = "Peeky is open on your Mac"
             }
         case "4":
             client.show()
