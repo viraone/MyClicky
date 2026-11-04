@@ -17,6 +17,19 @@ struct NumpadView: View {
     @State private var recordingNotice: String?
     @State private var noticeOK = false
     @State private var recordingNoticeTask: Task<Void, Never>?
+    /// Landscape only: the old left column slides in over the pad on demand.
+    /// Deliberately not persisted — every launch starts with it put away.
+    @State private var drawerOpen = false
+    /// The statusText an explicit showNotice call spoke for, and when. Lets the
+    /// landscape status→toast path leave an action's own wording and colour
+    /// alone without dropping a genuinely later status change.
+    @State private var noticeOwnsStatus: String?
+    @State private var noticeOwnsStatusAt = Date.distantPast
+    /// True while the toast on screen is the live recording transcript, so it
+    /// can keep updating without stepping on a warning that is already up.
+    @State private var noticeIsTranscript = false
+    /// True for a toast that is just information: no check mark, no warning.
+    @State private var noticeIsPlain = false
     /// True after tapping "1"/"3": speech goes to the Mac clipboard, not a question.
     @State private var dictateMode = false
     /// Which target the current recording is for.
@@ -139,25 +152,7 @@ struct NumpadView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             } else {
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(spacing: 8) {
-                        // Sits below the top edge rather than flush against it,
-                        // so the status line reads as its own thing instead of
-                        // running into the mode column.
-                        header
-                            .padding(.top, 40)
-                        modeTabs
-                            .frame(maxHeight: .infinity)
-                        Text("SUPER PEEKY\nENTERTAINMENT SYSTEM")
-                            .font(.system(size: 8, weight: .heavy, design: .monospaced).italic())
-                            .kerning(1)
-                            .multilineTextAlignment(.center)
-                            .foregroundStyle(Snes.text.opacity(0.5))
-                    }
-                    .frame(maxWidth: .infinity)
-                    pad
-                        .frame(width: geo.size.width * 0.78)
-                }
+                landscapeBody(geo)
             }
         }
         .padding(10)
@@ -167,6 +162,7 @@ struct NumpadView: View {
                 toast(notice)
                     .padding(.bottom, 18)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .allowsHitTesting(false)
             }
         }
         .animation(.spring(response: 0.3, dampingFraction: 0.85), value: recordingNotice)
@@ -244,6 +240,162 @@ struct NumpadView: View {
             guard mode == .youtube else { return }
             statusText = collapsed ? "YouTube — browser minimized" : "YouTube — browser restored"
         }
+    }
+
+    // MARK: - Landscape rail + drawer
+
+    /// Landscape console: a slim always-visible rail, the pad filling every
+    /// remaining point, and the old left column sliding in over the pad when
+    /// the rail's mode button is tapped.
+    private func landscapeBody(_ geo: GeometryProxy) -> some View {
+        ZStack(alignment: .leading) {
+            HStack(alignment: .top, spacing: 8) {
+                modeRail
+                pad
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            if drawerOpen {
+                // Both pieces start past the 44pt rail (plus its 8pt gap), so
+                // the rail stays visible and its button stays live as a close
+                // toggle. The scrim sits behind the drawer, letting the wheel
+                // above it keep scrolling; only a tap outside puts it away.
+                Color.black.opacity(0.42)
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        drawerOpen = false
+                    }
+                    .padding(.leading, 52)
+                    .transition(.opacity)
+                    .zIndex(1)
+
+                modeDrawer(width: max(160, geo.size.width * 0.22 - 12))
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
+                    .padding(.leading, 52)
+                    .transition(.move(edge: .leading))
+                    .zIndex(2)
+            }
+        }
+        .animation(.spring(response: 0.32, dampingFraction: 0.82), value: drawerOpen)
+        // With the header tucked away, a status change has nowhere to appear,
+        // so it becomes the same black toast used elsewhere. An explicit
+        // showNotice in the same action keeps its own wording and colour.
+        .onChange(of: statusText) { _, newStatus in
+            if noticeOwnsStatus == newStatus,
+               Date().timeIntervalSince(noticeOwnsStatusAt) < 0.5 {
+                noticeOwnsStatus = nil
+                return
+            }
+            guard !drawerOpen else { return }
+            // Most status lines are neither good nor bad news ("Enter pressed"),
+            // so only the ones marked ✓ or ⚠︎ get an icon.
+            let good = newStatus.hasPrefix("✓")
+            presentToast(statusToastText(newStatus), ok: good, seconds: 2, haptic: false,
+                         plain: !good && !newStatus.hasPrefix("⚠︎"))
+        }
+        // The rest of the header's content, kept reachable with the drawer shut.
+        .onChange(of: permissionDenied) { _, denied in
+            guard denied, !drawerOpen else { return }
+            presentToast("Enable Microphone & Speech Recognition in Settings.",
+                         ok: false, seconds: 2.5, haptic: false)
+        }
+        .onChange(of: client.status) { _, _ in
+            guard !drawerOpen else { return }
+            presentToast(connectionLabel, ok: client.status == .connected, seconds: 2, haptic: false)
+        }
+        .onChange(of: recorder.transcript) { _, transcript in
+            guard recorder.isListening, !drawerOpen, !transcript.isEmpty else { return }
+            // Live updates replace their own transcript toast, but wait for an
+            // explicit warning to finish rather than overwrite it.
+            guard recordingNotice == nil || noticeIsTranscript else { return }
+            // Only the newest words: the whole transcript would grow over the keys.
+            presentToast(String(transcript.suffix(140)), ok: false, seconds: 2, haptic: false,
+                         transcript: true, plain: true)
+        }
+    }
+
+    /// The always-visible landscape rail: link light on top, then the current
+    /// cartridge's icon, which opens the drawer.
+    private var modeRail: some View {
+        VStack(spacing: 10) {
+            Circle()
+                .fill(connectionColor)
+                .frame(width: 10, height: 10)
+                .overlay(Circle().strokeBorder(.white.opacity(0.4), lineWidth: 1))
+                .padding(.top, 8)
+                .accessibilityLabel(connectionLabel)
+            Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                drawerOpen.toggle()
+            } label: {
+                Image(systemName: mode.icon.isEmpty ? "sparkles" : mode.icon)
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundStyle(mode.accent)
+                    .frame(width: 44, height: 48)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(Snes.bodyLight)
+                            .overlay(RoundedRectangle(cornerRadius: 10)
+                                .strokeBorder(Color.black.opacity(0.15), lineWidth: 1))
+                            .shadow(color: .black.opacity(0.18), radius: 3, y: 2)
+                    )
+                    .contentShape(RoundedRectangle(cornerRadius: 10))
+            }
+            .buttonStyle(PadKeyStyle())
+            .accessibilityLabel("Modes")
+            Spacer(minLength: 0)
+        }
+        .frame(width: 44)
+        .frame(maxHeight: .infinity)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Snes.bodyDark.opacity(0.55))
+                .overlay(RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(Color.white.opacity(0.18), lineWidth: 1))
+        )
+    }
+
+    /// The old left column, unchanged, at about the width it used to take.
+    private func modeDrawer(width: CGFloat) -> some View {
+        VStack(spacing: 8) {
+            // Sits below the top edge rather than flush against it, so the
+            // status line reads as its own thing instead of running into the
+            // mode column.
+            header
+                .padding(.top, 40)
+            modeTabs
+                .frame(maxHeight: .infinity)
+            Text("SUPER PEEKY\nENTERTAINMENT SYSTEM")
+                .font(.system(size: 8, weight: .heavy, design: .monospaced).italic())
+                .kerning(1)
+                .multilineTextAlignment(.center)
+                .foregroundStyle(Snes.text.opacity(0.5))
+        }
+        .frame(width: width)
+        .padding(.horizontal, 6)
+        .padding(.bottom, 10)
+        .frame(maxHeight: .infinity)
+        .background(
+            consoleBackground
+                .overlay(alignment: .trailing) {
+                    Rectangle()
+                        .fill(Color.black.opacity(0.2))
+                        .frame(width: 1)
+                }
+                .shadow(color: .black.opacity(0.35), radius: 12, x: 4)
+        )
+    }
+
+    /// Legacy status strings start with ✓ or ⚠︎, but the toast draws its own
+    /// icon; drop the duplicate glyph so the words wrap cleanly.
+    private func statusToastText(_ status: String) -> String {
+        for prefix in ["✓ ", "⚠︎ "] where status.hasPrefix(prefix) {
+            return String(status.dropFirst(prefix.count))
+        }
+        return status
     }
 
     // MARK: - Mode tabs (cartridge selector)
@@ -430,6 +582,9 @@ struct NumpadView: View {
                                        .init(color: .black, location: 0.92), .init(color: .clear, location: 1)],
                                startPoint: .top, endPoint: .bottom)
             )
+            // The drawer rebuilds the wheel each time it opens, so bring the
+            // current mode back into view instead of restarting from the top.
+            .onAppear { wheelPosition = mode.rawValue }
             .onChange(of: wheelPosition) { _, _ in wheelTick() }
         }
         .padding(6)
@@ -448,11 +603,15 @@ struct NumpadView: View {
     private func wheelButton(_ entry: String) -> some View {
         if entry == "REFRESH" {
             modeButton(icon: "arrow.clockwise", title: "REFRESH", accent: Snes.green, selected: true) {
+                drawerOpen = false
                 client.browserReload()
                 statusText = "Refreshing the page on your Mac"
             }
         } else if let m = RemoteMode(rawValue: entry) {
             modeButton(icon: m.icon, title: m.rawValue, accent: m.accent, selected: mode == m) {
+                // Only the landscape wheel does this; the portrait strip's
+                // behaviour is untouched.
+                drawerOpen = false
                 selectMode(m)
             }
         }
@@ -2901,7 +3060,22 @@ struct NumpadView: View {
 
     /// Black pill toast: a green check for good news, a warning for the rest.
     private func showNotice(_ message: String, ok: Bool, seconds: Double) {
-        UINotificationFeedbackGenerator().notificationOccurred(ok ? .success : .error)
+        // This call speaks for the status line in the action that just set it;
+        // the landscape status→toast path must leave its wording and colour be.
+        noticeOwnsStatus = statusText
+        noticeOwnsStatusAt = Date()
+        presentToast(message, ok: ok, seconds: seconds)
+    }
+
+    /// Puts a toast on screen without claiming the status line, for callers
+    /// (the landscape status path) that are already speaking for it.
+    private func presentToast(_ message: String, ok: Bool, seconds: Double, haptic: Bool = true,
+                              transcript: Bool = false, plain: Bool = false) {
+        if haptic {
+            UINotificationFeedbackGenerator().notificationOccurred(ok ? .success : .error)
+        }
+        noticeIsTranscript = transcript
+        noticeIsPlain = plain
         recordingNoticeTask?.cancel()
         noticeOK = ok
         recordingNotice = message
@@ -2912,21 +3086,26 @@ struct NumpadView: View {
         }
     }
 
-    /// Black pill toast, centered at the bottom of the console.
+    /// Black pill toast, centered at the bottom of the console. Long messages
+    /// wrap instead of truncating, and the toast never eats a tap meant for a
+    /// key underneath it.
     private func toast(_ message: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: noticeOK ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                .foregroundStyle(noticeOK ? Snes.green.lighter(0.25) : Snes.yellow)
+        HStack(alignment: .top, spacing: 8) {
+            if !noticeIsPlain {
+                Image(systemName: noticeOK ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(noticeOK ? Snes.green.lighter(0.25) : Snes.yellow)
+            }
             Text(message)
                 .foregroundStyle(.white)
-                .lineLimit(2)
+                .lineLimit(4)
                 .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .font(.system(size: 13, weight: .semibold, design: .rounded))
         .padding(.horizontal, 16)
         .padding(.vertical, 11)
         .background(
-            Capsule()
+            RoundedRectangle(cornerRadius: 18)
                 .fill(Color.black.opacity(0.92))
                 .shadow(color: .black.opacity(0.35), radius: 10, y: 4)
         )
