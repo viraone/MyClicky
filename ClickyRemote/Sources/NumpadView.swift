@@ -2922,10 +2922,9 @@ struct NumpadView: View {
             let isLandscape = geo.size.width > geo.size.height
             let gap: CGFloat = isLandscape ? 8 : 12
             let topInset: CGFloat = isLandscape ? 8 : 12
-            // Four small keys across the top, then two rows of two filling
-            // the rest of the pad.
+            // Five small keys across the top, then two rows.
             let topGap: CGFloat = isLandscape ? 8 : 6
-            let topW = (geo.size.width - topGap * 3) / 4
+            let topW = (geo.size.width - topGap * 4) / 5
             let topH: CGFloat = isLandscape ? max(56, (geo.size.height - topInset - gap * 2) / 3) : 116
             let columnW = (geo.size.width - gap) / 2
             let available = geo.size.height - topInset - gap * 2 - topH
@@ -2957,6 +2956,9 @@ struct NumpadView: View {
                         tint: Snes.claude, lit: true,
                         h: topH, w: topW, compact: true)
                         .accessibilityLabel("Paste the clipboard image into Claude on the Mac")
+                    key("enter", label: "ENTER", icon: "return",
+                        tint: Snes.talk, lit: true, h: topH, w: topW, compact: true)
+                        .accessibilityLabel("Press Enter on Mac")
                 }
                 HStack(spacing: gap) {
                     key("photos", label: savingToDesktop ? "SAVING…" : "PHOTOS",
@@ -2964,14 +2966,11 @@ struct NumpadView: View {
                         tint: Snes.blue, lit: true,
                         h: keyH, w: columnW) { _ in desktopPhotoTapped() }
                         .disabled(savingToDesktop)
-                    key("enter", label: "ENTER", icon: "return",
-                        tint: Snes.talk, lit: true, h: keyH, w: columnW)
-                        .accessibilityLabel("Press Enter on Mac")
-                }
-                HStack(spacing: gap) {
                     key("camera", label: "CAMERA", icon: "camera.fill", tint: Snes.purple, lit: true,
                         h: keyH, w: columnW) { _ in desktopCameraTapped() }
                         .disabled(savingToDesktop)
+                }
+                HStack(spacing: gap) {
                     // COLLAPSE is the panel header's "Minimize to corner"
                     // button: Peeky tucks into its corner dot. When it is
                     // collapsed, hidden, or not yet reported, the key reads
@@ -2980,7 +2979,7 @@ struct NumpadView: View {
                         icon: peekyIsOpen ? "arrow.down.right.and.arrow.up.left"
                                           : "arrow.up.left.and.arrow.down.right",
                         tint: Snes.green, lit: true,
-                        h: keyH, w: columnW)
+                        h: keyH, w: geo.size.width)
                 }
             }
             .padding(.top, topInset)
