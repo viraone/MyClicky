@@ -44,6 +44,8 @@ struct NumpadView: View {
     /// runs, and kept for a moment after it ends so the last steps can be read.
     @State private var stackCardShown = false
     @State private var stackCardHide: Task<Void, Never>?
+    /// Drives the ring that pulses out of the card's bolt while it works.
+    @State private var stackPulse = false
     /// Shopify's second screen: a live table read from Chrome. `shopifyParent`
     /// is the sidebar tile that was tapped (which picks the tab strip);
     /// `shopifySection` is the tab currently showing.
@@ -2927,69 +2929,187 @@ struct NumpadView: View {
         client.peekyLayout == "STRIP" || client.peekyLayout == "EXPANDED"
     }
 
-    /// Step-by-step progress of a running STACK ON/OFF, drawn over the keys.
+    /// Step-by-step progress of a running STACK ON/OFF, drawn over the keys:
+    /// a dark glass card whose glow takes the state's colour (blue while it
+    /// works, green once done, red if the script stopped), the steps as a
+    /// timeline, and a thin progress bar along the bottom.
     private var stackProgressCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
-                Image(systemName: "bolt.fill")
-                Text(client.stackPower == "BUSY"
-                     ? (client.stackProject.isEmpty ? "STACK" : "STACK · \(client.stackProject)")
-                     : "STACK")
-            }
-            .font(.system(size: 12, weight: .black, design: .monospaced))
-            .foregroundStyle(.white.opacity(0.8))
-
-            if client.stackSteps.isEmpty {
-                HStack(spacing: 10) {
-                    ProgressView()
-                        .tint(.white)
-                        .frame(width: 18, height: 18)
-                    Text("Starting…")
-                        .font(.system(size: 13, weight: .bold, design: .rounded))
+        let steps = client.stackSteps
+        let busy = client.stackPower == "BUSY"
+        let failed = steps.contains { $0.state == "FAIL" }
+        let accent: Color = failed ? Snes.red : busy ? Snes.blue : Snes.green
+        let done = steps.filter { $0.state != "DOING" }.count
+        // While running, leave room for the step that has not arrived yet.
+        let fraction: CGFloat = steps.isEmpty ? 0.06
+            : busy ? CGFloat(done) / CGFloat(steps.count + 1)
+            : 1
+        return VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 12) {
+                ZStack {
+                    if busy {
+                        Circle()
+                            .stroke(accent.opacity(0.6), lineWidth: 1.5)
+                            .scaleEffect(stackPulse ? 1.7 : 1)
+                            .opacity(stackPulse ? 0 : 0.9)
+                    }
+                    Circle().fill(accent.opacity(0.18))
+                    Image(systemName: failed ? "bolt.slash.fill" : "bolt.fill")
+                        .font(.system(size: 15, weight: .black))
+                        .foregroundStyle(accent)
+                        .shadow(color: accent.opacity(0.8), radius: 6)
+                }
+                .frame(width: 36, height: 36)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(busy ? "STACK · WORKING" : failed ? "STACK · STOPPED" : "STACK · DONE")
+                        .font(.system(size: 10, weight: .black, design: .monospaced))
+                        .kerning(1.2)
+                        .foregroundStyle(accent)
+                    Text(client.stackProject.isEmpty ? "Local coding stack" : client.stackProject)
+                        .font(.system(size: 16, weight: .bold, design: .rounded))
                         .foregroundStyle(.white)
                 }
-            } else {
-                ForEach(client.stackSteps) { step in
-                    HStack(spacing: 10) {
-                        Group {
-                            switch step.state {
-                            case "DOING":
-                                ProgressView()
-                                    .tint(.white)
-                                    .frame(width: 18, height: 18)
-                            case "DONE":
-                                Image(systemName: "checkmark.circle.fill")
-                                    .font(.system(size: 18))
-                                    .foregroundStyle(Snes.green)
-                            default:
-                                Image(systemName: "xmark.octagon.fill")
-                                    .font(.system(size: 18))
-                                    .foregroundStyle(Snes.red)
-                            }
-                        }
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(step.label)
-                                .font(.system(size: 13, weight: .bold, design: .rounded))
-                                .foregroundStyle(.white)
-                            Text(step.detail)
-                                .font(.system(size: 11, weight: .medium, design: .rounded))
-                                .foregroundStyle(.white.opacity(0.6))
-                                .lineLimit(2)
-                        }
+                Spacer(minLength: 8)
+                Text("\(done)/\(max(steps.count, 1))")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.45))
+                    .contentTransition(.numericText())
+            }
+
+            VStack(alignment: .leading, spacing: 0) {
+                if steps.isEmpty {
+                    stackStepRow(label: "Starting", state: "DOING", detail: "waking the Mac side", last: true)
+                } else {
+                    ForEach(Array(steps.enumerated()), id: \.element.id) { index, step in
+                        stackStepRow(label: step.label, state: step.state, detail: step.detail,
+                                     last: index == steps.count - 1)
                     }
                 }
             }
+
+            GeometryReader { bar in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(.white.opacity(0.08))
+                    Capsule()
+                        .fill(LinearGradient(colors: [accent.opacity(0.6), accent],
+                                             startPoint: .leading, endPoint: .trailing))
+                        .frame(width: max(8, bar.size.width * fraction))
+                        .shadow(color: accent.opacity(0.7), radius: 6)
+                }
+            }
+            .frame(height: 4)
         }
-        .padding(16)
-        .frame(maxWidth: 340, alignment: .leading)
+        .padding(20)
+        .frame(width: 340, alignment: .leading)
         .background(
-            RoundedRectangle(cornerRadius: 20)
-                .fill(Color.black.opacity(0.92))
-                .overlay(RoundedRectangle(cornerRadius: 20)
-                    .strokeBorder(.white.opacity(0.12), lineWidth: 1))
-                .shadow(color: .black.opacity(0.4), radius: 10, y: 4)
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .fill(LinearGradient(colors: [Color(red: 0.11, green: 0.11, blue: 0.13),
+                                              Color(red: 0.03, green: 0.03, blue: 0.05)],
+                                     startPoint: .top, endPoint: .bottom))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 26, style: .continuous)
+                        .strokeBorder(LinearGradient(colors: [accent.opacity(0.8), .white.opacity(0.05)],
+                                                     startPoint: .topLeading, endPoint: .bottomTrailing),
+                                      lineWidth: 1)
+                )
+                .shadow(color: accent.opacity(0.35), radius: 28, y: 10)
+                .shadow(color: .black.opacity(0.55), radius: 14, y: 6)
         )
         .contentShape(Rectangle())
+        .animation(.spring(response: 0.4, dampingFraction: 0.8), value: steps)
+        .animation(.easeInOut(duration: 0.3), value: busy)
+        .onAppear {
+            stackPulse = false
+            withAnimation(.easeOut(duration: 1.4).repeatForever(autoreverses: false)) { stackPulse = true }
+        }
+        .onDisappear { stackPulse = false }
+    }
+
+    /// One timeline row: the badge on the left with a thin line down to the
+    /// next row, and the detail split so "ON" or "none" reads bold while the
+    /// parenthetical sits small and dim underneath.
+    private func stackStepRow(label: String, state: String, detail: String, last: Bool) -> some View {
+        let parts = detail.components(separatedBy: " (")
+        let primary = parts.first ?? detail
+        let secondary = parts.count > 1
+            ? parts.dropFirst().joined(separator: " (").replacingOccurrences(of: ")", with: "")
+            : ""
+        let tint: Color = state == "DONE" ? Snes.green : state == "FAIL" ? Snes.red : .white.opacity(0.7)
+        return HStack(alignment: .top, spacing: 12) {
+            VStack(spacing: 0) {
+                StackStepBadge(state: state)
+                    .frame(width: 22, height: 22)
+                if !last {
+                    Rectangle()
+                        .fill(.white.opacity(0.1))
+                        .frame(width: 1)
+                        .frame(maxHeight: .infinity)
+                }
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(label)
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                    Text(primary)
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(tint)
+                        .lineLimit(1)
+                }
+                if !secondary.isEmpty {
+                    Text(secondary)
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.42))
+                        .lineLimit(2)
+                }
+            }
+            .padding(.top, 1)
+            .padding(.bottom, last ? 0 : 12)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .transition(.move(edge: .leading).combined(with: .opacity))
+    }
+
+    /// The badge at the head of a timeline row: a spinning ring while the
+    /// step runs, a green check once it is done, a red cross if it stopped.
+    private struct StackStepBadge: View {
+        let state: String
+        @State private var spin = false
+
+        private var tint: Color {
+            state == "DONE" ? Snes.green : state == "FAIL" ? Snes.red : Snes.blue
+        }
+
+        var body: some View {
+            ZStack {
+                switch state {
+                case "DONE":
+                    Circle().fill(Snes.green)
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .black))
+                        .foregroundStyle(.white)
+                case "FAIL":
+                    Circle().fill(Snes.red)
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .black))
+                        .foregroundStyle(.white)
+                default:
+                    Circle().stroke(.white.opacity(0.12), lineWidth: 2.5)
+                    Circle()
+                        .trim(from: 0.1, to: 0.75)
+                        .stroke(AngularGradient(colors: [Snes.blue.opacity(0.1), Snes.blue, .white],
+                                                center: .center),
+                                style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                        .rotationEffect(.degrees(spin ? 360 : 0))
+                        .onAppear {
+                            withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) {
+                                spin = true
+                            }
+                        }
+                }
+            }
+            .shadow(color: tint.opacity(0.6), radius: 5)
+            .animation(.spring(response: 0.35, dampingFraction: 0.6), value: state)
+        }
     }
 
     private var keypad: some View {
