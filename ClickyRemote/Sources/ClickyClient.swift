@@ -49,10 +49,19 @@ final class ClickyClient: ObservableObject {
     /// Outcome of the last CLAUDE PASTE command as reported by the Mac:
     /// the clipboard image sent into the Claude desktop app, or why not.
     var onClaudePasteStatus: ((_ message: String, _ ok: Bool) -> Void)?
+    /// One step of a running STACK ON/OFF, as streamed from the Mac.
+    struct StackStep: Identifiable, Equatable {
+        var id: String { label }
+        let label: String
+        var state: String
+        var detail: String
+    }
     /// The local coding stack: ON, OFF, or BUSY while a command runs.
     @Published var stackPower = "OFF"
     /// The project the Mac's Qwen server is working for (empty for nobody).
     @Published var stackProject = ""
+    /// Steps of the running stack command, in the order they first appeared.
+    @Published var stackSteps: [StackStep] = []
     /// Outcome of the last STACK command as reported by the Mac.
     var onStackStatus: ((_ message: String, _ ok: Bool) -> Void)?
     /// Whether the browser window playing YouTube is currently minimized —
@@ -305,6 +314,19 @@ final class ClickyClient: ObservableObject {
                         } else if line.hasPrefix("CLAUDE_PASTE_STATUS ") {
                             let parts = line.dropFirst(20).split(separator: "\t", maxSplits: 1).map(String.init)
                             if parts.count == 2 { self.onClaudePasteStatus?(parts[1], parts[0] == "OK") }
+                        } else if line.hasPrefix("STACK_STEP ") {
+                            // STACK_STEP <state>\t<label>\t<detail>
+                            let parts = line.dropFirst(11)
+                                .split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
+                                .map(String.init)
+                            if parts.count == 3 {
+                                if let index = self.stackSteps.firstIndex(where: { $0.label == parts[1] }) {
+                                    self.stackSteps[index].state = parts[0]
+                                    self.stackSteps[index].detail = parts[2]
+                                } else {
+                                    self.stackSteps.append(StackStep(label: parts[1], state: parts[0], detail: parts[2]))
+                                }
+                            }
                         } else if line.hasPrefix("STACK_STATE ") {
                             // STACK_STATE <power> <ok>\t<project>\t<message>
                             let parts = line.dropFirst(12)
@@ -314,6 +336,8 @@ final class ClickyClient: ObservableObject {
                             if head.count >= 2 {
                                 self.stackPower = head[0]
                                 self.stackProject = parts.count > 1 ? parts[1] : ""
+                                // A new run starts: forget the last run's rows.
+                                if head[0] == "BUSY" { self.stackSteps = [] }
                                 let message = parts.count > 2 ? parts[2] : ""
                                 if !message.isEmpty { self.onStackStatus?(message, head[1] == "OK") }
                             }

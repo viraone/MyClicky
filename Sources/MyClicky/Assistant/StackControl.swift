@@ -40,13 +40,13 @@ enum StackControl {
     }
 
     static func status() async -> State {
-        let (stdout, error) = await output("status", in: home, timeout: 30)
+        let (stdout, error) = await run("status", in: home, timeout: 30, onLine: { _ in })
         guard let stdout else { return State(power: .off, ok: false, project: "", message: error ?? "stack.sh failed") }
         return parsed(stdout)
     }
 
-    static func turnOn() async -> State {
-        let (stdout, error) = await output("on", in: activeChatFolder() ?? home, timeout: 300)
+    static func turnOn(onLine: @escaping @MainActor (String) -> Void) async -> State {
+        let (stdout, error) = await run("on", in: activeChatFolder() ?? home, timeout: 300, onLine: onLine)
         guard let stdout else { return State(power: .off, ok: false, project: "", message: error ?? "stack.sh failed") }
         if let stopped = stopped(stdout) {
             let now = await status()
@@ -59,8 +59,8 @@ enum StackControl {
         return state
     }
 
-    static func turnOff() async -> State {
-        let (stdout, error) = await output("off", in: home, timeout: 120)
+    static func turnOff(onLine: @escaping @MainActor (String) -> Void) async -> State {
+        let (stdout, error) = await run("off", in: home, timeout: 120, onLine: onLine)
         guard let stdout else { return State(power: .off, ok: false, project: "", message: error ?? "stack.sh failed") }
         if let stopped = stopped(stdout) {
             let now = await status()
@@ -71,24 +71,148 @@ enum StackControl {
         return state
     }
 
-    private static func output(_ action: String, in folder: URL, timeout: TimeInterval) async -> (stdout: String?, error: String?) {
+    /// Runs `stack.sh` and hands every stdout line to `onLine` as it arrives,
+    /// so the phone can show the steps while the command is still running.
+    /// The whole stdout is also returned for the parsers below.
+    private static func run(_ action: String, in folder: URL, timeout: TimeInterval,
+                            onLine: @escaping @MainActor (String) -> Void) async -> (stdout: String?, error: String?) {
         guard FileManager.default.fileExists(atPath: script.path) else { return (nil, "stack.sh not found") }
-        var environment = ["STACK_START_DEV": "1",
-                           "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"]
-        if let inherited = ProcessInfo.processInfo.environment["PATH"], !inherited.isEmpty {
-            environment["PATH"]! += ":" + inherited
+        var environment = ProcessInfo.processInfo.environment
+        environment["STACK_START_DEV"] = "1"
+        var path = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+        if let inherited = environment["PATH"], !inherited.isEmpty { path += ":" + inherited }
+        environment["PATH"] = path
+
+        return await withCheckedContinuation { continuation in
+            let process = Process()
+            let pipe = Pipe()
+            process.executableURL = URL(fileURLWithPath: "/bin/bash")
+            process.arguments = [script.path, action]
+            process.currentDirectoryURL = folder
+            process.environment = environment
+            process.standardOutput = pipe
+            // The old runner closed stdin and discarded stderr; keep that.
+            process.standardInput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+
+            // The readability and termination handlers arrive on different
+            // background threads, so this serial queue owns the buffers and
+            // guarantees the continuation resumes exactly once.
+            let state = DispatchQueue(label: "com.myclicky.stack-control")
+            var collected = Data()
+            var pending = Data()
+            var resumed = false
+            var timedOut = false
+
+            func emit(_ line: Data) {
+                let text = String(decoding: line, as: UTF8.self)
+                Task { @MainActor in onLine(text) }
+            }
+
+            func consume(_ chunk: Data) {
+                guard !chunk.isEmpty else { return }
+                collected.append(chunk)
+                pending.append(chunk)
+                while let newline = pending.firstIndex(of: 0x0A) {
+                    var line = pending[pending.startIndex..<newline]
+                    if line.last == 0x0D { line = line.dropLast() }
+                    pending.removeSubrange(pending.startIndex...newline)
+                    emit(Data(line))
+                }
+            }
+
+            func finish(_ result: (stdout: String?, error: String?)) {
+                guard !resumed else { return }
+                resumed = true
+                continuation.resume(returning: result)
+            }
+
+            pipe.fileHandleForReading.readabilityHandler = { handle in
+                let data = handle.availableData
+                if data.isEmpty {
+                    handle.readabilityHandler = nil
+                    return
+                }
+                state.async { consume(data) }
+            }
+
+            var timeoutTask: Task<Void, Never>? = nil
+            process.terminationHandler = { _ in
+                timeoutTask?.cancel()
+                pipe.fileHandleForReading.readabilityHandler = nil
+                // Anything the handler had not delivered yet is still in the
+                // pipe; the process is gone, so this returns promptly.
+                let rest = pipe.fileHandleForReading.readDataToEndOfFile()
+                state.async {
+                    consume(rest)
+                    if !pending.isEmpty {
+                        emit(pending)
+                        pending.removeAll()
+                    }
+                    if timedOut {
+                        finish((nil, "stack.sh timed out after \(Int(timeout)) s"))
+                    } else {
+                        finish((String(decoding: collected, as: UTF8.self), nil))
+                    }
+                }
+            }
+
+            timeoutTask = Task {
+                try? await Task.sleep(for: .seconds(timeout))
+                guard !Task.isCancelled, process.isRunning else { return }
+                state.async {
+                    guard !resumed else { return }
+                    timedOut = true
+                }
+                process.terminate()
+            }
+
+            do {
+                try process.run()
+            } catch {
+                timeoutTask?.cancel()
+                pipe.fileHandleForReading.readabilityHandler = nil
+                continuation.resume(returning: (nil, error.localizedDescription))
+            }
         }
-        do {
-            let result = try await ExtensionScriptRunner.run(ExtensionScriptRunner.Invocation(
-                executable: URL(fileURLWithPath: "/bin/bash"),
-                arguments: [script.path, action],
-                currentDirectory: folder,
-                environment: environment,
-                timeout: timeout))
-            return (result.stdout, nil)
-        } catch {
-            return (nil, error.localizedDescription)
+    }
+
+    /// One `stack.sh` output line as a STACK_STEP wire line, or nil when the
+    /// line is not a step the phone should draw.
+    static func stepLine(from line: String) -> String? {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.hasPrefix("STOPPED:") {
+            let detail = stepDetail(String(trimmed.dropFirst("STOPPED:".count)))
+            return "STACK_STEP FAIL\tStopped\t\(detail)"
         }
+        guard let colon = trimmed.firstIndex(of: ":") else { return nil }
+        let label = String(trimmed[..<colon]).trimmingCharacters(in: .whitespaces)
+        guard stepLabels.contains(label) else { return nil }
+        let shown = label == "Qwen server" ? "Qwen"
+                  : label == "Local Supabase" ? "Supabase"
+                  : label
+        var detail = stepDetail(String(trimmed[trimmed.index(after: colon)...]))
+        var state = "DONE"
+        if detail.hasSuffix("...") {
+            detail = String(detail.dropLast(3)).trimmingCharacters(in: .whitespaces)
+            state = "DOING"
+        } else if detail.hasSuffix("…") {
+            detail = String(detail.dropLast()).trimmingCharacters(in: .whitespaces)
+            state = "DOING"
+        }
+        return "STACK_STEP \(state)\t\(shown)\t\(detail)"
+    }
+
+    /// `stack.sh` labels the phone draws; every other line (Ollama, chatter)
+    /// is ignored.
+    private static let stepLabels: Set<String> = [
+        "Project", "Database", "Docker", "Local Supabase", "Page", "Qwen server",
+        "beezer", "seo-audit", "myclicky", "nocapedit",
+    ]
+
+    private static func stepDetail(_ text: String) -> String {
+        text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 
     private static func parsed(_ stdout: String) -> State {

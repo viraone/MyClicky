@@ -40,6 +40,10 @@ struct NumpadView: View {
     @State private var desktopPick: PhotosPickerItem?
     @State private var desktopCameraShown = false
     @State private var savingToDesktop = false
+    /// The STACK progress card over the keypad: shown while a stack command
+    /// runs, and kept for a moment after it ends so the last steps can be read.
+    @State private var stackCardShown = false
+    @State private var stackCardHide: Task<Void, Never>?
     /// Shopify's second screen: a live table read from Chrome. `shopifyParent`
     /// is the sidebar tile that was tapped (which picks the tab strip);
     /// `shopifySection` is the tab currently showing.
@@ -2923,6 +2927,71 @@ struct NumpadView: View {
         client.peekyLayout == "STRIP" || client.peekyLayout == "EXPANDED"
     }
 
+    /// Step-by-step progress of a running STACK ON/OFF, drawn over the keys.
+    private var stackProgressCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "bolt.fill")
+                Text(client.stackPower == "BUSY"
+                     ? (client.stackProject.isEmpty ? "STACK" : "STACK · \(client.stackProject)")
+                     : "STACK")
+            }
+            .font(.system(size: 12, weight: .black, design: .monospaced))
+            .foregroundStyle(.white.opacity(0.8))
+
+            if client.stackSteps.isEmpty {
+                HStack(spacing: 10) {
+                    ProgressView()
+                        .tint(.white)
+                        .frame(width: 18, height: 18)
+                    Text("Starting…")
+                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white)
+                }
+            } else {
+                ForEach(client.stackSteps) { step in
+                    HStack(spacing: 10) {
+                        Group {
+                            switch step.state {
+                            case "DOING":
+                                ProgressView()
+                                    .tint(.white)
+                                    .frame(width: 18, height: 18)
+                            case "DONE":
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 18))
+                                    .foregroundStyle(Snes.green)
+                            default:
+                                Image(systemName: "xmark.octagon.fill")
+                                    .font(.system(size: 18))
+                                    .foregroundStyle(Snes.red)
+                            }
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(step.label)
+                                .font(.system(size: 13, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white)
+                            Text(step.detail)
+                                .font(.system(size: 11, weight: .medium, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.6))
+                                .lineLimit(2)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: 340, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 20)
+                .fill(Color.black.opacity(0.92))
+                .overlay(RoundedRectangle(cornerRadius: 20)
+                    .strokeBorder(.white.opacity(0.12), lineWidth: 1))
+                .shadow(color: .black.opacity(0.4), radius: 10, y: 4)
+        )
+        .contentShape(Rectangle())
+    }
+
     private var keypad: some View {
         GeometryReader { geo in
             let isLandscape = geo.size.width > geo.size.height
@@ -3000,6 +3069,23 @@ struct NumpadView: View {
                 }
             }
             .padding(.top, topInset)
+        }
+        .overlay {
+            if stackCardShown {
+                stackProgressCard.transition(.opacity.combined(with: .scale(scale: 0.96)))
+            }
+        }
+        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: stackCardShown)
+        .onChange(of: client.stackPower) { _, power in
+            stackCardHide?.cancel()
+            if power == "BUSY" {
+                stackCardShown = true
+            } else if stackCardShown {
+                stackCardHide = Task {
+                    try? await Task.sleep(for: .seconds(2.5))
+                    if !Task.isCancelled { stackCardShown = false }
+                }
+            }
         }
         .photosPicker(isPresented: $desktopPickerShown, selection: $desktopPick,
                       matching: .images, photoLibrary: .shared())

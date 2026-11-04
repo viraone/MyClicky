@@ -1208,6 +1208,9 @@ final class AssistantController {
     private var pendingChoices: [String: CheckedContinuation<Int?, Never>] = [:]
     /// Last STACK_STATE line broadcast to the phone, replayed in the greeting.
     private var stackLine = "STACK_STATE OFF OK\t\t"
+    /// True while stack.sh runs for the phone, so a status refresh from a
+    /// connecting phone cannot report OFF in the middle of a start.
+    private var stackBusy = false
 
     func start() {
         typeScriptLSP.onStatus = { [weak self] status in self?.panel.state.codeLSPStatus = status }
@@ -1539,15 +1542,28 @@ final class AssistantController {
         remote.onStack = { [weak self] action in
             Task { @MainActor in
                 guard let self else { return }
+                // One row per step on the phone while stack.sh is still running.
+                let onLine: @MainActor (String) -> Void = { [weak self] line in
+                    if let step = StackControl.stepLine(from: line) {
+                        self?.remote.broadcast(step)
+                    }
+                }
                 switch action {
                 case "ON":
+                    guard !self.stackBusy else { return }
+                    self.stackBusy = true
                     let project = StackControl.activeChatFolder()?.lastPathComponent ?? ""
                     self.remote.broadcast("STACK_STATE BUSY OK\t\(project)\tStack — starting for the chat in front…")
-                    self.publishStack(await StackControl.turnOn())
+                    self.publishStack(await StackControl.turnOn(onLine: onLine))
+                    self.stackBusy = false
                 case "OFF":
+                    guard !self.stackBusy else { return }
+                    self.stackBusy = true
                     self.remote.broadcast("STACK_STATE BUSY OK\t\tStack — stopping everything…")
-                    self.publishStack(await StackControl.turnOff())
+                    self.publishStack(await StackControl.turnOff(onLine: onLine))
+                    self.stackBusy = false
                 default:
+                    guard !self.stackBusy else { return }
                     self.publishStack(await StackControl.status())
                 }
             }
@@ -1846,8 +1862,11 @@ final class AssistantController {
         remote.greeting = { [weak self] in
             // The phone gets the last known stack state now, and a fresh one
             // a moment later.
-            if let self {
-                Task { @MainActor in self.publishStack(await StackControl.status()) }
+            if let self, !self.stackBusy {
+                Task { @MainActor in
+                    guard !self.stackBusy else { return }
+                    self.publishStack(await StackControl.status())
+                }
             }
             return ["WHATSAPP_UNREAD \(self?.whatsappUnread.count ?? 0)",
                     "GMAIL_UNREAD \(self?.gmailUnread.count ?? 0)",

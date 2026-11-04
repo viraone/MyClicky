@@ -143,6 +143,9 @@ import Network
 ///                    coding stack: whether Qwen is running, the project it
 ///                    works for (empty for nobody), and a short toast line
 ///                    (empty when there is nothing to say)
+///   STACK_STEP <DOING|DONE|FAIL>\t<label>\t<detail> – one step of a running
+///                    STACK ON/OFF; a repeated label replaces its row; the
+///                    phone draws them as a list under the key
 ///   YOUTUBE_STATE COLLAPSED|EXPANDED – resulting state of the last
 ///                    YOUTUBE COLLAPSE toggle
 ///   KEYNOTE_STATE PLAYING|STOPPED – whether a slideshow is running after
