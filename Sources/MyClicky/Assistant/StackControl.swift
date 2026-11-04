@@ -333,13 +333,17 @@ enum StackControl {
     /// mapping stack.sh makes for `on` with no project; empty when the folder
     /// is inside none of them (the phone then shows no project at all).
     static func projectName(forFolder folder: URL) -> String {
-        let path = folder.standardizedFileURL.path + "/"
+        // Resolve symlinks on both sides: ~/Desktop/beezer is a link to
+        // ~/Developer/beezer, and some chats are recorded under the Desktop
+        // path. stack.sh sees the physical path, so the phone must too.
+        let path = folder.resolvingSymlinksInPath().path + "/"
         let repos: [(String, String)] = [
             ("Developer/beezer", "beezer"), ("Developer/seo-audit", "seo-audit"),
             ("Developer/MyClicky1", "myclicky"), ("Desktop/Projects/reelflowWeb", "nocapedit"),
         ]
-        for (repo, project) in repos where path.hasPrefix(home.path + "/" + repo + "/") {
-            return displayName(project)
+        for (repo, project) in repos {
+            let root = home.appendingPathComponent(repo, isDirectory: true).resolvingSymlinksInPath().path + "/"
+            if path.hasPrefix(root) { return displayName(project) }
         }
         return ""
     }
