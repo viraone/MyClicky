@@ -2511,106 +2511,183 @@ struct NumpadView: View {
     // MARK: - Keynote pad (a TV-remote clicker)
 
     private var keynotePad: some View {
-        VStack(spacing: 10) {
-            HStack(spacing: 8) {
-                Circle().fill(Snes.keynote).frame(width: 8, height: 8)
-                Text("Keynote")
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
-                    .foregroundStyle(.white)
-                Text("on your Mac")
-                    .font(.system(size: 11, weight: .medium, design: .rounded))
-                    .foregroundStyle(.white.opacity(0.45))
-                Spacer()
-                HStack(spacing: 5) {
-                    Circle()
-                        .fill(client.keynotePlaying ? Snes.green : .white.opacity(0.3))
-                        .frame(width: 7, height: 7)
-                    Text(client.keynotePlaying ? "PLAYING" : "READY")
-                        .font(.system(size: 10, weight: .black, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.8))
+        GeometryReader { geo in
+            let isLandscape = geo.size.width > geo.size.height
+            // The card's 10pt padding comes off both sides; the right column
+            // keeps at least the five 48pt round keys. Everything else about
+            // the ring's size comes from the height.
+            let ringSide = min(geo.size.height - 20,
+                               max(0, geo.size.width - 20 - 8 - 48 * 5))
+            Group {
+                if isLandscape {
+                    // Landscape: too short for the stacked pad, so the ring
+                    // sits on the left and everything else shares one column
+                    // on the right, with the five round keys in a single row.
+                    HStack(spacing: 8) {
+                        keynoteRing
+                            .aspectRatio(1, contentMode: .fit)
+                            .frame(width: ringSide, height: ringSide)
+                            .frame(maxHeight: .infinity)
+
+                        VStack(spacing: 8) {
+                            keynoteHeader
+                            keynoteIconRow(compact: true)
+                            keynoteDivider
+                            keynoteVideoSection(compact: true)
+                            keynoteDivider
+                            HStack(spacing: 0) {
+                                keynoteExitButton(compact: true)
+                                keynoteKeynoteButton(compact: true)
+                                keynotePlayButton(compact: true)
+                                keynoteFirstButton(compact: true)
+                                keynoteLastButton(compact: true)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                } else {
+                    VStack(spacing: 10) {
+                        keynoteHeader
+
+                        keynoteRing
+                            .aspectRatio(1, contentMode: .fit)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                        keynoteIconRow()
+
+                        keynoteDivider
+
+                        keynoteVideoSection()
+
+                        keynoteDivider
+
+                        HStack(spacing: 0) {
+                            keynoteExitButton()
+                            keynoteKeynoteButton()
+                            keynotePlayButton()
+                        }
+                        HStack(spacing: 0) {
+                            keynoteFirstButton()
+                            keynoteLastButton()
+                        }
+                    }
                 }
-                .padding(.horizontal, 9).padding(.vertical, 4)
-                .background(Capsule().fill(.white.opacity(0.08)))
+            }
+            .padding(10)
+            .frame(width: geo.size.width, height: geo.size.height)
+            .background(
+                RoundedRectangle(cornerRadius: 20)
+                    .fill(LinearGradient(colors: [Color(red: 0.09, green: 0.09, blue: 0.10),
+                                                  Color(red: 0.04, green: 0.04, blue: 0.05)],
+                                         startPoint: .top, endPoint: .bottom))
+                    .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.white.opacity(0.08), lineWidth: 1))
+                    .shadow(color: .black.opacity(0.35), radius: 6, y: 4)
+            )
+        }
+    }
+
+    private var keynoteHeader: some View {
+        HStack(spacing: 8) {
+            Circle().fill(Snes.keynote).frame(width: 8, height: 8)
+            Text("Keynote")
+                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .foregroundStyle(.white)
+            Text("on your Mac")
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(.white.opacity(0.45))
+            Spacer()
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(client.keynotePlaying ? Snes.green : .white.opacity(0.3))
+                    .frame(width: 7, height: 7)
+                Text(client.keynotePlaying ? "PLAYING" : "READY")
+                    .font(.system(size: 10, weight: .black, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.8))
+            }
+            .padding(.horizontal, 9).padding(.vertical, 4)
+            .background(Capsule().fill(.white.opacity(0.08)))
+        }
+        .padding(.horizontal, 4)
+    }
+
+    private var keynoteDivider: some View {
+        Rectangle().fill(.white.opacity(0.12)).frame(height: 1)
+    }
+
+    /// Black / white screen · TALK · swap displays · pointer.
+    private func keynoteIconRow(compact: Bool = false) -> some View {
+        HStack(spacing: 0) {
+            keynoteIcon("moon.fill", "Black screen") { keynoteTapped("BLACK") }
+            keynoteIcon("sun.max.fill", "White screen") { keynoteTapped("WHITE") }
+            Button { talkTapped() } label: {
+                Image(systemName: talkRecording ? "stop.fill" : "mic.fill")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: compact ? 44 : 54, height: compact ? 44 : 54)
+                    .background(Circle().fill(talkRecording ? Snes.red : Snes.keynote))
+                    .shadow(color: (talkRecording ? Snes.red : Snes.keynote).opacity(0.5), radius: 8, y: 2)
+            }
+            .buttonStyle(SpotifyPressStyle())
+            .frame(maxWidth: .infinity)
+            .accessibilityLabel(talkRecording ? "Stop" : "Talk")
+            keynoteIcon("rectangle.2.swap", "Swap displays") { keynoteTapped("SWAP") }
+            keynoteIcon("cursorarrow", "Pointer") { keynoteTapped("POINTER") }
+        }
+        .frame(height: compact ? 44 : 56)
+    }
+
+    // Video: one big green PLAY (first slide + show, so the movie on
+    // it starts), one big red STOP, then Keynote's in-show movie keys.
+    private func keynoteVideoSection(compact: Bool = false) -> some View {
+        VStack(spacing: compact ? 6 : 8) {
+            HStack(spacing: 6) {
+                Text("VIDEO")
+                    .font(.system(size: 10, weight: .black, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.5))
+                Text(client.keynotePlaying ? "tap ⏯ to pause / resume" : "PLAY starts from slide 1")
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.35))
+                Spacer()
             }
             .padding(.horizontal, 4)
-
-            keynoteRing
-                .aspectRatio(1, contentMode: .fit)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            // Black / white screen · TALK · swap displays · pointer
-            HStack(spacing: 0) {
-                keynoteIcon("moon.fill", "Black screen") { keynoteTapped("BLACK") }
-                keynoteIcon("sun.max.fill", "White screen") { keynoteTapped("WHITE") }
-                Button { talkTapped() } label: {
-                    Image(systemName: talkRecording ? "stop.fill" : "mic.fill")
-                        .font(.system(size: 20, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 54, height: 54)
-                        .background(Circle().fill(talkRecording ? Snes.red : Snes.keynote))
-                        .shadow(color: (talkRecording ? Snes.red : Snes.keynote).opacity(0.5), radius: 8, y: 2)
+            HStack(spacing: 10) {
+                keynoteWide("play.fill", client.keynotePlaying ? "PLAY / PAUSE" : "PLAY VIDEO",
+                            Snes.green, compact: compact) {
+                    keynoteTapped("VIDEO_PLAY")
                 }
-                .buttonStyle(SpotifyPressStyle())
-                .frame(maxWidth: .infinity)
-                .accessibilityLabel(talkRecording ? "Stop" : "Talk")
-                keynoteIcon("rectangle.2.swap", "Swap displays") { keynoteTapped("SWAP") }
-                keynoteIcon("cursorarrow", "Pointer") { keynoteTapped("POINTER") }
-            }
-            .frame(height: 56)
-
-            Rectangle().fill(.white.opacity(0.12)).frame(height: 1)
-
-            // Video: one big green PLAY (first slide + show, so the movie on
-            // it starts), one big red STOP, then Keynote's in-show movie keys.
-            VStack(spacing: 8) {
-                HStack(spacing: 6) {
-                    Text("VIDEO")
-                        .font(.system(size: 10, weight: .black, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.5))
-                    Text(client.keynotePlaying ? "tap ⏯ to pause / resume" : "PLAY starts from slide 1")
-                        .font(.system(size: 10, weight: .medium, design: .rounded))
-                        .foregroundStyle(.white.opacity(0.35))
-                    Spacer()
-                }
-                .padding(.horizontal, 4)
-                HStack(spacing: 10) {
-                    keynoteWide("play.fill", client.keynotePlaying ? "PLAY / PAUSE" : "PLAY VIDEO", Snes.green) {
-                        keynoteTapped("VIDEO_PLAY")
-                    }
-                    keynoteWide("stop.fill", "STOP", Snes.red) { keynoteTapped("VIDEO_STOP") }
-                }
-                HStack(spacing: 0) {
-                    keynoteIcon("backward.end.fill", "Restart") { keynoteTapped("VIDEO_RESTART") }
-                    keynoteIcon("backward.fill", "Rewind") { keynoteTapped("VIDEO_REWIND") }
-                    keynoteIcon("playpause.fill", "Pause / resume") { keynoteTapped("VIDEO_PAUSE") }
-                    keynoteIcon("forward.fill", "Fast-forward") { keynoteTapped("VIDEO_FORWARD") }
-                    keynoteIcon("forward.end.fill", "Skip to end") { keynoteTapped("VIDEO_END") }
-                }
-                .frame(height: 50)
-            }
-
-            Rectangle().fill(.white.opacity(0.12)).frame(height: 1)
-
-            HStack(spacing: 0) {
-                keynoteRound("arrow.uturn.backward", "Exit") { keynoteTapped("EXIT") }
-                keynoteRound("house", "Keynote") { keynoteTapped("OPEN") }
-                keynoteRound(client.keynotePlaying ? "stop.fill" : "play.fill",
-                             client.keynotePlaying ? "Stop show" : "Play slides") { keynoteTapped("PLAY") }
+                keynoteWide("stop.fill", "STOP", Snes.red, compact: compact) { keynoteTapped("VIDEO_STOP") }
             }
             HStack(spacing: 0) {
-                keynoteRound("backward.end.fill", "First") { keynoteTapped("FIRST") }
-                keynoteRound("forward.end.fill", "Last") { keynoteTapped("LAST") }
+                keynoteIcon("backward.end.fill", "Restart") { keynoteTapped("VIDEO_RESTART") }
+                keynoteIcon("backward.fill", "Rewind") { keynoteTapped("VIDEO_REWIND") }
+                keynoteIcon("playpause.fill", "Pause / resume") { keynoteTapped("VIDEO_PAUSE") }
+                keynoteIcon("forward.fill", "Fast-forward") { keynoteTapped("VIDEO_FORWARD") }
+                keynoteIcon("forward.end.fill", "Skip to end") { keynoteTapped("VIDEO_END") }
             }
+            .frame(height: compact ? 44 : 50)
         }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 20)
-                .fill(LinearGradient(colors: [Color(red: 0.09, green: 0.09, blue: 0.10),
-                                              Color(red: 0.04, green: 0.04, blue: 0.05)],
-                                     startPoint: .top, endPoint: .bottom))
-                .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.white.opacity(0.08), lineWidth: 1))
-                .shadow(color: .black.opacity(0.35), radius: 6, y: 4)
-        )
+    }
+
+    private func keynoteExitButton(compact: Bool = false) -> some View {
+        keynoteRound("arrow.uturn.backward", "Exit", compact: compact) { keynoteTapped("EXIT") }
+    }
+
+    private func keynoteKeynoteButton(compact: Bool = false) -> some View {
+        keynoteRound("house", "Keynote", compact: compact) { keynoteTapped("OPEN") }
+    }
+
+    private func keynotePlayButton(compact: Bool = false) -> some View {
+        keynoteRound(client.keynotePlaying ? "stop.fill" : "play.fill",
+                     client.keynotePlaying ? "Stop show" : "Play slides",
+                     compact: compact) { keynoteTapped("PLAY") }
+    }
+
+    private func keynoteFirstButton(compact: Bool = false) -> some View {
+        keynoteRound("backward.end.fill", "First", compact: compact) { keynoteTapped("FIRST") }
+    }
+
+    private func keynoteLastButton(compact: Bool = false) -> some View {
+        keynoteRound("forward.end.fill", "Last", compact: compact) { keynoteTapped("LAST") }
     }
 
     /// The big ring: four wedges step back / forward through the deck
@@ -2683,6 +2760,7 @@ struct NumpadView: View {
 
     /// Big pill for the two video controls that matter on stage: PLAY and STOP.
     private func keynoteWide(_ icon: String, _ title: String, _ tint: Color,
+                             compact: Bool = false,
                              action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 8) {
@@ -2695,7 +2773,7 @@ struct NumpadView: View {
             }
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity)
-            .frame(height: 58)
+            .frame(height: compact ? 46 : 58)
             .background(Capsule().fill(tint))
             .shadow(color: tint.opacity(0.45), radius: 8, y: 3)
         }
@@ -2703,13 +2781,14 @@ struct NumpadView: View {
         .accessibilityLabel(title)
     }
 
-    private func keynoteRound(_ icon: String, _ title: String, action: @escaping () -> Void) -> some View {
+    private func keynoteRound(_ icon: String, _ title: String, compact: Bool = false,
+                              action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            VStack(spacing: 4) {
+            VStack(spacing: compact ? 3 : 4) {
                 Image(systemName: icon)
-                    .font(.system(size: 22, weight: .semibold))
+                    .font(.system(size: compact ? 18 : 22, weight: .semibold))
                     .foregroundStyle(.white)
-                    .frame(width: 62, height: 62)
+                    .frame(width: compact ? 48 : 62, height: compact ? 48 : 62)
                     .background(Circle().fill(Color(white: 0.2)))
                 Text(title)
                     .font(.system(size: 9, weight: .semibold, design: .rounded))
