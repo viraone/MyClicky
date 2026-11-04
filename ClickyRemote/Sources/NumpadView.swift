@@ -2929,6 +2929,16 @@ struct NumpadView: View {
         client.peekyLayout == "STRIP" || client.peekyLayout == "EXPANDED"
     }
 
+    /// The STACK key's mode: "busy" while a command runs, "off" when the
+    /// stack is down, "switch" when it is on for another project than the
+    /// chat in front, and "on" when it is on for that chat.
+    private var stackKeyMode: String {
+        if client.stackPower == "BUSY" { return "busy" }
+        if client.stackPower == "OFF" { return "off" }
+        if !client.stackFront.isEmpty, client.stackFront != client.stackProject { return "switch" }
+        return "on"
+    }
+
     /// Step-by-step progress of a running STACK ON/OFF, drawn over the keys:
     /// a dark glass card whose glow takes the state's colour (blue while it
     /// works, green once done, red if the script stopped), the steps as a
@@ -3167,18 +3177,29 @@ struct NumpadView: View {
                 }
                 HStack(spacing: gap) {
                     // STACK: runs stack.sh on the Mac for the chat in front.
-                    // When Qwen is off the key says STACK ON; when it is on,
-                    // STACK OFF stops everything.
+                    // Three states: OFF when Qwen is down (tap starts it),
+                    // ON for the chat in front (tap stops everything), and
+                    // SWITCH when Qwen is on for another project (tap hands
+                    // it to the chat in front). WORKING while a command runs.
                     key("stack",
-                        label: client.stackPower == "OFF" ? "STACK OFF"
-                             : client.stackPower == "ON" ? (client.stackProject.isEmpty ? "STACK ON" : "STACK ON · \(client.stackProject)")
+                        label: stackKeyMode == "off" ? "STACK OFF"
+                             : stackKeyMode == "switch" ? "SWITCH · \(client.stackFront)"
+                             : stackKeyMode == "on" ? (client.stackProject.isEmpty ? "STACK ON" : "STACK ON · \(client.stackProject)")
                              : "WORKING",
-                        icon: client.stackPower == "OFF" ? "bolt" : client.stackPower == "ON" ? "bolt.fill" : "hourglass",
-                        tint: client.stackPower == "OFF" ? Snes.key : client.stackPower == "ON" ? Snes.green : Snes.blue,
+                        icon: stackKeyMode == "off" ? "bolt"
+                            : stackKeyMode == "switch" ? "arrow.triangle.2.circlepath"
+                            : stackKeyMode == "on" ? "bolt.fill"
+                            : "hourglass",
+                        tint: stackKeyMode == "off" ? Snes.key
+                            : stackKeyMode == "switch" ? Snes.talk
+                            : stackKeyMode == "on" ? Snes.green
+                            : Snes.blue,
                         lit: true, h: keyH, w: columnW)
-                        .disabled(client.stackPower == "BUSY")
+                        .disabled(stackKeyMode == "busy")
                         .accessibilityLabel("Local coding stack")
-                        .accessibilityValue(client.stackPower == "ON" ? "On for \(client.stackProject)" : client.stackPower)
+                        .accessibilityValue(stackKeyMode == "on" ? "On for \(client.stackProject)"
+                                           : stackKeyMode == "switch" ? "On for \(client.stackProject); tap to switch to \(client.stackFront)"
+                                           : client.stackPower)
                     // COLLAPSE is the panel header's "Minimize to corner"
                     // button: Peeky tucks into its corner dot. When it is
                     // collapsed, hidden, or not yet reported, the key reads
@@ -3445,10 +3466,14 @@ struct NumpadView: View {
                 statusText = "Peeky is open on your Mac"
             }
         case "stack":
-            if client.stackPower == "ON" {
+            switch stackKeyMode {
+            case "on":
                 client.stackOff()
                 statusText = "Stack — stopping everything on your Mac…"
-            } else {
+            case "switch":
+                client.stackOn()
+                statusText = "Stack — switching to \(client.stackFront)…"
+            default:
                 client.stackOn()
                 statusText = "Stack — starting for the chat in front on your Mac…"
             }

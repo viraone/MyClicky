@@ -60,6 +60,9 @@ final class ClickyClient: ObservableObject {
     @Published var stackPower = "OFF"
     /// The project the Mac's Qwen server is working for (empty for nobody).
     @Published var stackProject = ""
+    /// The project of the chat in front in the Mac's Claude app (empty when
+    /// that chat is not in a known project).
+    @Published var stackFront = ""
     /// Steps of the running stack command, in the order they first appeared.
     @Published var stackSteps: [StackStep] = []
     /// Outcome of the last STACK command as reported by the Mac.
@@ -341,6 +344,11 @@ final class ClickyClient: ObservableObject {
                                 let message = parts.count > 2 ? parts[2] : ""
                                 if !message.isEmpty { self.onStackStatus?(message, head[1] == "OK") }
                             }
+                        } else if line.hasPrefix("STACK_FRONT") {
+                            // STACK_FRONT\t<project> (empty when unknown); the
+                            // line trim above removes the tab when it is empty.
+                            self.stackFront = String(line.dropFirst(11))
+                                .trimmingCharacters(in: CharacterSet(charactersIn: "\t"))
                         } else if line.hasPrefix("SCREENS ") {
                             let parts = line.dropFirst(8).split(separator: " ").compactMap { Int($0) }
                             if parts.count == 2 {

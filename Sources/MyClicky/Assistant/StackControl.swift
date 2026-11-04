@@ -15,36 +15,79 @@ enum StackControl {
     private static let home = FileManager.default.homeDirectoryForCurrentUser
     private static let script = home.appendingPathComponent(".claude/skills/stack/stack.sh")
 
+    /// What one chat's record file said the last time its modification date
+    /// changed. The phone asks for the chat in front every 2 s, so a file
+    /// whose modification date has not moved is not read again.
+    private struct ChatRecord {
+        var modificationDate: Date?
+        var lastFocusedAt: Double?
+        var cwd: String
+        var isArchived: Bool
+    }
+
+    /// One record per `local_*.json` path, kept between scans.
+    private static var chatRecords: [String: ChatRecord] = [:]
+
+    private static let sessionsRoot = home.appendingPathComponent(
+        "Library/Application Support/Claude/claude-code-sessions", isDirectory: true)
+
     /// The folder of the chat in front in the Claude desktop app. The app
     /// keeps a record per chat (folder, title, `lastFocusedAt`, archived), so
     /// the chat you most recently clicked into is the one in front, even if
-    /// another chat wrote to its transcript more recently. If that record is
-    /// not there, fall back to the newest transcript.
+    /// another chat wrote to its transcript more recently. The newest
+    /// transcript is only a fallback for a Mac with no session records yet.
     static func activeChatFolder() -> URL? {
-        focusedChatFolder() ?? newestTranscriptFolder()
+        if FileManager.default.fileExists(atPath: sessionsRoot.path) {
+            return focusedChatFolder()
+        }
+        return newestTranscriptFolder()
     }
 
     private static func focusedChatFolder() -> URL? {
         let fm = FileManager.default
-        let root = home.appendingPathComponent("Library/Application Support/Claude/claude-code-sessions",
-                                               isDirectory: true)
-        guard let walker = fm.enumerator(at: root, includingPropertiesForKeys: nil,
+        guard let walker = fm.enumerator(at: sessionsRoot,
+                                         includingPropertiesForKeys: [.contentModificationDateKey],
                                          options: [.skipsHiddenFiles]) else { return nil }
         var bestFocus = -1.0
         var bestFolder: String?
+        var seen: Set<String> = []
         for case let file as URL in walker {
-            guard file.lastPathComponent.hasPrefix("local_"), file.pathExtension == "json",
-                  let data = try? Data(contentsOf: file),
-                  let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-                  (json["isArchived"] as? Bool) != true,
-                  let focus = (json["lastFocusedAt"] as? NSNumber)?.doubleValue,
-                  let cwd = json["cwd"] as? String, !cwd.isEmpty,
-                  focus > bestFocus else { continue }
+            guard file.lastPathComponent.hasPrefix("local_"), file.pathExtension == "json" else { continue }
+            seen.insert(file.path)
+            let modified = try? file.resourceValues(forKeys: [.contentModificationDateKey])
+                .contentModificationDate
+            let record: ChatRecord
+            if let modified, let cached = chatRecords[file.path], cached.modificationDate == modified {
+                record = cached
+            } else {
+                record = readChatRecord(file, modified: modified)
+                chatRecords[file.path] = record
+            }
+            guard !record.isArchived, let focus = record.lastFocusedAt,
+                  !record.cwd.isEmpty, focus > bestFocus else { continue }
             bestFocus = focus
-            bestFolder = cwd
+            bestFolder = record.cwd
         }
-        guard let bestFolder, FileManager.default.fileExists(atPath: bestFolder) else { return nil }
+        chatRecords = chatRecords.filter { seen.contains($0.key) }
+        guard let bestFolder, fm.fileExists(atPath: bestFolder) else { return nil }
         return URL(fileURLWithPath: bestFolder)
+    }
+
+    private static func readChatRecord(_ file: URL, modified: Date?) -> ChatRecord {
+        guard let data = try? Data(contentsOf: file),
+              let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return ChatRecord(modificationDate: modified, lastFocusedAt: nil, cwd: "", isArchived: false)
+        }
+        return ChatRecord(modificationDate: modified,
+                          lastFocusedAt: (json["lastFocusedAt"] as? NSNumber)?.doubleValue,
+                          cwd: json["cwd"] as? String ?? "",
+                          isArchived: (json["isArchived"] as? Bool) == true)
+    }
+
+    /// The project of the chat in front, for the phone's STACK key; empty
+    /// when that chat is not inside one of the known repos.
+    static func frontProject() -> String {
+        activeChatFolder().map(projectName(forFolder:)) ?? ""
     }
 
     /// Fallback: the newest transcript under ~/.claude/projects, and the last
@@ -85,6 +128,10 @@ enum StackControl {
             return State(power: now.power, ok: false, project: now.project, message: stopped)
         }
         var state = parsed(stdout)
+        if let switched = switchedTo(stdout) {
+            state.message = "Stack switched to \(displayName(switched)) — Qwen ready"
+            return state
+        }
         let loading = qwenLine(stdout)?.contains("not answering yet") ?? false
         let who = state.project.isEmpty ? "Stack ON" : "Stack ON for \(state.project)"
         state.message = "\(who) — Qwen \(loading ? "loading" : "ready")"
@@ -283,8 +330,8 @@ enum StackControl {
     }
 
     /// The display name of the project whose repo holds `folder`, the same
-    /// mapping stack.sh makes for `on` with no project; the folder's last
-    /// path component when it is none of them.
+    /// mapping stack.sh makes for `on` with no project; empty when the folder
+    /// is inside none of them (the phone then shows no project at all).
     static func projectName(forFolder folder: URL) -> String {
         let path = folder.standardizedFileURL.path + "/"
         let repos: [(String, String)] = [
@@ -294,7 +341,17 @@ enum StackControl {
         for (repo, project) in repos where path.hasPrefix(home.path + "/" + repo + "/") {
             return displayName(project)
         }
-        return folder.lastPathComponent
+        return ""
+    }
+
+    /// The project Qwen was handed from another one, when stack.sh's Qwen
+    /// line says "… (switched from X to Y)".
+    private static func switchedTo(_ stdout: String) -> String? {
+        guard let qwen = qwenLine(stdout), let from = qwen.range(of: "switched from ") else { return nil }
+        let rest = qwen[from.upperBound...]
+        guard let to = rest.range(of: " to ") else { return nil }
+        let project = rest[to.upperBound...].prefix { !$0.isWhitespace && $0 != ")" }
+        return project.isEmpty ? nil : String(project)
     }
 
     private static func qwenLine(_ stdout: String) -> String? { lines(stdout).last { $0.hasPrefix("Qwen server:") } }

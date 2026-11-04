@@ -146,6 +146,10 @@ import Network
 ///   STACK_STEP <DOING|DONE|FAIL>\t<label>\t<detail> – one step of a running
 ///                    STACK ON/OFF; a repeated label replaces its row; the
 ///                    phone draws them as a list under the key
+///   STACK_FRONT\t<project> – the project of the chat in front in the Claude
+///                    desktop app (display name, empty when that chat is not
+///                    in a known project); sent on connect and whenever it
+///                    changes
 ///   YOUTUBE_STATE COLLAPSED|EXPANDED – resulting state of the last
 ///                    YOUTUBE COLLAPSE toggle
 ///   KEYNOTE_STATE PLAYING|STOPPED – whether a slideshow is running after

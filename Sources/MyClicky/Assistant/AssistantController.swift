@@ -1211,6 +1211,11 @@ final class AssistantController {
     /// True while stack.sh runs for the phone, so a status refresh from a
     /// connecting phone cannot report OFF in the middle of a start.
     private var stackBusy = false
+    /// The project of the chat in front, as last sent to the phone.
+    private var stackFront = ""
+    /// Polls the Claude app for the chat in front, so the phone's STACK key
+    /// can offer SWITCH when Qwen is on for another project.
+    private var stackFrontTimer: Timer?
 
     func start() {
         typeScriptLSP.onStatus = { [weak self] status in self?.panel.state.codeLSPStatus = status }
@@ -1552,8 +1557,12 @@ final class AssistantController {
                 case "ON":
                     guard !self.stackBusy else { return }
                     self.stackBusy = true
-                    let project = StackControl.activeChatFolder().map(StackControl.projectName(forFolder:)) ?? ""
-                    self.remote.broadcast("STACK_STATE BUSY OK\t\(project)\tStack — starting for the chat in front…")
+                    let project = StackControl.frontProject()
+                    let current = Self.stackPowerAndProject(from: self.stackLine)
+                    let message = current.power == "ON" && !project.isEmpty && current.project != project
+                        ? "Stack — switching to \(project)…"
+                        : "Stack — starting for the chat in front…"
+                    self.remote.broadcast("STACK_STATE BUSY OK\t\(project)\t\(message)")
                     let result = await StackControl.turnOn(onLine: onLine)
                     self.publishStack(result)
                     self.stackBusy = false
@@ -1877,6 +1886,7 @@ final class AssistantController {
                     self?.screensLine() ?? "SCREENS 1 1",
                     self?.peekyLayoutLine() ?? "PEEKY_LAYOUT HIDDEN",
                     self?.stackLine ?? "STACK_STATE OFF OK\t\t",
+                    "STACK_FRONT\t\(self?.stackFront ?? "")",
                     self?.classRecorder.stateLine() ?? "CLASSREC_STATE IDLE\t\t"]
                 + (self?.panel.state.documentary.remoteGreeting() ?? [])
         }
@@ -1914,6 +1924,30 @@ final class AssistantController {
             guard let self else { return }
             self.publishStack(await StackControl.status())
         }
+        stackFrontTimer?.invalidate()
+        refreshStackFront()
+        let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshStackFront() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        stackFrontTimer = timer
+    }
+
+    /// Tells the phone which project's chat is in front, when that changed.
+    private func refreshStackFront() {
+        let front = StackControl.frontProject()
+        guard front != stackFront else { return }
+        stackFront = front
+        remote.broadcast("STACK_FRONT\t\(front)")
+    }
+
+    /// The power and project in a STACK_STATE line:
+    /// "STACK_STATE <power> <ok>\t<project>\t<message>".
+    private static func stackPowerAndProject(from line: String) -> (power: String, project: String) {
+        let fields = line.components(separatedBy: "\t")
+        let head = (fields.first ?? "").split(separator: " ")
+        return (head.count > 1 ? String(head[1]) : "OFF",
+                fields.count > 1 ? fields[1] : "")
     }
 
     /// Stores and broadcasts the stack's new state for the phone.
