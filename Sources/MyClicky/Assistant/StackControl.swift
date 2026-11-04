@@ -15,9 +15,41 @@ enum StackControl {
     private static let home = FileManager.default.homeDirectoryForCurrentUser
     private static let script = home.appendingPathComponent(".claude/skills/stack/stack.sh")
 
-    /// The folder of the chat Claude Code is being used in: the newest
-    /// transcript under ~/.claude/projects, and the last "cwd" it holds.
+    /// The folder of the chat in front in the Claude desktop app. The app
+    /// keeps a record per chat (folder, title, `lastFocusedAt`, archived), so
+    /// the chat you most recently clicked into is the one in front, even if
+    /// another chat wrote to its transcript more recently. If that record is
+    /// not there, fall back to the newest transcript.
     static func activeChatFolder() -> URL? {
+        focusedChatFolder() ?? newestTranscriptFolder()
+    }
+
+    private static func focusedChatFolder() -> URL? {
+        let fm = FileManager.default
+        let root = home.appendingPathComponent("Library/Application Support/Claude/claude-code-sessions",
+                                               isDirectory: true)
+        guard let walker = fm.enumerator(at: root, includingPropertiesForKeys: nil,
+                                         options: [.skipsHiddenFiles]) else { return nil }
+        var bestFocus = -1.0
+        var bestFolder: String?
+        for case let file as URL in walker {
+            guard file.lastPathComponent.hasPrefix("local_"), file.pathExtension == "json",
+                  let data = try? Data(contentsOf: file),
+                  let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  (json["isArchived"] as? Bool) != true,
+                  let focus = (json["lastFocusedAt"] as? NSNumber)?.doubleValue,
+                  let cwd = json["cwd"] as? String, !cwd.isEmpty,
+                  focus > bestFocus else { continue }
+            bestFocus = focus
+            bestFolder = cwd
+        }
+        guard let bestFolder, FileManager.default.fileExists(atPath: bestFolder) else { return nil }
+        return URL(fileURLWithPath: bestFolder)
+    }
+
+    /// Fallback: the newest transcript under ~/.claude/projects, and the last
+    /// "cwd" it holds.
+    private static func newestTranscriptFolder() -> URL? {
         let fm = FileManager.default
         let root = home.appendingPathComponent(".claude/projects", isDirectory: true)
         guard let dirs = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey],
@@ -139,12 +171,14 @@ enum StackControl {
             var timeoutTask: Task<Void, Never>? = nil
             process.terminationHandler = { _ in
                 timeoutTask?.cancel()
-                pipe.fileHandleForReading.readabilityHandler = nil
-                // Anything the handler had not delivered yet is still in the
-                // pipe; the process is gone, so this returns promptly.
-                let rest = pipe.fileHandleForReading.readDataToEndOfFile()
-                state.async {
-                    consume(rest)
+                // Never wait for the pipe to hit end-of-file: the dev server
+                // stack.sh starts runs under a background wrapper that keeps
+                // the pipe's write end open for as long as the server lives,
+                // so a read-to-EOF here would never return and the phone
+                // would sit on "working" forever. The script has exited, so
+                // give the reader a moment to deliver its last lines and go.
+                state.asyncAfter(deadline: .now() + 0.4) {
+                    pipe.fileHandleForReading.readabilityHandler = nil
                     if !pending.isEmpty {
                         emit(pending)
                         pending.removeAll()
