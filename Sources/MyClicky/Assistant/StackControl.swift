@@ -268,7 +268,33 @@ enum StackControl {
             project = String(line[line.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
         }
         if project == "nobody" { project = "" }
-        return State(power: power, ok: true, project: project, message: "")
+        return State(power: power, ok: true, project: displayName(project), message: "")
+    }
+
+    /// The name the phone and the toast show for one of stack.sh's projects.
+    static func displayName(_ project: String) -> String {
+        switch project {
+        case "beezer": "Beezer"
+        case "seo-audit": "SEO Tuneup"
+        case "myclicky": "Peeky"
+        case "nocapedit": "NoCap Edit"
+        default: project
+        }
+    }
+
+    /// The display name of the project whose repo holds `folder`, the same
+    /// mapping stack.sh makes for `on` with no project; the folder's last
+    /// path component when it is none of them.
+    static func projectName(forFolder folder: URL) -> String {
+        let path = folder.standardizedFileURL.path + "/"
+        let repos: [(String, String)] = [
+            ("Developer/beezer", "beezer"), ("Developer/seo-audit", "seo-audit"),
+            ("Developer/MyClicky1", "myclicky"), ("Desktop/Projects/reelflowWeb", "nocapedit"),
+        ]
+        for (repo, project) in repos where path.hasPrefix(home.path + "/" + repo + "/") {
+            return displayName(project)
+        }
+        return folder.lastPathComponent
     }
 
     private static func qwenLine(_ stdout: String) -> String? { lines(stdout).last { $0.hasPrefix("Qwen server:") } }

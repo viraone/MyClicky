@@ -1552,7 +1552,7 @@ final class AssistantController {
                 case "ON":
                     guard !self.stackBusy else { return }
                     self.stackBusy = true
-                    let project = StackControl.activeChatFolder()?.lastPathComponent ?? ""
+                    let project = StackControl.activeChatFolder().map(StackControl.projectName(forFolder:)) ?? ""
                     self.remote.broadcast("STACK_STATE BUSY OK\t\(project)\tStack — starting for the chat in front…")
                     let result = await StackControl.turnOn(onLine: onLine)
                     self.publishStack(result)

@@ -3170,7 +3170,9 @@ struct NumpadView: View {
                     // When Qwen is off the key says STACK ON; when it is on,
                     // STACK OFF stops everything.
                     key("stack",
-                        label: client.stackPower == "OFF" ? "STACK ON" : client.stackPower == "ON" ? "STACK OFF" : "WORKING",
+                        label: client.stackPower == "OFF" ? "STACK OFF"
+                             : client.stackPower == "ON" ? (client.stackProject.isEmpty ? "STACK ON" : "STACK ON · \(client.stackProject)")
+                             : "WORKING",
                         icon: client.stackPower == "OFF" ? "bolt" : client.stackPower == "ON" ? "bolt.fill" : "hourglass",
                         tint: client.stackPower == "OFF" ? Snes.key : client.stackPower == "ON" ? Snes.green : Snes.blue,
                         lit: true, h: keyH, w: columnW)
