@@ -1554,14 +1554,18 @@ final class AssistantController {
                     self.stackBusy = true
                     let project = StackControl.activeChatFolder()?.lastPathComponent ?? ""
                     self.remote.broadcast("STACK_STATE BUSY OK\t\(project)\tStack — starting for the chat in front…")
-                    self.publishStack(await StackControl.turnOn(onLine: onLine))
+                    let result = await StackControl.turnOn(onLine: onLine)
+                    self.publishStack(result)
                     self.stackBusy = false
+                    self.showStackToast(result)
                 case "OFF":
                     guard !self.stackBusy else { return }
                     self.stackBusy = true
                     self.remote.broadcast("STACK_STATE BUSY OK\t\tStack — stopping everything…")
-                    self.publishStack(await StackControl.turnOff(onLine: onLine))
+                    let result = await StackControl.turnOff(onLine: onLine)
+                    self.publishStack(result)
                     self.stackBusy = false
+                    self.showStackToast(result)
                 default:
                     guard !self.stackBusy else { return }
                     self.publishStack(await StackControl.status())
@@ -1916,6 +1920,24 @@ final class AssistantController {
     private func publishStack(_ state: StackControl.State) {
         stackLine = state.line
         remote.broadcast(state.line)
+    }
+
+    /// The Mac-side confirmation when the phone's STACK key finishes: a pill
+    /// near the top of the main screen, above whatever app is in front (the
+    /// Claude chat, usually), since the phone tap can happen with the mouse
+    /// anywhere.
+    private func showStackToast(_ state: StackControl.State) {
+        guard !state.message.isEmpty else { return }
+        let visible = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame ?? .zero
+        let anchor = NSPoint(x: visible.midX, y: visible.maxY - 90)
+        if !state.ok {
+            toast.show(state.message, icon: "exclamationmark.triangle.fill", tint: .orange,
+                       near: anchor, duration: 6)
+        } else if state.power == .on {
+            toast.show(state.message, icon: "bolt.fill", tint: .green, near: anchor, duration: 4)
+        } else {
+            toast.show(state.message, icon: "power", tint: .gray, near: anchor, duration: 4)
+        }
     }
 
     /// ENTIRE SCREEN on the phone: a full-resolution PNG of the display
