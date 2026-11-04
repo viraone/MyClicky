@@ -47,6 +47,11 @@ import Network
 ///                    box and send it; the Mac replies with CLAUDE_PASTE_STATUS
 ///   CLAUDE PASTE ONLY – the same, but leave the image in the chat box
 ///                    unsent so the user can type before sending
+///   STACK ON       – start the local coding stack on the Mac for the chat
+///                    in front (the shared Qwen model plus that project's
+///                    servers)
+///   STACK OFF      – stop the whole local coding stack
+///   STACK STATUS   – ask for the stack's current state
 ///   GMAIL COMPOSE  – open a new Gmail compose window in the browser
 ///   GMAIL INBOX    – go back to the inbox list
 ///   GMAIL OPEN_LATEST – open the newest Primary-inbox email
@@ -134,6 +139,10 @@ import Network
 ///                    CHROME command; the phone shows it as a toast, unspoken
 ///   CLAUDE_PASTE_STATUS OK|FAIL\t<message> – outcome of the last CLAUDE PASTE
 ///                    command; the phone shows it as a toast, unspoken
+///   STACK_STATE <ON|OFF|BUSY> <OK|FAIL>\t<project>\t<message> – the local
+///                    coding stack: whether Qwen is running, the project it
+///                    works for (empty for nobody), and a short toast line
+///                    (empty when there is nothing to say)
 ///   YOUTUBE_STATE COLLAPSED|EXPANDED – resulting state of the last
 ///                    YOUTUBE COLLAPSE toggle
 ///   KEYNOTE_STATE PLAYING|STOPPED – whether a slideshow is running after
@@ -198,6 +207,8 @@ final class RemoteControlService {
     /// `CLAUDE PASTE` (send: true) / `CLAUDE PASTE ONLY` (send: false): paste the
     /// clipboard image into the Claude desktop app, and press Return only if `send`.
     var onClaudePaste: ((_ send: Bool) -> Void)?
+    /// `STACK ON` / `STACK OFF` / `STACK STATUS` — the local coding stack.
+    var onStack: ((String) -> Void)?
     var onAsk: ((String) -> Void)?
     var onDictate: ((String) -> Void)?
     var onPartial: ((String) -> Void)?
@@ -336,6 +347,12 @@ final class RemoteControlService {
             onClaudePaste?(true)
         } else if line == "CLAUDE PASTE ONLY" {
             onClaudePaste?(false)
+        } else if line == "STACK ON" {
+            onStack?("ON")
+        } else if line == "STACK OFF" {
+            onStack?("OFF")
+        } else if line == "STACK STATUS" {
+            onStack?("STATUS")
         } else if line.hasPrefix("TAB ") {
             onTab?(String(line.dropFirst(4)))
         } else if line == "KEY ENTER" {

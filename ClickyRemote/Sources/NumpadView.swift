@@ -192,6 +192,12 @@ struct NumpadView: View {
                 statusText = (ok ? "✓ " : "⚠︎ ") + message
                 showNotice(message, ok: ok, seconds: ok ? 2.4 : 4)
             }
+            // STACK: the Mac reports the local coding stack's state, and a
+            // short line when starting or stopping it succeeded or failed.
+            client.onStackStatus = { message, ok in
+                statusText = (ok ? "✓ " : "⚠︎ ") + message
+                showNotice(message, ok: ok, seconds: ok ? 2.4 : 4)
+            }
             // ENTIRE SCREEN: a black toast, not a spoken status — the shot is
             // already described by the key and the toast is enough.
             client.onScreenshotStatus = { message, ok in
@@ -2971,6 +2977,17 @@ struct NumpadView: View {
                         .disabled(savingToDesktop)
                 }
                 HStack(spacing: gap) {
+                    // STACK: runs stack.sh on the Mac for the chat in front.
+                    // When Qwen is off the key says STACK ON; when it is on,
+                    // STACK OFF stops everything.
+                    key("stack",
+                        label: client.stackPower == "OFF" ? "STACK ON" : client.stackPower == "ON" ? "STACK OFF" : "WORKING",
+                        icon: client.stackPower == "OFF" ? "bolt" : client.stackPower == "ON" ? "bolt.fill" : "hourglass",
+                        tint: client.stackPower == "OFF" ? Snes.key : client.stackPower == "ON" ? Snes.green : Snes.blue,
+                        lit: true, h: keyH, w: columnW)
+                        .disabled(client.stackPower == "BUSY")
+                        .accessibilityLabel("Local coding stack")
+                        .accessibilityValue(client.stackPower == "ON" ? "On for \(client.stackProject)" : client.stackPower)
                     // COLLAPSE is the panel header's "Minimize to corner"
                     // button: Peeky tucks into its corner dot. When it is
                     // collapsed, hidden, or not yet reported, the key reads
@@ -2979,7 +2996,7 @@ struct NumpadView: View {
                         icon: peekyIsOpen ? "arrow.down.right.and.arrow.up.left"
                                           : "arrow.up.left.and.arrow.down.right",
                         tint: Snes.green, lit: true,
-                        h: keyH, w: geo.size.width)
+                        h: keyH, w: columnW)
                 }
             }
             .padding(.top, topInset)
@@ -3218,6 +3235,14 @@ struct NumpadView: View {
             } else {
                 client.expand()
                 statusText = "Peeky is open on your Mac"
+            }
+        case "stack":
+            if client.stackPower == "ON" {
+                client.stackOff()
+                statusText = "Stack — stopping everything on your Mac…"
+            } else {
+                client.stackOn()
+                statusText = "Stack — starting for the chat in front on your Mac…"
             }
         case "4":
             client.show()

@@ -1206,6 +1206,8 @@ final class AssistantController {
     /// CONFIRM_OK/CONFIRM_NO.
     private var pendingConfirms: [String: CheckedContinuation<Bool, Never>] = [:]
     private var pendingChoices: [String: CheckedContinuation<Int?, Never>] = [:]
+    /// Last STACK_STATE line broadcast to the phone, replayed in the greeting.
+    private var stackLine = "STACK_STATE OFF OK\t\t"
 
     func start() {
         typeScriptLSP.onStatus = { [weak self] status in self?.panel.state.codeLSPStatus = status }
@@ -1534,6 +1536,22 @@ final class AssistantController {
                                       + result.message.replacingOccurrences(of: "\n", with: " "))
             }
         }
+        remote.onStack = { [weak self] action in
+            Task { @MainActor in
+                guard let self else { return }
+                switch action {
+                case "ON":
+                    let project = StackControl.activeChatFolder()?.lastPathComponent ?? ""
+                    self.remote.broadcast("STACK_STATE BUSY OK\t\(project)\tStack — starting for the chat in front…")
+                    self.publishStack(await StackControl.turnOn())
+                case "OFF":
+                    self.remote.broadcast("STACK_STATE BUSY OK\t\tStack — stopping everything…")
+                    self.publishStack(await StackControl.turnOff())
+                default:
+                    self.publishStack(await StackControl.status())
+                }
+            }
+        }
         remote.onBrowserReload = { [weak self] in
             ActivityLog.recordAction("browser-reload")
             if !BrowserTabReader.reloadActiveTab() {
@@ -1826,12 +1844,18 @@ final class AssistantController {
             doc.handleRemote(command)
         }
         remote.greeting = { [weak self] in
-            ["WHATSAPP_UNREAD \(self?.whatsappUnread.count ?? 0)",
-             "GMAIL_UNREAD \(self?.gmailUnread.count ?? 0)",
-             self?.screensLine() ?? "SCREENS 1 1",
-             self?.peekyLayoutLine() ?? "PEEKY_LAYOUT HIDDEN",
-             self?.classRecorder.stateLine() ?? "CLASSREC_STATE IDLE\t\t"]
-            + (self?.panel.state.documentary.remoteGreeting() ?? [])
+            // The phone gets the last known stack state now, and a fresh one
+            // a moment later.
+            if let self {
+                Task { @MainActor in self.publishStack(await StackControl.status()) }
+            }
+            return ["WHATSAPP_UNREAD \(self?.whatsappUnread.count ?? 0)",
+                    "GMAIL_UNREAD \(self?.gmailUnread.count ?? 0)",
+                    self?.screensLine() ?? "SCREENS 1 1",
+                    self?.peekyLayoutLine() ?? "PEEKY_LAYOUT HIDDEN",
+                    self?.stackLine ?? "STACK_STATE OFF OK\t\t",
+                    self?.classRecorder.stateLine() ?? "CLASSREC_STATE IDLE\t\t"]
+                + (self?.panel.state.documentary.remoteGreeting() ?? [])
         }
         remote.onScreen = { [weak self] index in self?.switchScreen(to: index) }
         panel.onScreenChange = { [weak self] _ in
@@ -1863,6 +1887,16 @@ final class AssistantController {
         remote.start()
         ActivityLog.startSampling()
         startBreakCoach()
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.publishStack(await StackControl.status())
+        }
+    }
+
+    /// Stores and broadcasts the stack's new state for the phone.
+    private func publishStack(_ state: StackControl.State) {
+        stackLine = state.line
+        remote.broadcast(state.line)
     }
 
     /// ENTIRE SCREEN on the phone: a full-resolution PNG of the display

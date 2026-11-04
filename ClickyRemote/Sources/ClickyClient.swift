@@ -49,6 +49,12 @@ final class ClickyClient: ObservableObject {
     /// Outcome of the last CLAUDE PASTE command as reported by the Mac:
     /// the clipboard image sent into the Claude desktop app, or why not.
     var onClaudePasteStatus: ((_ message: String, _ ok: Bool) -> Void)?
+    /// The local coding stack: ON, OFF, or BUSY while a command runs.
+    @Published var stackPower = "OFF"
+    /// The project the Mac's Qwen server is working for (empty for nobody).
+    @Published var stackProject = ""
+    /// Outcome of the last STACK command as reported by the Mac.
+    var onStackStatus: ((_ message: String, _ ok: Bool) -> Void)?
     /// Whether the browser window playing YouTube is currently minimized —
     /// drives the Collapse/Expand label on the YouTube pad.
     @Published var youtubeCollapsed = false
@@ -299,6 +305,18 @@ final class ClickyClient: ObservableObject {
                         } else if line.hasPrefix("CLAUDE_PASTE_STATUS ") {
                             let parts = line.dropFirst(20).split(separator: "\t", maxSplits: 1).map(String.init)
                             if parts.count == 2 { self.onClaudePasteStatus?(parts[1], parts[0] == "OK") }
+                        } else if line.hasPrefix("STACK_STATE ") {
+                            // STACK_STATE <power> <ok>\t<project>\t<message>
+                            let parts = line.dropFirst(12)
+                                .split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
+                                .map(String.init)
+                            let head = parts.first?.split(separator: " ").map(String.init) ?? []
+                            if head.count >= 2 {
+                                self.stackPower = head[0]
+                                self.stackProject = parts.count > 1 ? parts[1] : ""
+                                let message = parts.count > 2 ? parts[2] : ""
+                                if !message.isEmpty { self.onStackStatus?(message, head[1] == "OK") }
+                            }
                         } else if line.hasPrefix("SCREENS ") {
                             let parts = line.dropFirst(8).split(separator: " ").compactMap { Int($0) }
                             if parts.count == 2 {
@@ -618,6 +636,12 @@ final class ClickyClient: ObservableObject {
     /// With `autoSend` the Mac also presses Return; without it the picture is
     /// left in the chat box for the user to add a message and send.
     func claudePaste(autoSend: Bool) { send(autoSend ? "CLAUDE PASTE" : "CLAUDE PASTE ONLY") }
+    /// Start the local coding stack on the Mac for the chat in front.
+    func stackOn() { send("STACK ON") }
+    /// Stop the whole local coding stack on the Mac.
+    func stackOff() { send("STACK OFF") }
+    /// Ask the Mac for the stack's current state.
+    func stackStatus() { send("STACK STATUS") }
     func gmail(_ action: String) { send("GMAIL \(action)") }
     /// Peeky Video: transport, dial nudges and the editing buttons.
     func video(_ action: String) { send("VIDEO \(action)") }
