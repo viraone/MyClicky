@@ -1,9 +1,14 @@
 # Drop this file in the root of each project you want Claude to delegate work on.
 
 [studio]
-base_url   = "http://localhost:8080/v1"           # MLX: mlx_lm.server --port 8080 ; Ollama: :11434/v1
-model      = "mlx-community/Qwen3-Coder-Next-6bit" # Ollama users: "qwen3-coder-next"
-api_key    = "local"
+# Mac Studio (oMLX, DeepSeek V4-Flash) since 2026-11-06. The key is read from a private file, never stored here.
+# To go back to Qwen on the MacBook, use these three lines instead:
+#   base_url = "http://localhost:8080/v1"
+#   model    = "mlx-community/Qwen3-Coder-Next-6bit"
+#   api_key  = "local"
+base_url     = "http://Mac-Studio.local:8000/v1"
+model        = "DeepSeek-V4-Flash-0731-MXFP4-MLX"
+api_key_file = "~/.config/omlx-studio/api_key"
 temperature = 0.2
 max_tokens = 16000
 timeout_s  = 600
