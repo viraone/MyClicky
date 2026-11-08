@@ -1,0 +1,15 @@
+{
+  "name": "rickshaw-signup-add-to-iphone",
+  "assets_dir": "~/Downloads/rickshaw-video-assets",
+  "url": "stagetimepnw.tapandlaunch.com",
+  "title": {"caption": "Put the Rickshaw sign-up on your phone.", "subtitle": "iPhone. About 1 minute.", "spoken": "Put the Rickshaw sign-up on your phone. iPhone. About 1 minute.", "min_seconds": 4},
+  "steps": [
+    {"image": "step1-card.png", "caption": "Open the link in Safari.", "tip": "Opened inside WhatsApp or Instagram? Copy the link and paste it into Safari.", "spoken": "Step one. Open the link in Safari. Opened inside WhatsApp or Instagram? Copy the link and paste it into Safari.", "min_seconds": 6, "card": true},
+    {"image": "step2-menu-icon.png", "caption": "Tap the menu icon at the bottom left of the address bar.", "spoken": "Step two. Tap the menu icon at the bottom left of the address bar.", "min_seconds": 5},
+    {"image": "step3-share.png", "caption": "Tap Share.", "spoken": "Step three. Tap Share.", "min_seconds": 4},
+    {"image": "step4-view-more.png", "caption": "Tap View More.", "spoken": "Step four. Tap View More.", "min_seconds": 5},
+    {"image": "step5-add-to-home-screen.png", "caption": "Tap Add to Home Screen.", "spoken": "Step five. Tap Add to Home Screen.", "min_seconds": 5},
+    {"image": "step6-add.png", "caption": "Leave Open as Web App on, then tap Add.", "spoken": "Step six. Leave Open as Web App on, then tap Add.", "min_seconds": 6}
+  ],
+  "end": {"headline": "That's it!", "caption": "Find the new icon on your Home Screen and tap it any time.", "spoken": "That's it! Find the new icon on your Home Screen and tap it any time.", "min_seconds": 5}
+}
