@@ -1153,6 +1153,21 @@ final class AssistantState: ObservableObject {
     var onResize: ((PanelResizeCorner, CGSize?) -> Void)?
 }
 
+/// `frame` shrunk (never grown) to fit inside `visible`, then moved inside
+/// it with the panel's 8pt edge inset on every side. The whole window — card
+/// and glow — ends up on the screen. Pure, so the clamp can be unit-tested;
+/// callers pass a real screen's visibleFrame.
+@MainActor
+func clampedPanelFrame(_ frame: NSRect, within visible: NSRect) -> NSRect {
+    let inset = AssistantPanelController.edgeInset
+    let size = NSSize(
+        width: Swift.min(frame.width, Swift.max(visible.width - inset * 2, 0)),
+        height: Swift.min(frame.height, Swift.max(visible.height - inset * 2, 0))
+    )
+    return NSRect(origin: AssistantPanelController.origin(frame.origin, of: size, keptWithin: visible),
+                  size: size)
+}
+
 /// Floating, non-activating panel styled after a Rode Wireless Pro transmitter:
 /// a dark, rounded square with a status readout.
 @MainActor
@@ -1165,7 +1180,13 @@ final class AssistantPanelController {
     func show(near point: NSPoint, on screen: NSScreen) {
         let panel = ensurePanel()
         if state.collapsed { expand() }
-        let visible = screen.visibleFrame
+        // The passed screen is where the caller wants the panel; if its
+        // visibleFrame is unusable (seen mid display change), fall back to
+        // the screen the panel was last on, then the main display, then the
+        // first display AppKit lists.
+        let visible = Self.usableVisibleFrame(of: screen)
+            ?? Self.usableVisibleFrame(for: panel)
+            ?? screen.visibleFrame
         // Respect wherever the user dragged the panel — including onto another
         // display — as long as all of it can be seen. A panel left hanging
         // off an edge is pulled back onto the display showing most of it: a
@@ -1180,10 +1201,14 @@ final class AssistantPanelController {
                 panel.setFrame(kept.insetBy(dx: -Self.glowMargin, dy: -Self.glowMargin), display: true, animate: false)
             }
         } else {
-            panel.setFrameOrigin(NSPoint(
-                x: visible.midX - Self.expandedSize.width / 2,
-                y: visible.minY + 120
-            ))
+            // The hidden panel keeps the size it actually has — a tall card
+            // or a hand-resized one — so restore the whole frame, not just
+            // an origin, and shrink it if the display can't show all of it.
+            let frame = clampedPanelFrame(NSRect(
+                origin: NSPoint(x: visible.midX - panel.frame.width / 2, y: visible.minY + 120),
+                size: panel.frame.size
+            ), within: visible)
+            panel.setFrame(frame, display: false, animate: false)
         }
         panel.orderFrontRegardless()
     }
@@ -1210,6 +1235,27 @@ final class AssistantPanelController {
         origin.y = max(origin.y, visible.minY + margin)
         origin.y = min(origin.y, visible.maxY - frame.height - margin)
         return NSRect(origin: origin, size: frame.size)
+    }
+
+    /// `screen`'s visible frame, or nil when it is zero or doesn't overlap
+    /// the screen — both seen while display parameters change.
+    static func usableVisibleFrame(of screen: NSScreen) -> NSRect? {
+        let visible = screen.visibleFrame
+        return visible.isEmpty || !visible.intersects(screen.frame) ? nil : visible
+    }
+
+    /// The visible frame of the display to use for the panel: the screen it
+    /// is (or was last) on, else the main display, else the first display
+    /// AppKit lists. Missing visible frames are skipped, not clamped to.
+    static func usableVisibleFrame(for panel: NSPanel?) -> NSRect? {
+        var candidates: [NSScreen] = []
+        if let screen = panel?.screen { candidates.append(screen) }
+        if let main = NSScreen.main { candidates.append(main) }
+        candidates.append(contentsOf: NSScreen.screens)
+        for screen in candidates {
+            if let visible = usableVisibleFrame(of: screen) { return visible }
+        }
+        return nil
     }
 
     /// Parks the panel in the top-right corner of `screen` — the resting spot
@@ -1365,17 +1411,40 @@ final class AssistantPanelController {
     }
 
     func expand() {
-        guard let panel, state.collapsed else { return }
+        guard let panel else { return }
+        // A panel can be ordered in yet sit off every display — say the
+        // display it was parked on was unplugged. EXPAND has to pull it
+        // back instead of doing nothing because it isn't in the corner dot.
+        let offEveryScreen = Self.screenShowingMost(of: panel.frame) == nil
+        guard state.collapsed || offEveryScreen else { return }
+        guard let visible = Self.usableVisibleFrame(for: panel) else { return }
+        let wasCollapsed = state.collapsed
         state.collapsed = false
-        let screen = panel.screen ?? NSScreen.main
-        let visible = screen?.visibleFrame ?? .zero
-        let size = savedFrame?.size ?? Self.expandedSize
-        var origin = savedFrame?.origin ?? NSPoint(
-            x: visible.maxX - size.width - 12,
-            y: visible.minY + 12
-        )
-        origin = Self.origin(origin, of: size, keptWithin: visible)
-        panel.setFrame(NSRect(origin: origin, size: size), display: true, animate: true)
+        // Restore the saved frame only while a display still shows part of
+        // it; after a display change it would put the card off screen
+        // again. Otherwise start from the same bottom-center spot a fresh
+        // show uses. A visible-but-off-screen panel keeps the size the user
+        // gave it and is simply pulled back inside.
+        // A saved frame no bigger than the corner dot was captured mid-
+        // animation; restoring it would leave the dot where the card should be.
+        let saved = savedFrame.flatMap {
+            Self.screenShowingMost(of: $0) != nil
+                && $0.width > Self.collapsedSize.width && $0.height > Self.collapsedSize.height ? $0 : nil
+        }
+        let size: NSSize
+        let origin: NSPoint
+        if let saved {
+            size = saved.size
+            origin = saved.origin
+        } else if wasCollapsed {
+            size = Self.expandedSize
+            origin = NSPoint(x: visible.midX - size.width / 2, y: visible.minY + 120)
+        } else {
+            size = panel.frame.size
+            origin = panel.frame.origin
+        }
+        panel.setFrame(clampedPanelFrame(NSRect(origin: origin, size: size), within: visible),
+                       display: true, animate: true)
     }
 
     /// Brings the panel to its full card: out of the corner dot, out of the

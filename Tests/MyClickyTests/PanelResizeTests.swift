@@ -106,6 +106,17 @@ final class PanelKeptOnScreenTests: XCTestCase {
                        NSPoint(x: 8, y: 592))
     }
 
+    /// A panel restored from a display that is no longer attached can be
+    /// larger than the screen it lands on: the clamp shrinks it to fit and
+    /// moves it inside, so no part — glow included — is left off screen.
+    func testOversizedFrameIsShrunkBeforeItIsMovedInside() {
+        let frame = NSRect(x: 1400, y: 900, width: 2400, height: 1600)
+        let fitted = clampedPanelFrame(frame, within: visible)
+        XCTAssertEqual(fitted.size, NSSize(width: 1584, height: 984))
+        XCTAssertEqual(fitted.origin, NSPoint(x: 8, y: 8))
+        XCTAssertTrue(visible.contains(fitted))
+    }
+
     /// Full is bigger than the screen by the glow margin: it's centered so
     /// the card sits 8pt inside every edge while the glow hangs past them.
     func testOversizedWindowIsCenteredSoTheCardSitsInsideTheScreen() {
