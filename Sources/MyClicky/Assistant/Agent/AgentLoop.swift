@@ -78,17 +78,20 @@ final class AgentLoop {
     private let tools: any AgentToolRunning
     private let system: String
     private let maxSteps: Int
+    private let oneToolPerStep: Bool
     private let onStep: (AgentStep) -> Void
 
     init(client: any AgentModelClient,
          tools: any AgentToolRunning,
          system: String = AgentLoop.defaultSystemPrompt,
          maxSteps: Int = 25,
+         oneToolPerStep: Bool = false,
          onStep: @escaping (AgentStep) -> Void) {
         self.client = client
         self.tools = tools
         self.system = system
         self.maxSteps = maxSteps
+        self.oneToolPerStep = oneToolPerStep
         self.onStep = onStep
     }
 
@@ -127,12 +130,24 @@ final class AgentLoop {
             }
 
             var toolResults: [[String: Any]] = []
-            for toolUse in toolUses {
+            for (index, toolUse) in toolUses.enumerated() {
                 steps += 1
                 let name = toolUse["name"] as? String ?? ""
                 let input = toolUse["input"] as? [String: Any] ?? [:]
                 let toolID = toolUse["id"] as? String ?? ""
                 let title = Self.stepTitle(name: name, input: input)
+
+                // Every call in one reply was planned against the same document, so after the first one the rest
+                // would run on stale assumptions. The model is told to read the result and call again.
+                if oneToolPerStep && index > 0 {
+                    toolResults.append([
+                        "type": "tool_result",
+                        "tool_use_id": toolID,
+                        "content": "Not run. Only one tool runs per step because the document changes after each one. Read the result above, then call this again if it is still needed.",
+                        "is_error": true,
+                    ])
+                    continue
+                }
 
                 onStep(AgentStep(id: steps, title: title, detail: "", status: .running))
                 let outcome = await tools.run(name: name, input: input)
@@ -190,6 +205,16 @@ final class AgentLoop {
             return "Go \(direction)"
         case "wait":
             return "Wait \(numberText(input["seconds"]))s"
+        case "get_script":
+            return "Reading the script"
+        case "set_narration":
+            return "Changing the narration of \(input["scene_id"] as? String ?? "a scene")"
+        case "set_heading":
+            return "Changing the heading of \(input["scene_id"] as? String ?? "a scene")"
+        case "delete_scene":
+            return "Deleting scene \(input["scene_id"] as? String ?? "?")"
+        case "render":
+            return "Re-recording and rendering the film (a few minutes)"
         default:
             return name.isEmpty ? "Working" : name
         }

@@ -1064,13 +1064,13 @@ final class CodeDocumentaryModel: ObservableObject {
         return snapshot
     }
 
-    private func runPipeline(project: URL, generation gen: Int) async throws {
+    private func runPipeline(project: URL, generation gen: Int, voiceOverride: String? = nil) async throws {
         let proc = Process()
         proc.executableURL = Self.pythonURL
         proc.arguments = [Self.makeDocURL.path, project.path, "--quality", quality.rawValue]
         proc.currentDirectoryURL = Self.pipelineDir
         var env = ProcessInfo.processInfo.environment
-        env["KOKORO_VOICE"] = voice
+        env["KOKORO_VOICE"] = voiceOverride ?? voice
         env["PYTHONUNBUFFERED"] = "1"
         env["NO_COLOR"] = "1"
         env["TERM"] = "dumb"
@@ -1125,6 +1125,50 @@ final class CodeDocumentaryModel: ObservableObject {
             throw NSError(domain: "CodeDocumentary", code: Int(proc.terminationStatus),
                           userInfo: [NSLocalizedDescriptionKey: "Pipeline exited with status \(proc.terminationStatus). See the log."])
         }
+    }
+
+    /// Re-record and rebuild a film whose script.json narration was edited.
+    /// The caller has already deleted the audio of the scenes that changed, so
+    /// make_doc.py narrates only what is missing and rebuilds the film.
+    func rerender(project: URL, voiceOverride: String?) async throws -> String {
+        if phase.isRunning {
+            throw NSError(domain: "CodeDocumentary", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "A film is already being made. Wait for it to finish, then try again."])
+        }
+        player.pause()
+        generation += 1
+        let gen = generation
+        logLines = []
+        phase = .narrating
+        do {
+            try await runPipeline(project: project, generation: gen, voiceOverride: voiceOverride)
+        } catch {
+            phase = .failed(error.localizedDescription)
+            throw error
+        }
+        guard gen == generation else { throw CancellationError() }
+        reloadCurrentFilm()
+        phase = .idle
+        return "Rendered. The film is up to date and the player has reloaded."
+    }
+
+    /// Point the player at the film it is already showing, so a re-render
+    /// (same path, new MP4) reloads without losing the paused moment or the
+    /// Ask conversation.
+    func reloadCurrentFilm() {
+        guard let url = nowPlaying else { return }
+        let savedPlayhead = playhead
+        let savedAnswers = askHistory
+        let savedPhase = askPhase
+        play(url)
+        player.pause()
+        let target = CMTime(seconds: savedPlayhead, preferredTimescale: 600)
+        player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
+        playhead = savedPlayhead
+        askHistory = savedAnswers
+        askPhase = savedPhase
+        isPlaying = false
+        publishState()
     }
 
     /// Manim logs every partial file and cache decision; none of that helps here.
@@ -1348,18 +1392,26 @@ struct CodeDocumentaryView: View {
     @State private var pendingDeletion: CodeDocumentaryModel.Recent?
     @State private var deletionError: String?
     @GestureState private var videoDrag: CGSize = .zero
+    @State private var editChat: DocEditChatModel?
 
     var body: some View {
         Group {
             if let url = model.nowPlaying {
-                playerScreen(url)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                HStack(alignment: .top, spacing: 12) {
+                    playerScreen(url)
+                    if let chat = editChat {
+                        DocEditChatView(model: chat, accent: accent, onClose: { editChat = nil })
+                            .frame(width: 380)
+                    }
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             } else {
                 setupScreen
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
         .animation(.easeInOut(duration: 0.3), value: model.nowPlaying)
+        .onChange(of: model.nowPlaying) { _, _ in editChat = nil }
         .onChange(of: model.nowPlaying) { _, url in
             if url == nil {
                 resetVideoZoom()
@@ -1462,6 +1514,30 @@ struct CodeDocumentaryView: View {
                     .foregroundStyle(.white.opacity(0.9))
                     .lineLimit(1)
                 Spacer(minLength: 0)
+                if !model.phase.isRunning {
+                    Button {
+                        if editChat != nil {
+                            editChat = nil
+                        } else {
+                            editChat = DocEditChatModel(
+                                project: DocEditProject(folder: url.deletingLastPathComponent()),
+                                renderer: { [model] project in
+                                    try await model.rerender(project: project.folder, voiceOverride: project.voice())
+                                },
+                                onFilmChanged: { [model] in model.reloadCurrentFilm() }
+                            )
+                        }
+                    } label: {
+                        Label("Edit", systemImage: "wand.and.stars")
+                            .font(.system(size: 12.5, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Capsule().fill(accent))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Change the narration or script with DeepSeek, then re-render")
+                }
                 zoomControls
                 Button { model.startNew() } label: {
                     Label("New documentary", systemImage: "plus")
