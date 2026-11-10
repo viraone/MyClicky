@@ -67,8 +67,8 @@ enum DocumentaryTimelineMedia {
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
         generator.maximumSize = CGSize(width: maxHeight * 4, height: maxHeight)
-        generator.requestedTimeToleranceBefore = .positiveInfinity
-        generator.requestedTimeToleranceAfter = .positiveInfinity
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
         var images: [CGImage] = []
         for t in thumbnailTimes(duration: CMTimeGetSeconds(duration), count: count) {
             if let result = try? await generator.image(at: CMTime(seconds: t, preferredTimescale: 600)) {

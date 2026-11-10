@@ -45,4 +45,29 @@ enum DocumentaryTimelineMath {
     static func clampZoom(_ z: Double) -> Double {
         min(max(z, 2), 400)
     }
+    /// "m:ss.t" with tenths. total = Int((max(t, 0) * 10).rounded()); format String(format: "%d:%02d.%d", total / 600, (total / 10) % 60, total % 10)
+    static func timecode(_ t: Double) -> String {
+        let total = Int((max(t, 0) * 10).rounded())
+        return String(format: "%d:%02d.%d", total / 600, (total / 10) % 60, total % 10)
+    }
+    /// The boundary nearest to t when abs(boundary - t) <= thresholdSeconds, else t unchanged. Empty boundaries -> t.
+    static func snappedTime(_ t: Double, boundaries: [Double], thresholdSeconds: Double) -> Double {
+        guard let nearest = boundaries.min(by: { abs($0 - t) < abs($1 - t) }) else { return t }
+        return abs(nearest - t) <= thresholdSeconds ? nearest : t
+    }
+    /// let current = starts.last(where: { $0 <= t }); if let c = current, t - c > restartWindow { return c }; let before = starts.last(where: { $0 < (current ?? t) }); return before ?? 0
+    static func previousSceneStart(starts: [Double], at t: Double, restartWindow: Double) -> Double {
+        let current = starts.last(where: { $0 <= t })
+        if let c = current, t - c > restartWindow { return c }
+        let before = starts.last(where: { $0 < (current ?? t) })
+        return before ?? 0
+    }
+    /// starts.first(where: { $0 > t + 0.001 })
+    static func nextSceneStart(starts: [Double], at t: Double) -> Double? {
+        starts.first(where: { $0 > t + 0.001 })
+    }
+    /// true when playheadX < scrollX + margin || playheadX > scrollX + viewW - margin
+    static func needsFollow(playheadX: Double, scrollX: Double, viewW: Double, margin: Double) -> Bool {
+        playheadX < scrollX + margin || playheadX > scrollX + viewW - margin
+    }
 }

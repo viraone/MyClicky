@@ -58,4 +58,44 @@ final class DocumentaryTimelineTests: XCTestCase {
         XCTAssertEqual(DocumentaryTimelineMath.clampZoom(1000), 400, accuracy: 1e-9)
         XCTAssertEqual(DocumentaryTimelineMath.clampZoom(16), 16, accuracy: 1e-9)
     }
+
+    func testTimecode() {
+        XCTAssertEqual(DocumentaryTimelineMath.timecode(14.2), "0:14.2")
+        XCTAssertEqual(DocumentaryTimelineMath.timecode(0), "0:00.0")
+        XCTAssertEqual(DocumentaryTimelineMath.timecode(61.04), "1:01.0")
+        XCTAssertEqual(DocumentaryTimelineMath.timecode(59.96), "1:00.0")
+        XCTAssertEqual(DocumentaryTimelineMath.timecode(-3), "0:00.0")
+        XCTAssertEqual(DocumentaryTimelineMath.timecode(50.6), "0:50.6")
+    }
+
+    func testSnappedTime() {
+        XCTAssertEqual(DocumentaryTimelineMath.snappedTime(5.2, boundaries: [0, 5, 12], thresholdSeconds: 0.3), 5, accuracy: 1e-9)
+        XCTAssertEqual(DocumentaryTimelineMath.snappedTime(5.4, boundaries: [0, 5, 12], thresholdSeconds: 0.3), 5.4, accuracy: 1e-9)
+        XCTAssertEqual(DocumentaryTimelineMath.snappedTime(11.8, boundaries: [0, 5, 12], thresholdSeconds: 0.3), 12, accuracy: 1e-9)
+        XCTAssertEqual(DocumentaryTimelineMath.snappedTime(3, boundaries: [], thresholdSeconds: 0.3), 3, accuracy: 1e-9)
+    }
+
+    func testPreviousSceneStart() {
+        let starts: [Double] = [0, 5, 12]
+        XCTAssertEqual(DocumentaryTimelineMath.previousSceneStart(starts: starts, at: 7, restartWindow: 1), 5, accuracy: 1e-9)
+        XCTAssertEqual(DocumentaryTimelineMath.previousSceneStart(starts: starts, at: 5.5, restartWindow: 1), 0, accuracy: 1e-9)
+        XCTAssertEqual(DocumentaryTimelineMath.previousSceneStart(starts: starts, at: 0.5, restartWindow: 1), 0, accuracy: 1e-9)
+        XCTAssertEqual(DocumentaryTimelineMath.previousSceneStart(starts: starts, at: 12, restartWindow: 1), 5, accuracy: 1e-9)
+        XCTAssertEqual(DocumentaryTimelineMath.previousSceneStart(starts: [2, 5], at: 3, restartWindow: 1), 0, accuracy: 1e-9)
+    }
+
+    func testNextSceneStart() {
+        let starts: [Double] = [0, 5, 12]
+        XCTAssertEqual(DocumentaryTimelineMath.nextSceneStart(starts: starts, at: 7)!, 12, accuracy: 1e-9)
+        XCTAssertNil(DocumentaryTimelineMath.nextSceneStart(starts: starts, at: 12))
+        XCTAssertEqual(DocumentaryTimelineMath.nextSceneStart(starts: starts, at: 0)!, 5, accuracy: 1e-9)
+    }
+
+    func testNeedsFollow() {
+        XCTAssertTrue(DocumentaryTimelineMath.needsFollow(playheadX: 500, scrollX: 0, viewW: 400, margin: 24))
+        XCTAssertFalse(DocumentaryTimelineMath.needsFollow(playheadX: 300, scrollX: 0, viewW: 400, margin: 24))
+        XCTAssertTrue(DocumentaryTimelineMath.needsFollow(playheadX: 110, scrollX: 100, viewW: 400, margin: 24))
+        XCTAssertFalse(DocumentaryTimelineMath.needsFollow(playheadX: 130, scrollX: 100, viewW: 400, margin: 24))
+        XCTAssertTrue(DocumentaryTimelineMath.needsFollow(playheadX: 480, scrollX: 100, viewW: 400, margin: 24))
+    }
 }
