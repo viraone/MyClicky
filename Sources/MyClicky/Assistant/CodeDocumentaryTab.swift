@@ -1569,6 +1569,16 @@ struct CodeDocumentaryView: View {
 
             transportBar
 
+            if !model.chapters.isEmpty {
+                DocumentaryTimelineView(chapters: model.chapters,
+                                        duration: model.duration,
+                                        playhead: model.playhead,
+                                        isPlaying: model.isPlaying,
+                                        accent: accent,
+                                        film: url,
+                                        onSeek: { model.seek(to: $0) })
+            }
+
             switch model.askPhase {
             case .answered, .failed:
                 answerActions
