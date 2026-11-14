@@ -3127,13 +3127,13 @@ struct NumpadView: View {
             let isLandscape = geo.size.width > geo.size.height
             let gap: CGFloat = isLandscape ? 8 : 12
             let topInset: CGFloat = isLandscape ? 8 : 12
-            // Five small keys across the top, then two rows.
+            // Five small keys across the top, then two rows of two and a full-width TALK row.
             let topGap: CGFloat = isLandscape ? 8 : 6
             let topW = (geo.size.width - topGap * 4) / 5
-            let topH: CGFloat = isLandscape ? max(56, (geo.size.height - topInset - gap * 2) / 3) : 116
+            let topH: CGFloat = isLandscape ? max(56, (geo.size.height - topInset - gap * 3) / 4) : 96
             let columnW = (geo.size.width - gap) / 2
-            let available = geo.size.height - topInset - gap * 2 - topH
-            let keyH = max(isLandscape ? 40 : 56, available / 2)
+            let available = geo.size.height - topInset - gap * 3 - topH
+            let keyH = max(isLandscape ? 40 : 56, available / 3)
             VStack(spacing: gap) {
                 HStack(spacing: topGap) {
                     // AUTO-SEND: a toggle for CLAUDE PASTE. On, the picture goes in
@@ -3210,6 +3210,12 @@ struct NumpadView: View {
                         tint: Snes.green, lit: true,
                         h: keyH, w: columnW)
                 }
+                // TALK: the Mac presses the microphone button in the Claude
+                // desktop app, so a photo can be followed by a spoken question.
+                // Tap again to stop.
+                key("talk", label: "TALK", icon: "mic.fill", tint: Snes.red, lit: true,
+                    h: keyH, w: geo.size.width)
+                    .accessibilityLabel("Talk to Claude on the Mac")
             }
             .padding(.top, topInset)
         }
@@ -3519,6 +3525,9 @@ struct NumpadView: View {
             statusText = claudePasteAutoSend
                 ? "Auto-send ON — CLAUDE PASTE pastes the image and presses Enter"
                 : "Auto-send OFF — CLAUDE PASTE leaves the image in Claude's chat for you to type and send"
+        case "talk":
+            client.talk()
+            statusText = "Pressing the microphone in Claude on your Mac…"
         case "enter":
             client.enter()
             statusText = "Enter pressed on your Mac"

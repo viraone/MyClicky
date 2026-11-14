@@ -674,6 +674,9 @@ final class ClickyClient: ObservableObject {
     func stackOff() { send("STACK OFF") }
     /// Ask the Mac for the stack's current state.
     func stackStatus() { send("STACK STATUS") }
+    /// TALK: the Mac presses the microphone button in the Claude desktop app
+    /// (tap again to stop). The reply arrives as a CLAUDE_PASTE_STATUS line.
+    func talk() { send("TALK") }
     func gmail(_ action: String) { send("GMAIL \(action)") }
     /// Peeky Video: transport, dial nudges and the editing buttons.
     func video(_ action: String) { send("VIDEO \(action)") }

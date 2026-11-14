@@ -52,6 +52,8 @@ import Network
 ///                    servers)
 ///   STACK OFF      – stop the whole local coding stack
 ///   STACK STATUS   – ask for the stack's current state
+///   TALK           – press the microphone button in the Claude desktop app;
+///                    the reply is a CLAUDE_PASTE_STATUS line.
 ///   GMAIL COMPOSE  – open a new Gmail compose window in the browser
 ///   GMAIL INBOX    – go back to the inbox list
 ///   GMAIL OPEN_LATEST – open the newest Primary-inbox email
@@ -360,6 +362,11 @@ final class RemoteControlService {
             onStack?("OFF")
         } else if line == "STACK STATUS" {
             onStack?("STATUS")
+        } else if line == "TALK" {
+            Task { @MainActor [weak self] in
+                let result = await ClaudeDesktopTalk.run()
+                self?.broadcast("CLAUDE_PASTE_STATUS \(result.ok ? "OK" : "FAIL")\t" + result.message.replacingOccurrences(of: "\n", with: " "))
+            }
         } else if line.hasPrefix("TAB ") {
             onTab?(String(line.dropFirst(4)))
         } else if line == "KEY ENTER" {
